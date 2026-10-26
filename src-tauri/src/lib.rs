@@ -5,6 +5,7 @@ mod hooks_server;
 mod mcp;
 mod pty;
 mod tray;
+mod trust;
 mod usage;
 mod voice;
 mod workspace;
@@ -50,6 +51,7 @@ pub fn run() {
             pty::write_to_pane,
             pty::resize_pane,
             pty::kill_pane,
+            pty::list_panes,
             pty::set_active_pane,
             agents::detect_agents,
             agents::uninstall_hooks,

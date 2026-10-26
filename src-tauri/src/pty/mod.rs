@@ -71,7 +71,9 @@ pub fn spawn_pane(
     rows: u16,
     title: Option<String>,
     env: Option<HashMap<String, String>>,
+    trust: Option<bool>,
 ) -> Result<(), String> {
+    let trust = trust.unwrap_or(false);
     validate_spawn_input(&pane_id, &args)?;
     let env = env.unwrap_or_default();
     validate_extra_env(&env)?;
@@ -90,6 +92,9 @@ pub fn spawn_pane(
         cwd
     };
     agents::prepare_hooks(agent, &cwd, &state.hooks)?;
+    if trust {
+        crate::trust::trust_folder(agent, &cwd);
+    }
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -110,6 +115,10 @@ pub fn spawn_pane(
     cmd.env("COLORTERM", "truecolor");
     for (key, value) in &env {
         cmd.env(key, value);
+    }
+    // Grok documents no trust-file format, only this switch (docs/user-guide/10-hooks.md).
+    if trust && agent == AgentKind::Grok {
+        cmd.env("GROK_FOLDER_TRUST", "0");
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
@@ -178,6 +187,19 @@ pub fn kill_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), Stri
         let _ = pane.child.kill();
     }
     Ok(())
+}
+
+/// Ids of panes whose process is alive: a reloaded webview adopts them instead of respawning.
+#[tauri::command]
+pub fn list_panes(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state
+        .panes
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .keys()
+        .cloned()
+        .collect())
 }
 
 /// Marks which pane receives voice transcripts.

@@ -6,6 +6,7 @@ import {
   Folder,
   FolderPlus,
   Gauge,
+  Grid2x2,
   History,
   Layers,
   LayoutGrid,
@@ -26,7 +27,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { toggleMaximizePane } from "../../app/Deck";
+import { arrangePanesInGrid, toggleMaximizePane } from "../../app/Deck";
 import { confirmRestartAll, confirmStopAll } from "../../app/TitleBar";
 import { AGENTS } from "../../lib/agents";
 import { checkpointPane } from "../../lib/checkpoints";
@@ -90,6 +91,7 @@ function actionItems(cb: PaletteCallbacks): Item[] {
     ["activity", "Toggle activity", Activity, cb.onToggleActivity, "Ctrl+Shift+A"],
     ["wall", "Wall mode", LayoutGrid, toggleWall, "Ctrl+Shift+W"],
     ["maximize", "Maximize/restore active pane", Maximize2, () => onCurrentPane(toggleMaximizePane)],
+    ["grid", "Arrange panes in a grid", Grid2x2, () => arrangePanesInGrid(useDeck.getState().activeTabId)],
     ["zoom-in", "Zoom +", ZoomIn, () => onCurrentPane((_, id) => deck.zoom(id, 1)), "Ctrl+="],
     ["zoom-out", "Zoom -", ZoomOut, () => onCurrentPane((_, id) => deck.zoom(id, -1)), "Ctrl+-"],
     ["broadcast", "Broadcast prompt", Megaphone, openBroadcast, "Ctrl+Shift+B"],

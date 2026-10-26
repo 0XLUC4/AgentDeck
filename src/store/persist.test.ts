@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/plugin-store", () => ({ load: vi.fn() }));
 vi.mock("./runtime", () => ({ createPane: vi.fn() }));
 
-const { hydrate, migrate } = await import("./persist");
+const { hydrate, migrate, planRestore } = await import("./persist");
 const { useDeck } = await import("./deck");
 
 const session = { id: "s1", name: "Session 1", savedAt: 1, layout: null, panes: [] };
@@ -53,5 +53,37 @@ describe("hydrate", () => {
     expect(toSpawn[0].workspaceId).toBe("w1");
     expect(state.tabs.map((t) => t.workspaceId).sort()).toEqual(["w1", "w2"]);
     expect(state.activeTabId).toBe("s1");
+  });
+});
+
+describe("planRestore", () => {
+  const pane = (id: string) => ({
+    id,
+    agent: "claude" as const,
+    title: "t",
+    cwd: "/",
+    args: [],
+    worktree: false,
+    completedCount: 0,
+    fontSize: 13,
+  });
+  const tabs = [
+    { ...session, workspaceId: "w", panes: [pane("a"), pane("b")] },
+    { ...session, id: "s2", workspaceId: "w", panes: [pane("c")] },
+  ];
+
+  it("adopts live restored panes, kills live orphans, spawns the rest", () => {
+    const { adopt, orphans } = planRestore(tabs, ["b", "zombie", "c"]);
+    expect([...adopt].sort()).toEqual(["b", "c"]);
+    expect(orphans).toEqual(["zombie"]);
+    expect(adopt.has("a")).toBe(false); // not alive: spawned as usual
+  });
+
+  it("spawns everything on a cold start", () => {
+    expect(planRestore(tabs, [])).toEqual({ adopt: new Set(), orphans: [] });
+  });
+
+  it("kills every live pane when nothing is restored", () => {
+    expect(planRestore([], ["x"]).orphans).toEqual(["x"]);
   });
 });

@@ -78,6 +78,9 @@ function General({ s, save }: { s: Settings; save: Save }) {
           onChange={(v) => save(updateSettings({ activityOpen: v }))}
         />
       </Row>
+      <Row label="Auto-arrange panes in a grid" hint="When a pane is added or removed" htmlFor="set-auto-grid">
+        <Toggle id="set-auto-grid" checked={s.autoGrid} onChange={(v) => save(updateSettings({ autoGrid: v }))} />
+      </Row>
       <AutostartRow save={save} />
       <HistorySettings save={save} />
       <Row
@@ -145,6 +148,17 @@ function Notifications({ s, save }: { s: Settings; save: Save }) {
 function Agents({ s, save }: { s: Settings; save: Save }) {
   return (
     <Section title="Agents">
+      <Row
+        label="Trust agent folders automatically"
+        hint="Skips each agent's folder trust prompt for folders you open in AgentDeck. Only enable for code you trust: project hooks and MCP servers will run without asking."
+        htmlFor="set-trust-folders"
+      >
+        <Toggle
+          id="set-trust-folders"
+          checked={s.trustAgentFolders}
+          onChange={(v) => save(updateSettings({ trustAgentFolders: v }))}
+        />
+      </Row>
       <p className="pb-2 text-xs text-subtle">Values prefilled in "Add agent".</p>
       {AGENT_KINDS.map((kind) => {
         const defaults = s.agents[kind];
