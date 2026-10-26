@@ -4,7 +4,7 @@ import { historyClear, historyGetEnabled, historySetEnabled } from "../../lib/ip
 import { button, Row, Toggle } from "../Settings/controls";
 import type { Save } from "../Settings/SettingsDialog";
 
-/** Réglages rows: terminal history on/off (stored by the backend) and "Vider l'historique". */
+/** Settings rows: terminal history on/off (stored by the backend) and "Clear history". */
 export function HistorySettings({ save }: { save: Save }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
 
@@ -15,8 +15,8 @@ export function HistorySettings({ save }: { save: Save }) {
   return (
     <>
       <Row
-        label="Enregistrer l'historique des terminaux"
-        hint="Texte brut sur ce PC, conservé 30 jours (Ctrl+Maj+F pour chercher)"
+        label="Save terminal history"
+        hint="Plain text on this PC, kept for 30 days (Ctrl+Shift+F to search)"
         htmlFor="set-history"
       >
         <Toggle
@@ -28,16 +28,16 @@ export function HistorySettings({ save }: { save: Save }) {
           }}
         />
       </Row>
-      <Row label="Vider l'historique" hint="Supprime toute la sortie enregistrée des terminaux">
+      <Row label="Clear history" hint="Deletes all saved terminal output">
         <button
           type="button"
           className={button}
           onClick={() => {
-            if (window.confirm("Supprimer tout l'historique des terminaux ?")) save(historyClear());
+            if (window.confirm("Delete all terminal history?")) save(historyClear());
           }}
         >
           <Trash2 size={14} strokeWidth={1.5} aria-hidden="true" />
-          Vider
+          Clear
         </button>
       </Row>
     </>

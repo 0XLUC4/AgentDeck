@@ -28,12 +28,12 @@ import {
 import { reopenSession, unlinkWorkspace } from "../store/runtime";
 import { closeSession } from "./TabBar";
 
-const dateFormat = new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "short" });
+const dateFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "short", timeStyle: "short" });
 function confirmUnlink(ws: Workspace) {
   const { tabs, archived } = useDeck.getState();
   const count =
     tabs.filter((t) => t.workspaceId === ws.id).length + archived.filter((s) => s.workspaceId === ws.id).length;
-  const message = `Délier « ${ws.name} » ?\n\nSes ${count} session(s) seront fermées et oubliées par AgentDeck. Aucun fichier n'est supprimé du disque.`;
+  const message = `Unlink "${ws.name}"?\n\nIts ${count} session(s) will be closed and forgotten by AgentDeck. No files are deleted from disk.`;
   if (window.confirm(message)) unlinkWorkspace(ws.id);
 }
 
@@ -81,7 +81,7 @@ function OpenSessionRow({ tab, active }: { tab: Tab; active: boolean }) {
       <IconButton
         icon={Archive}
         size="sm"
-        label={`Fermer et archiver ${tab.name}`}
+        label={`Close and archive ${tab.name}`}
         className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
         onClick={() => closeSession(tab.id)}
       />
@@ -95,7 +95,7 @@ function ArchivedRow({ session }: { session: SavedSession }) {
       <button
         type="button"
         className="flex h-full min-w-0 flex-1 items-center gap-2 text-left"
-        title={`Archivée le ${dateFormat.format(session.savedAt)} · ${session.panes.length} agent(s). Cliquer pour rouvrir.`}
+        title={`Archived ${dateFormat.format(session.savedAt)} · ${session.panes.length} agent(s). Click to reopen.`}
         onClick={() => reopenSession(session.id)}
       >
         <Archive size={13} strokeWidth={1.5} className="shrink-0" aria-hidden="true" />
@@ -105,17 +105,15 @@ function ArchivedRow({ session }: { session: SavedSession }) {
         <IconButton
           icon={ArchiveRestore}
           size="sm"
-          label={`Rouvrir ${session.name}`}
+          label={`Reopen ${session.name}`}
           onClick={() => reopenSession(session.id)}
         />
         <IconButton
           icon={Trash2}
           size="sm"
           tone="danger"
-          label={`Supprimer ${session.name}`}
-          onClick={() =>
-            window.confirm(`Supprimer définitivement « ${session.name} » ?`) && deck.deleteArchived(session.id)
-          }
+          label={`Delete ${session.name}`}
+          onClick={() => window.confirm(`Permanently delete "${session.name}"?`) && deck.deleteArchived(session.id)}
         />
       </div>
     </li>
@@ -138,7 +136,7 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
         <button
           type="button"
           aria-expanded={expanded}
-          aria-label={expanded ? `Replier ${ws.name}` : `Déplier ${ws.name}`}
+          aria-label={expanded ? `Collapse ${ws.name}` : `Expand ${ws.name}`}
           className="inline-flex size-5 shrink-0 items-center justify-center rounded text-subtle hover:text-fg"
           onClick={() => setExpanded(!expanded)}
         >
@@ -151,7 +149,7 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
         {renaming ? (
           <RenameField
             value={ws.name}
-            label="Nom du workspace"
+            label="Workspace name"
             onDone={(name) => {
               if (name) deck.renameWorkspace(ws.id, name);
               setRenaming(false);
@@ -161,7 +159,7 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
           <button
             type="button"
             className="flex h-full min-w-0 flex-1 items-center gap-2 text-left"
-            title={ws.path || "Pas de dossier lié : les agents démarrent dans le dernier dossier utilisé."}
+            title={ws.path || "No linked folder: agents start in the last used folder."}
             onClick={() => deck.selectWorkspace(ws.id)}
             onDoubleClick={() => setRenaming(true)}
           >
@@ -175,7 +173,7 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
             {ws.git && (
               <span
                 className="inline-flex min-w-0 shrink items-center gap-1 text-xs text-subtle group-hover:hidden"
-                title={ws.git.branch ? `Branche ${ws.git.branch} (au moment de la liaison)` : "Dépôt Git"}
+                title={ws.git.branch ? `Branch ${ws.git.branch} (when linked)` : "Git repository"}
               >
                 <GitBranch size={12} strokeWidth={1.5} className="shrink-0" aria-hidden="true" />
                 <span className="truncate">{ws.git.branch ?? "Git"}</span>
@@ -188,7 +186,7 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
             <IconButton
               icon={Plus}
               size="sm"
-              label={`Nouvelle session dans ${ws.name}`}
+              label={`New session in ${ws.name}`}
               onClick={() => {
                 deck.selectWorkspace(ws.id);
                 deck.addTab();
@@ -198,26 +196,26 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
             <IconButton
               icon={LayoutTemplate}
               size="sm"
-              label={`Nouvelle session depuis un modèle dans ${ws.name}`}
+              label={`New session from a template in ${ws.name}`}
               onClick={() => {
                 openTemplatePickerFor(ws.id);
                 setExpanded(true);
               }}
             />
-            <IconButton icon={Pencil} size="sm" label={`Renommer ${ws.name}`} onClick={() => setRenaming(true)} />
+            <IconButton icon={Pencil} size="sm" label={`Rename ${ws.name}`} onClick={() => setRenaming(true)} />
             <IconButton
               icon={Unlink}
               size="sm"
               tone="danger"
-              label={`Délier ${ws.name}`}
-              hint="Délier ce workspace (aucun fichier supprimé)"
+              label={`Unlink ${ws.name}`}
+              hint="Unlink this workspace (no files deleted)"
               onClick={() => confirmUnlink(ws)}
             />
           </div>
         )}
       </div>
       {expanded && (
-        <ul className="mt-0.5 flex flex-col gap-px" aria-label={`Sessions de ${ws.name}`}>
+        <ul className="mt-0.5 flex flex-col gap-px" aria-label={`Sessions of ${ws.name}`}>
           {open.map((tab) => (
             <OpenSessionRow key={tab.id} tab={tab} active={tab.id === activeTabId} />
           ))}
@@ -236,10 +234,10 @@ export function Sidebar({ onLink }: { onLink: () => void }) {
   const activeId = useDeck((s) => activeWorkspace(s).id);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-line bg-panel" aria-label="Workspaces et sessions">
+    <aside className="flex w-64 shrink-0 flex-col border-r border-line bg-panel" aria-label="Workspaces and sessions">
       <div className="flex h-10 shrink-0 items-center justify-between pr-2 pl-3">
         <h2 className="text-xs font-medium text-subtle">Workspaces</h2>
-        <IconButton icon={FolderPlus} label="Lier un workspace" onClick={onLink} />
+        <IconButton icon={FolderPlus} label="Link workspace" onClick={onLink} />
       </div>
       <ul className="scroll-thin flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-3">
         {workspaces.map((ws) => (
@@ -252,7 +250,7 @@ export function Sidebar({ onLink }: { onLink: () => void }) {
         className="m-2 inline-flex h-8 items-center gap-2 rounded-md px-2 text-subtle transition-colors duration-150 hover:bg-hover hover:text-fg"
       >
         <Plus size={16} strokeWidth={1.5} aria-hidden="true" />
-        Lier un workspace
+        Link workspace
       </button>
     </aside>
   );

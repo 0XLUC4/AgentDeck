@@ -80,7 +80,7 @@ export async function sendNext(paneId: string): Promise<void> {
     await sendPrompt(paneId, item.text);
   } catch (err) {
     update(paneId, (q) => ({ ...q, items: [item, ...q.items] }));
-    deck.toast(`File d'attente : envoi impossible (${err instanceof Error ? err.message : String(err)})`);
+    deck.toast(`Queue: could not send (${err instanceof Error ? err.message : String(err)})`);
   }
 }
 

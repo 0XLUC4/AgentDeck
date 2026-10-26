@@ -130,7 +130,7 @@ function failPane(id: string, err: unknown): void {
     lastAction: errorMessage(err),
     statusSince: Date.now(),
   }));
-  deck.toast(`Échec du lancement de ${pane ? AGENTS[pane.agent].name : "l'agent"} : ${errorMessage(err)}`);
+  deck.toast(`Failed to start ${pane ? AGENTS[pane.agent].name : "the agent"}: ${errorMessage(err)}`);
 }
 
 /** Kills the process and waits for its exit event (3 s max), leaving the pane in the exited state. */
@@ -260,7 +260,7 @@ export function deriveStatuses(now = Date.now()): void {
   }
 }
 
-const NOTIFY_TEXT = { done: "a terminé", waiting: "attend votre réponse", error: "a rencontré une erreur" } as const;
+const NOTIFY_TEXT = { done: "finished", waiting: "is waiting for your answer", error: "hit an error" } as const;
 
 /** Subscribes once to hook status events; notifies per the user's notification settings. */
 export function listenAgentStatus(): Promise<UnlistenFn> {

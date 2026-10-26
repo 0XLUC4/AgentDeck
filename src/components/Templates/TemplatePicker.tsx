@@ -1,4 +1,4 @@
-// "Nouvelle session depuis un modèle" + "Enregistrer la session comme modèle".
+// "New session from template" + "Save session as template".
 import { LayoutTemplate, Save, X } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { create } from "zustand";
@@ -35,13 +35,13 @@ function Picker({ onClose }: { onClose: () => void }) {
 
   function save(e: FormEvent) {
     e.preventDefault();
-    const label = name.trim() || session?.name || "Modèle";
+    const label = name.trim() || session?.name || "Template";
     saveSessionAsTemplate(label).then(
       () => {
         setName("");
-        setMessage({ ok: true, text: `Modèle « ${label} » enregistré.` });
+        setMessage({ ok: true, text: `Template "${label}" saved.` });
       },
-      (err) => setMessage({ ok: false, text: `Enregistrement impossible : ${errorMessage(err)}` }),
+      (err) => setMessage({ ok: false, text: `Could not save: ${errorMessage(err)}` }),
     );
   }
 
@@ -55,11 +55,11 @@ function Picker({ onClose }: { onClose: () => void }) {
       <div className="flex items-center justify-between pt-4 pr-3 pl-5">
         <div>
           <h2 id="templates-title" className="text-[15px] font-medium">
-            Nouvelle session depuis un modèle
+            New session from template
           </h2>
-          <p className="text-xs text-subtle">Dans {workspace.name}</p>
+          <p className="text-xs text-subtle">In {workspace.name}</p>
         </div>
-        <IconButton icon={X} label="Fermer" hint="Fermer (Échap)" onClick={onClose} />
+        <IconButton icon={X} label="Close" hint="Close (Esc)" onClick={onClose} />
       </div>
 
       <ul className="scroll-thin flex max-h-80 flex-col gap-px overflow-y-auto p-3">
@@ -75,7 +75,7 @@ function Picker({ onClose }: { onClose: () => void }) {
             >
               <LayoutTemplate size={15} strokeWidth={1.5} className="shrink-0 text-subtle" aria-hidden="true" />
               <span className="truncate text-fg">{t.name}</span>
-              {t.builtin && <span className="text-xs text-subtle">intégré</span>}
+              {t.builtin && <span className="text-xs text-subtle">built-in</span>}
               <span className="ml-auto flex shrink-0 items-center gap-1" title={t.panes.map((p) => p.title).join(", ")}>
                 {t.panes.map((p) => (
                   <AgentLogo key={p.key} kind={p.agent} size={13} />
@@ -89,14 +89,14 @@ function Picker({ onClose }: { onClose: () => void }) {
 
       <form onSubmit={save} className="flex flex-col gap-2 border-t border-line px-5 py-4">
         <label htmlFor="template-name" className="text-xs font-medium text-muted">
-          Enregistrer la session courante comme modèle
+          Save current session as template
         </label>
         <div className="flex gap-2">
           <input
             id="template-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={session?.name ?? "Nom du modèle"}
+            placeholder={session?.name ?? "Template name"}
             className="h-8 min-w-0 flex-1 rounded-md border border-line bg-base px-2.5 text-fg outline-none transition-colors duration-150 placeholder:text-subtle hover:border-line-strong focus:border-accent"
           />
           <button
@@ -105,7 +105,7 @@ function Picker({ onClose }: { onClose: () => void }) {
             className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-3 text-muted transition-colors duration-150 hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"
           >
             <Save size={14} strokeWidth={1.5} aria-hidden="true" />
-            Enregistrer
+            Save
           </button>
         </div>
         {message && (

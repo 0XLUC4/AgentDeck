@@ -1,4 +1,4 @@
-// Voice targeting: "Codex, lance les tests" goes to a Codex pane (prefix stripped) instead of the active pane.
+// Voice targeting: "Codex, run the tests" goes to a Codex pane (prefix stripped) instead of the active pane.
 import type { AgentKind } from "./types";
 
 export interface RouteCandidate {
@@ -48,7 +48,7 @@ export function routeTranscript(text: string, candidates: RouteCandidate[]): { p
     if (key.every((w, i) => tokens[i].word === w)) best = { id, end: tokens[key.length - 1].end, length: key.length };
   }
   if (!best) return { paneId: null, text };
-  const rest = text.slice(best.end).replace(/^[\s,:;.!?»"')—–-]+/, "");
+  const rest = text.slice(best.end).replace(/^[\s,:;.!?»"')\u2014\u2013-]+/, "");
   // "Claude." alone: nothing to send, keep the transcript as is.
   return rest ? { paneId: best.id, text: rest } : { paneId: null, text };
 }

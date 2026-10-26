@@ -74,7 +74,7 @@ export async function detachPane(paneId: string): Promise<void> {
   });
   void win.once("tauri://error", (e) => {
     markAttached(paneId);
-    deck.toast(`Impossible de détacher le pane : ${String(e.payload)}`);
+    deck.toast(`Could not detach the pane: ${String(e.payload)}`);
   });
   void win.once("tauri://destroyed", () => markAttached(paneId));
 }

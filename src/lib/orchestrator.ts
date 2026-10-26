@@ -1,4 +1,4 @@
-// "Chef d'orchestre": a Claude Code pane driving the other agents of its workspace through AgentDeck's MCP server
+// Orchestrator: a Claude Code pane driving the other agents of its workspace through AgentDeck's MCP server
 // (src-tauri/src/mcp). The backend validates arguments; this side checks scope and acts on panes and stores.
 import { create } from "zustand";
 import { promptPayload } from "../components/Broadcast/send";
@@ -9,7 +9,7 @@ import { useTasks } from "../store/tasks";
 import { mcpRespond, mcpSetPaused, onMcpActivity, onMcpRequest, writeToPane } from "./ipc";
 import type { AgentKind, McpActivity, McpRequest } from "./types";
 
-export const ORCHESTRATOR_TITLE = "Chef d'orchestre";
+export const ORCHESTRATOR_TITLE = "Orchestrator";
 const MAX_LOG = 100;
 /** Raw terminal text handed to the backend for read_output (it strips ANSI and keeps the last lines). */
 const OUTPUT_TAIL_CHARS = 64 * 1024;
@@ -35,18 +35,18 @@ export async function setOrchestratorPaused(paused: boolean): Promise<void> {
     await mcpSetPaused(paused);
     useOrchestrator.setState({ paused });
   } catch (err) {
-    deck.toast(`Impossible de changer la pause de l'orchestrateur : ${errorMessage(err)}`);
+    deck.toast(`Could not change the orchestrator pause: ${errorMessage(err)}`);
   }
 }
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** Starts a "Chef d'orchestre" Claude pane in the active session. */
+/** Starts an orchestrator Claude pane in the active session. */
 export function createOrchestrator(): void {
   const cwd = activeWorkspace().path || useDeck.getState().lastCwd;
   const tab = activeTab();
   if (!cwd || !tab) {
-    deck.toast("Liez d'abord un workspace : le chef d'orchestre travaille dans son dossier.");
+    deck.toast("Link a workspace first: the orchestrator works in its folder.");
     return;
   }
   void createPane(
@@ -72,10 +72,10 @@ export function summarizeCall(tool: string, args: Record<string, unknown>, panes
   const target = typeof args.paneId === "string" ? paneName(panes[args.paneId], args.paneId) : "";
   switch (tool) {
     case "spawn_agent":
-      return `${String(args.agent)} « ${String(args.title)} »${args.worktree ? " · worktree" : ""}`;
+      return `${String(args.agent)} "${String(args.title)}"${args.worktree ? " · worktree" : ""}`;
     case "send_prompt": {
       const text = String(args.text ?? "").replace(/\s+/g, " ");
-      return `${target} : ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`;
+      return `${target}: ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`;
     }
     case "wait_for": {
       const ids = Array.isArray(args.paneIds) ? args.paneIds.map(String) : [];
@@ -99,7 +99,7 @@ function scopeOf(orchestratorId: string): Scope {
   const { panes, tabs, workspaces } = useDeck.getState();
   const orchestrator = panes[orchestratorId];
   const tab = tabs.find((t) => t.paneIds.includes(orchestratorId));
-  if (!orchestrator?.orchestrator || !tab) throw new Error("Chef d'orchestre introuvable");
+  if (!orchestrator?.orchestrator || !tab) throw new Error("Orchestrator not found");
   const workspace = workspaces.find((w) => w.id === tab.workspaceId);
   return {
     orchestrator,
@@ -114,17 +114,16 @@ function scopeOf(orchestratorId: string): Scope {
 }
 
 function target(scope: Scope, paneId: string): Pane {
-  if (paneId === scope.orchestrator.id) throw new Error("Tu ne peux pas te piloter toi-même");
+  if (paneId === scope.orchestrator.id) throw new Error("You cannot control yourself");
   const found = scope.panes.find((p) => p.pane.id === paneId)?.pane;
-  if (!found) throw new Error(`Agent ${paneId} introuvable dans ton workspace (voir list_agents)`);
+  if (!found) throw new Error(`Agent ${paneId} not found in your workspace (see list_agents)`);
   return found;
 }
 
 /** Permission prompts are the user's to answer: no keystrokes go to a waiting agent. */
 function assertCanType(pane: Pane): void {
-  if (pane.exited) throw new Error(`${pane.title} est arrêté`);
-  if (pane.status === "waiting")
-    throw new Error(`${pane.title} attend une réponse de l'utilisateur : réessaie plus tard`);
+  if (pane.exited) throw new Error(`${pane.title} is stopped`);
+  if (pane.status === "waiting") throw new Error(`${pane.title} is waiting for the user's answer: try again later`);
 }
 
 const normalize = (path: string) =>
@@ -136,13 +135,13 @@ const normalize = (path: string) =>
 /** Absolute folder for `cwd` (relative to `root` when not absolute); throws when it leaves `root`. */
 export function resolveInside(root: string, cwd: string | null | undefined): string {
   if (!cwd) return root;
-  if (cwd.split(/[\\/]/).includes("..")) throw new Error("cwd ne peut pas contenir ..");
+  if (cwd.split(/[\\/]/).includes("..")) throw new Error("cwd cannot contain ..");
   const absolute = /^([a-zA-Z]:)?[\\/]/.test(cwd);
   const sep = root.includes("\\") ? "\\" : "/";
   const full = absolute ? cwd : `${root.replace(/[\\/]+$/, "")}${sep}${cwd}`;
   const base = normalize(root);
   const path = normalize(full);
-  if (path !== base && !path.startsWith(`${base}/`)) throw new Error(`cwd doit rester dans ${root}`);
+  if (path !== base && !path.startsWith(`${base}/`)) throw new Error(`cwd must stay inside ${root}`);
   return full;
 }
 
@@ -180,8 +179,8 @@ export async function handleMcpRequest(req: Pick<McpRequest, "orchestratorId" | 
         scope.tab.id,
       );
       const pane = useDeck.getState().panes[id];
-      if (!pane) throw new Error("L'agent a été fermé pendant son lancement");
-      if (pane.status === "error") throw new Error(`Échec du lancement : ${pane.lastAction ?? "erreur inconnue"}`);
+      if (!pane) throw new Error("The agent was closed while starting");
+      if (pane.status === "error") throw new Error(`Failed to start: ${pane.lastAction ?? "unknown error"}`);
       return { paneId: id };
     }
     case "send_prompt": {
@@ -232,7 +231,7 @@ export async function handleMcpRequest(req: Pick<McpRequest, "orchestratorId" | 
       return { ok: true };
     }
     default:
-      throw new Error(`Outil inconnu : ${req.tool}`);
+      throw new Error(`Unknown tool: ${req.tool}`);
   }
 }
 

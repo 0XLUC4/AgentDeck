@@ -348,7 +348,7 @@ fn part_path(root: &Path, run_id: &str) -> Result<PathBuf, String> {
 
 fn read_window(root: &Path, run_id: &str, around: usize) -> Result<RunWindow, String> {
     let path = part_path(root, run_id)?;
-    let bytes = fs::read(&path).map_err(|e| format!("lecture impossible : {e}"))?;
+    let bytes = fs::read(&path).map_err(|e| format!("cannot read file: {e}"))?;
     let text = String::from_utf8_lossy(&bytes);
     let all: Vec<&str> = text.lines().collect();
     let start = around
@@ -372,7 +372,7 @@ fn read_window(root: &Path, run_id: &str, around: usize) -> Result<RunWindow, St
 #[tauri::command(async)]
 pub fn history_read(run_id: String, around_line: usize) -> Result<RunWindow, String> {
     read_window(
-        ROOT.get().ok_or("historique indisponible")?,
+        ROOT.get().ok_or("history unavailable")?,
         &run_id,
         around_line,
     )
@@ -386,7 +386,7 @@ pub fn history_get_enabled() -> bool {
 /// Persisted as a marker file; applies immediately to running panes.
 #[tauri::command]
 pub fn history_set_enabled(enabled: bool) -> Result<(), String> {
-    let root = ROOT.get().ok_or("historique indisponible")?;
+    let root = ROOT.get().ok_or("history unavailable")?;
     let marker = root.join(DISABLED_MARKER);
     if enabled {
         if marker.exists() {
@@ -402,7 +402,7 @@ pub fn history_set_enabled(enabled: bool) -> Result<(), String> {
 /// Deletes every saved run (files of running panes may survive until they exit).
 #[tauri::command(async)]
 pub fn history_clear() -> Result<(), String> {
-    let root = ROOT.get().ok_or("historique indisponible")?;
+    let root = ROOT.get().ok_or("history unavailable")?;
     purge(root, |_| true);
     Ok(())
 }

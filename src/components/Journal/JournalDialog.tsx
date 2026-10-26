@@ -71,45 +71,45 @@ export function JournalDialog({ onClose }: { onClose: () => void }) {
 
   const copy = () =>
     navigator.clipboard.writeText(markdown()).then(
-      () => deck.toast("Journal copié en Markdown"),
-      (err) => deck.toast(`Copie impossible : ${err}`),
+      () => deck.toast("Journal copied as Markdown"),
+      (err) => deck.toast(`Could not copy: ${err}`),
     );
   const exportFile = () =>
     writeTextFile(`journal-${date}.md`, markdown()).then(
-      (path) => path && deck.toast(`Journal exporté : ${path}`),
-      (err) => deck.toast(`Export impossible : ${err}`),
+      (path) => path && deck.toast(`Journal exported: ${path}`),
+      (err) => deck.toast(`Could not export: ${err}`),
     );
 
   const [y, m, d] = date.split("-");
   const usage = data?.usage;
   return (
     <Modal
-      title={`Journal du ${d}/${m}/${y}`}
+      title={`Journal for ${m}/${d}/${y}`}
       onClose={onClose}
       actions={
         <>
-          <IconButton icon={ClipboardCopy} label="Copier en Markdown" onClick={copy} disabled={!data} />
-          <IconButton icon={Download} label="Exporter (.md)" onClick={exportFile} disabled={!data} />
+          <IconButton icon={ClipboardCopy} label="Copy as Markdown" onClick={copy} disabled={!data} />
+          <IconButton icon={Download} label="Export (.md)" onClick={exportFile} disabled={!data} />
         </>
       }
     >
       {error ? (
         <p role="alert" className="text-xs text-bad">
-          Journal indisponible : {error}
+          Journal unavailable: {error}
         </p>
       ) : !data ? (
         <p className="py-8 text-center text-muted" aria-busy="true">
-          Préparation du journal…
+          Preparing journal…
         </p>
       ) : (
         <div className="flex flex-col gap-6">
           {usage && usage.total.tokens > 0 && (
             <p className="text-muted">
               <span className="text-fg">{formatCost(usage.total.cost)}</span> · {formatTokens(usage.total.tokens)}{" "}
-              tokens aujourd'hui (Claude Code, Codex)
+              tokens today (Claude Code, Codex)
             </p>
           )}
-          {groups.length === 0 && <p className="py-6 text-center text-muted">Aucune tâche ni commit aujourd'hui</p>}
+          {groups.length === 0 && <p className="py-6 text-center text-muted">No tasks or commits today</p>}
           {groups.map((g) => (
             <section key={g.key || g.name} className="flex flex-col gap-3">
               <div className="flex items-baseline gap-2 border-b border-line pb-1.5">
@@ -120,7 +120,7 @@ export function JournalDialog({ onClose }: { onClose: () => void }) {
                 <div key={agent} className="flex flex-col gap-1.5">
                   <h4 className="flex items-center gap-2 text-xs font-medium text-muted">
                     <AgentLogo kind={agent} size={13} />
-                    {AGENTS[agent].name} · {tasks.length} tâche(s)
+                    {AGENTS[agent].name} · {tasks.length} task(s)
                   </h4>
                   <ul className="flex flex-col gap-2 pl-5">
                     {tasks.map((t) => (
@@ -167,7 +167,7 @@ export function JournalButton() {
   const open = useDialogs((s) => s.open === "journal");
   return (
     <>
-      <IconButton icon={NotebookText} label="Journal du jour" onClick={() => openDialog("journal")} />
+      <IconButton icon={NotebookText} label="Today's journal" onClick={() => openDialog("journal")} />
       {open && <JournalDialog onClose={closeDialog} />}
     </>
   );

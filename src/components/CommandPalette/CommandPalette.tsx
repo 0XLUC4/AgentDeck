@@ -52,12 +52,12 @@ export interface PaletteCallbacks {
   onToggleActivity: () => void;
 }
 
-type Section = "Récents" | "Agents" | "Sessions" | "Workspaces" | "Actions";
-const SECTIONS: Section[] = ["Récents", "Agents", "Sessions", "Workspaces", "Actions"];
+type Section = "Recent" | "Agents" | "Sessions" | "Workspaces" | "Actions";
+const SECTIONS: Section[] = ["Recent", "Agents", "Sessions", "Workspaces", "Actions"];
 
 interface Item {
   id: string;
-  section: Exclude<Section, "Récents">;
+  section: Exclude<Section, "Recent">;
   label: string;
   detail?: string;
   icon: ReactNode;
@@ -79,35 +79,35 @@ function onCurrentPane(fn: (tabId: string, paneId: string) => void) {
 
 function actionItems(cb: PaletteCallbacks): Item[] {
   const actions: [string, string, LucideIcon, () => void, string?][] = [
-    ["add-agent", "Ajouter un agent", Plus, cb.onAddAgent],
-    ["new-session", "Nouvelle session", SquarePlus, () => deck.addTab()],
-    ["link-workspace", "Lier un workspace", FolderPlus, cb.onLinkWorkspace],
-    ["interrupt-all", "Interrompre tout", Pause, interruptAll],
-    ["stop-all", "Tout arrêter", SquareStop, confirmStopAll],
-    ["restart-all", "Tout relancer", RotateCcw, confirmRestartAll],
-    ["settings", "Ouvrir les réglages", Settings, cb.onOpenSettings, "Ctrl+,"],
-    ["sidebar", "Basculer la barre latérale", PanelLeft, cb.onToggleSidebar],
-    ["activity", "Basculer l'activité", Activity, cb.onToggleActivity, "Ctrl+Maj+A"],
-    ["wall", "Mode mur", LayoutGrid, toggleWall, "Ctrl+Maj+W"],
-    ["maximize", "Agrandir/restaurer le pane actif", Maximize2, () => onCurrentPane(toggleMaximizePane)],
+    ["add-agent", "Add agent", Plus, cb.onAddAgent],
+    ["new-session", "New session", SquarePlus, () => deck.addTab()],
+    ["link-workspace", "Link workspace", FolderPlus, cb.onLinkWorkspace],
+    ["interrupt-all", "Interrupt all", Pause, interruptAll],
+    ["stop-all", "Stop all", SquareStop, confirmStopAll],
+    ["restart-all", "Restart all", RotateCcw, confirmRestartAll],
+    ["settings", "Open settings", Settings, cb.onOpenSettings, "Ctrl+,"],
+    ["sidebar", "Toggle sidebar", PanelLeft, cb.onToggleSidebar],
+    ["activity", "Toggle activity", Activity, cb.onToggleActivity, "Ctrl+Shift+A"],
+    ["wall", "Wall mode", LayoutGrid, toggleWall, "Ctrl+Shift+W"],
+    ["maximize", "Maximize/restore active pane", Maximize2, () => onCurrentPane(toggleMaximizePane)],
     ["zoom-in", "Zoom +", ZoomIn, () => onCurrentPane((_, id) => deck.zoom(id, 1)), "Ctrl+="],
     ["zoom-out", "Zoom -", ZoomOut, () => onCurrentPane((_, id) => deck.zoom(id, -1)), "Ctrl+-"],
-    ["broadcast", "Diffuser un prompt", Megaphone, openBroadcast, "Ctrl+Maj+B"],
-    ["templates", "Nouvelle session depuis un modèle", LayoutTemplate, openTemplatePicker],
+    ["broadcast", "Broadcast prompt", Megaphone, openBroadcast, "Ctrl+Shift+B"],
+    ["templates", "New session from template", LayoutTemplate, openTemplatePicker],
     [
       "checkpoint",
-      "Créer un point de restauration (pane actif)",
+      "Create restore point (active pane)",
       History,
       () => onCurrentPane((_, id) => void checkpointPane(id)),
     ],
-    ["detach", "Détacher le pane actif", ExternalLink, () => onCurrentPane((_, id) => void detachPane(id))],
-    ["usage", "Consommation", Gauge, () => openDialog("usage")],
-    ["history", "Historique", History, () => openDialog("history"), "Ctrl+Maj+F"],
-    ["journal", "Journal du jour", NotebookText, () => openDialog("journal")],
-    ["orchestrator", "Nouveau chef d'orchestre", Crown, createOrchestrator],
+    ["detach", "Detach active pane", ExternalLink, () => onCurrentPane((_, id) => void detachPane(id))],
+    ["usage", "Usage", Gauge, () => openDialog("usage")],
+    ["history", "History", History, () => openDialog("history"), "Ctrl+Shift+F"],
+    ["journal", "Today's journal", NotebookText, () => openDialog("journal")],
+    ["orchestrator", "New orchestrator", Crown, createOrchestrator],
     [
       "orchestrator-pause",
-      "Pause/reprise du chef d'orchestre",
+      "Pause/resume orchestrator",
       Pause,
       () => void setOrchestratorPaused(!useOrchestrator.getState().paused),
     ],
@@ -116,7 +116,7 @@ function actionItems(cb: PaletteCallbacks): Item[] {
     id: `action:${id}`,
     section: "Actions",
     label,
-    detail: id.endsWith("-all") ? "Session active" : undefined,
+    detail: id.endsWith("-all") ? "Active session" : undefined,
     icon: icon(Icon),
     trailing: shortcut ? kbd(shortcut) : undefined,
     run,
@@ -141,7 +141,7 @@ function buildItems(cb: PaletteCallbacks): Item[] {
           icon: <AgentLogo kind={pane.agent} size={15} />,
           trailing:
             key === "exited" ? (
-              <span className="size-2 shrink-0 rounded-full border border-line-strong" title="Arrêté" />
+              <span className="size-2 shrink-0 rounded-full border border-line-strong" title="Stopped" />
             ) : (
               <span title={STATUS[key].label} className="inline-flex">
                 <StatusDot status={key} />
@@ -168,7 +168,7 @@ function buildItems(cb: PaletteCallbacks): Item[] {
       id: `archived:${session.id}`,
       section: "Sessions" as const,
       label: session.name,
-      detail: `${wsName(session.workspaceId)} · archivée`,
+      detail: `${wsName(session.workspaceId)} · archived`,
       icon: icon(Archive),
       run: () => {
         useWall.setState({ open: false });
@@ -193,7 +193,7 @@ function filterItems(items: Item[], query: string): { section: Section; items: I
     const recents = recent.flatMap((id) => items.filter((i) => i.id === id));
     const rest = items.filter((i) => !recent.includes(i.id));
     return [
-      { section: "Récents" as Section, items: recents },
+      { section: "Recent" as Section, items: recents },
       ...SECTIONS.slice(1).map((section) => ({ section, items: rest.filter((i) => i.section === section) })),
     ].filter((g) => g.items.length > 0);
   }
@@ -278,7 +278,7 @@ function PaletteDialog({ callbacks, onClose }: { callbacks: PaletteCallbacks; on
     <dialog
       ref={dialogRef}
       onClose={onClose}
-      aria-label="Palette de commandes"
+      aria-label="Command palette"
       className="mx-auto mt-[12vh] w-[min(38rem,92vw)] overflow-hidden rounded-xl border border-line bg-panel p-0 text-fg backdrop:bg-gutter/70"
     >
       <div className="flex items-center gap-2 border-b border-line px-3">
@@ -290,7 +290,7 @@ function PaletteDialog({ callbacks, onClose }: { callbacks: PaletteCallbacks; on
           aria-controls="palette-listbox"
           aria-autocomplete="list"
           aria-activedescendant={flat.length > 0 ? optionId(active) : undefined}
-          aria-label="Rechercher un agent, une session, un workspace ou une action"
+          aria-label="Search for an agent, session, workspace or action"
           placeholder="Agent, session, workspace, action…"
           value={query}
           onChange={(e) => {
@@ -300,15 +300,15 @@ function PaletteDialog({ callbacks, onClose }: { callbacks: PaletteCallbacks; on
           onKeyDown={onKeyDown}
           className="h-11 min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-subtle"
         />
-        {kbd("Échap")}
+        {kbd("Esc")}
       </div>
       <div
         id="palette-listbox"
         role="listbox"
-        aria-label="Résultats"
+        aria-label="Results"
         className="scroll-thin max-h-[60vh] overflow-y-auto py-1"
       >
-        {flat.length === 0 && <p className="px-3 py-4 text-xs text-subtle">Aucun résultat.</p>}
+        {flat.length === 0 && <p className="px-3 py-4 text-xs text-subtle">No results.</p>}
         {groups.map((group, g) => (
           // biome-ignore lint/a11y/useSemanticElements: ARIA listbox groups; a fieldset is not valid inside a listbox
           <div key={group.section} role="group" aria-labelledby={`palette-section-${g}`}>

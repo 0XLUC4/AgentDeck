@@ -53,16 +53,16 @@ function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
           ))}
         </div>
         <div className="flex flex-col gap-1.5">
-          <h2 className="text-[15px] font-medium text-fg">Session vide</h2>
+          <h2 className="text-[15px] font-medium text-fg">Empty session</h2>
           <p className="text-muted">
-            Lancez Claude Code, Codex, Gemini CLI, Grok Build ou un shell
+            Start Claude Code, Codex, Gemini CLI, Grok Build or a shell
             {workspace.path ? (
               <>
                 {" "}
-                dans <span className="font-mono text-xs text-fg">{workspace.path}</span>
+                in <span className="font-mono text-xs text-fg">{workspace.path}</span>
               </>
             ) : null}
-            . Chaque agent s'ouvre dans son propre terminal ; glissez les en-têtes pour réorganiser.
+            . Each agent opens in its own terminal; drag the headers to rearrange.
           </p>
         </div>
         <button
@@ -71,7 +71,7 @@ function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
           className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-4 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover"
         >
           <Plus size={16} strokeWidth={1.5} aria-hidden="true" />
-          Ajouter un agent
+          Add agent
         </button>
       </div>
     </div>
@@ -101,7 +101,7 @@ export default function App() {
     return onTick(() => deriveStatuses());
   }, []);
 
-  // Ctrl+Shift+A toggles the activity panel, Ctrl+, opens Réglages; capture phase so the terminal never receives them.
+  // Ctrl+Shift+A toggles the activity panel, Ctrl+, opens Settings; capture phase so the terminal never receives them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const activity = e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyA";

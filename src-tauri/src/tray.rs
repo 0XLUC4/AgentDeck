@@ -17,9 +17,9 @@ pub struct CloseToTray(AtomicBool);
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     app.manage(CloseToTray::default());
-    let show = MenuItem::with_id(app, "show", "Afficher AgentDeck", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Show AgentDeck", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &separator, &quit_item])?;
 
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -106,7 +106,7 @@ pub fn set_close_to_tray(state: State<'_, CloseToTray>, enabled: bool) {
 #[tauri::command]
 pub fn set_tray_status(app: AppHandle, waiting: u32) -> Result<(), String> {
     let tooltip = if waiting > 0 {
-        format!("AgentDeck — {waiting} en attente")
+        format!("AgentDeck - {waiting} waiting")
     } else {
         "AgentDeck".to_string()
     };

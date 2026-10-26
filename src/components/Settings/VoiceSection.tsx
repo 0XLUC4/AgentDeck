@@ -13,7 +13,7 @@ const LANGUAGES = [
   { code: "es", label: "Español" },
   { code: "de", label: "Deutsch" },
   { code: "it", label: "Italiano" },
-  { code: "auto", label: "Auto-détection" },
+  { code: "auto", label: "Auto-detect" },
 ];
 
 const PRESETS = [
@@ -23,10 +23,10 @@ const PRESETS = [
 
 /** Download sizes of the ggml models, shown before download so users know what they're getting. */
 const MODEL_SIZE: Record<WhisperModel, string> = {
-  base: "148 Mo",
-  small: "488 Mo",
-  medium: "1,5 Go",
-  "large-v3-turbo": "1,6 Go",
+  base: "148 MB",
+  small: "488 MB",
+  medium: "1.5 GB",
+  "large-v3-turbo": "1.6 GB",
 };
 
 interface Progress {
@@ -60,7 +60,7 @@ function ShortcutRecorder({ value, onChange }: { value: string; onChange: (short
       onKeyDown={onKeyDown}
       className={`${field} inline-flex w-56 items-center justify-center font-mono text-xs ${recording ? "border-accent text-muted" : ""}`}
     >
-      {recording ? "Appuyez sur une combinaison… (Échap)" : formatShortcut(value)}
+      {recording ? "Press a key combination… (Esc)" : formatShortcut(value)}
     </button>
   );
 }
@@ -71,7 +71,7 @@ function ModelList({ config, onSelect }: { config: VoiceConfig; onSelect: (model
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    listWhisperModels().then(setModels, (err) => setError(`Liste des modèles indisponible : ${errorMessage(err)}`));
+    listWhisperModels().then(setModels, (err) => setError(`Model list unavailable: ${errorMessage(err)}`));
   }, []);
 
   useEffect(() => refresh(), [refresh]);
@@ -86,7 +86,7 @@ function ModelList({ config, onSelect }: { config: VoiceConfig; onSelect: (model
       );
       await downloadWhisperModel(model);
     } catch (err) {
-      setError(`Téléchargement impossible : ${errorMessage(err)}`);
+      setError(`Download failed: ${errorMessage(err)}`);
     } finally {
       unlisten?.();
       setProgress(null);
@@ -94,10 +94,10 @@ function ModelList({ config, onSelect }: { config: VoiceConfig; onSelect: (model
     }
   }
 
-  if (!models) return error ? <ErrorText>{error}</ErrorText> : <p className="py-3 text-xs text-subtle">Chargement…</p>;
+  if (!models) return error ? <ErrorText>{error}</ErrorText> : <p className="py-3 text-xs text-subtle">Loading…</p>;
   return (
     <fieldset className="flex flex-col gap-1.5 py-3">
-      <legend className="mb-2 text-fg">Modèle Whisper</legend>
+      <legend className="mb-2 text-fg">Whisper model</legend>
       {models.map((m) => {
         const busy = progress?.model === m.model ? progress : null;
         const pct = busy?.total ? Math.round((busy.received / busy.total) * 100) : null;
@@ -124,14 +124,14 @@ function ModelList({ config, onSelect }: { config: VoiceConfig; onSelect: (model
             {m.downloaded ? (
               <span className="inline-flex items-center gap-1 text-xs text-ok">
                 <Check size={12} strokeWidth={1.5} aria-hidden="true" />
-                Téléchargé
+                Downloaded
               </span>
             ) : busy ? (
               <div className="flex w-40 items-center gap-2">
                 <progress
                   value={pct ?? undefined}
                   max={100}
-                  aria-label={`Téléchargement de ${m.model}`}
+                  aria-label={`Downloading ${m.model}`}
                   className="h-1.5 flex-1 overflow-hidden rounded-full [&::-webkit-progress-bar]:bg-line [&::-webkit-progress-value]:bg-accent"
                 />
                 <span className="w-9 text-right text-xs text-muted tabular-nums">{pct === null ? "…" : `${pct}%`}</span>
@@ -144,7 +144,7 @@ function ModelList({ config, onSelect }: { config: VoiceConfig; onSelect: (model
                 className={button}
               >
                 <Download size={14} strokeWidth={1.5} aria-hidden="true" />
-                Télécharger
+                Download
               </button>
             )}
           </div>
@@ -189,7 +189,7 @@ function ApiSettings({
 
   return (
     <>
-      <Row label="Préréglages">
+      <Row label="Presets">
         {PRESETS.map((p) => (
           <button
             key={p.label}
@@ -215,7 +215,7 @@ function ApiSettings({
           className={`${field} w-80 font-mono text-xs`}
         />
       </Row>
-      <Row label="Modèle" htmlFor="set-api-model">
+      <Row label="Model" htmlFor="set-api-model">
         <input
           id="set-api-model"
           value={apiModel}
@@ -225,7 +225,7 @@ function ApiSettings({
           className={`${field} w-80 font-mono text-xs`}
         />
       </Row>
-      <Row label="Clé API" hint={config.hasApiKey ? "Clé enregistrée" : "Aucune clé enregistrée"} htmlFor="set-api-key">
+      <Row label="API key" hint={config.hasApiKey ? "Key saved" : "No key saved"} htmlFor="set-api-key">
         <form
           className="flex items-center gap-2"
           onSubmit={(e) => {
@@ -244,11 +244,11 @@ function ApiSettings({
           />
           <button type="submit" disabled={!key.trim()} className={button}>
             <KeyRound size={14} strokeWidth={1.5} aria-hidden="true" />
-            Enregistrer
+            Save
           </button>
           <button type="button" disabled={!config.hasApiKey} onClick={() => storeKey(null)} className={button}>
             <Trash2 size={14} strokeWidth={1.5} aria-hidden="true" />
-            Supprimer
+            Delete
           </button>
         </form>
       </Row>
@@ -262,12 +262,12 @@ export function VoiceSection({ save }: { save: Save }) {
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
-    getVoiceConfig().then(setConfig, (err) => setError(`Réglages voix indisponibles : ${errorMessage(err)}`));
+    getVoiceConfig().then(setConfig, (err) => setError(`Voice settings unavailable: ${errorMessage(err)}`));
   }, []);
 
   useEffect(() => reload(), [reload]);
 
-  if (!config) return error ? <ErrorText>{error}</ErrorText> : <p className="text-xs text-subtle">Chargement…</p>;
+  if (!config) return error ? <ErrorText>{error}</ErrorText> : <p className="text-xs text-subtle">Loading…</p>;
 
   // Optimistic: apply now; on failure the backend's real config is reloaded and the error shown by `save`.
   const update = (patch: Partial<VoiceConfig>) => {
@@ -279,8 +279,8 @@ export function VoiceSection({ save }: { save: Save }) {
   };
 
   return (
-    <Section title="Voix">
-      <Row label="Raccourci" hint="Global, actif même hors de la fenêtre" htmlFor="set-voice-shortcut">
+    <Section title="Voice">
+      <Row label="Shortcut" hint="Global, works even outside the window" htmlFor="set-voice-shortcut">
         <ShortcutRecorder value={config.shortcut} onChange={(shortcut) => update({ shortcut })} />
       </Row>
       <Row label="Mode" htmlFor="set-voice-mode">
@@ -290,14 +290,14 @@ export function VoiceSection({ save }: { save: Save }) {
           onChange={(e) => update({ pushToTalk: e.target.value === "hold" })}
           className={`${field} w-56`}
         >
-          <option value="hold">Maintenir pour parler</option>
-          <option value="toggle">Appuyer pour démarrer/arrêter</option>
+          <option value="hold">Hold to talk</option>
+          <option value="toggle">Press to start/stop</option>
         </select>
       </Row>
-      <Row label="Envoyer automatiquement" hint="Appuie sur Entrée après la transcription" htmlFor="set-voice-submit">
+      <Row label="Send automatically" hint="Presses Enter after transcription" htmlFor="set-voice-submit">
         <Toggle id="set-voice-submit" checked={config.submit} onChange={(submit) => update({ submit })} />
       </Row>
-      <Row label="Langue" htmlFor="set-voice-lang">
+      <Row label="Language" htmlFor="set-voice-lang">
         <select
           id="set-voice-lang"
           value={config.language}
@@ -311,14 +311,14 @@ export function VoiceSection({ save }: { save: Save }) {
           ))}
         </select>
       </Row>
-      <Row label="Moteur" htmlFor="set-voice-engine">
+      <Row label="Engine" htmlFor="set-voice-engine">
         <select
           id="set-voice-engine"
           value={config.engine}
           onChange={(e) => update({ engine: e.target.value as VoiceConfig["engine"] })}
           className={`${field} w-56`}
         >
-          <option value="local">Local — Whisper hors ligne</option>
+          <option value="local">Local (offline Whisper)</option>
           <option value="api">API</option>
         </select>
       </Row>

@@ -40,7 +40,7 @@ function DiffView({ text }: { text: string }) {
   const [shown, setShown] = useState(DIFF_PAGE);
   const lines = useMemo(() => diffLines(text), [text]);
   const kinds = useMemo(() => classifyDiff(lines), [lines]);
-  if (lines.length === 0) return <p className="p-4 text-xs text-subtle">Aucune différence.</p>;
+  if (lines.length === 0) return <p className="p-4 text-xs text-subtle">No differences.</p>;
   return (
     <div className="min-w-max py-2 font-mono text-xs leading-5">
       {lines.slice(0, shown).map((line, i) => (
@@ -51,7 +51,7 @@ function DiffView({ text }: { text: string }) {
       ))}
       {lines.length > shown && (
         <button type="button" className={`${BTN} m-3`} onClick={() => setShown((n) => n + DIFF_PAGE * 4)}>
-          Afficher plus ({lines.length - shown} lignes restantes)
+          Show more ({lines.length - shown} lines left)
         </button>
       )}
     </div>
@@ -177,24 +177,24 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
       if (!dir) return;
       const sha = await gitCommit(dir, message);
       setMessage("");
-      return `Commit ${sha} créé.`;
+      return `Created commit ${sha}.`;
     });
 
   const merge = () => {
-    if (!dir || !window.confirm(`Merger ${status?.branch} dans le dépôt principal (--no-ff) ?`)) return;
+    if (!dir || !window.confirm(`Merge ${status?.branch} into the main repository (--no-ff)?`)) return;
     void act(() => gitMergeWorktree(dir));
   };
 
   const removeWorktree = () => {
     if (!dir) return;
     const ok = window.confirm(
-      `Supprimer le worktree ${dir} et sa branche ${status?.branch} ? Les commits non mergés seront perdus.`,
+      `Delete worktree ${dir} and its branch ${status?.branch}? Unmerged commits will be lost.`,
     );
     if (!ok) return;
     setBusy(true);
     gitRemoveWorktree(dir).then(
       () => {
-        deck.toast(`Worktree ${status?.branch} supprimé.`);
+        deck.toast(`Deleted worktree ${status?.branch}.`);
         onClose();
       },
       (err) => {
@@ -205,23 +205,21 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
   };
 
   const restore = (cp: GitCheckpoint) => {
-    const when = new Date(cp.ts).toLocaleString("fr-FR");
-    const running = pane.exited
-      ? ""
-      : "\n\nL'agent tourne encore : arrêtez-le d'abord pour éviter qu'il réécrive des fichiers.";
+    const when = new Date(cp.ts).toLocaleString("en-US");
+    const running = pane.exited ? "" : "\n\nThe agent is still running: stop it first so it does not rewrite files.";
     const ok = window.confirm(
-      `Restaurer les fichiers tels qu'au ${when} ? Les modifications faites depuis (et les commits) seront annulées. L'état actuel est d'abord sauvegardé dans un nouveau point de restauration.${running}`,
+      `Restore files as of ${when}? Changes made since then (including commits) will be undone. The current state is saved to a new restore point first.${running}`,
     );
     if (!ok || !dir) return;
     void act(async () => {
       await gitRestoreCheckpoint(dir, pane.id, cp.sha);
-      return `Fichiers restaurés au ${when}.`;
+      return `Files restored to ${when}.`;
     });
   };
 
   const files = comparison?.files ?? status?.files ?? [];
   const others = Object.values(panes).filter((p) => p.id !== pane.id);
-  const base = status?.base ?? "la branche principale";
+  const base = status?.base ?? "the main branch";
 
   return createPortal(
     // biome-ignore lint/a11y/noStaticElementInteractions: only stops event bubbling to the pane header
@@ -239,7 +237,7 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
       <button
         type="button"
         tabIndex={-1}
-        aria-label="Fermer le panneau Git"
+        aria-label="Close Git panel"
         className="absolute inset-0 cursor-default bg-black/40"
         onClick={onClose}
       />
@@ -248,7 +246,7 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label={`Git : ${paneName(pane)}`}
+        aria-label={`Git: ${paneName(pane)}`}
         className="relative flex h-full w-[min(960px,92vw)] flex-col border-l border-line-strong bg-panel text-[13px] text-fg outline-none"
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line pr-2 pl-3">
@@ -257,7 +255,7 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
           <span className="min-w-0 flex-1 truncate text-xs text-subtle">{paneName(pane)}</span>
           <IconButton
             icon={RefreshCw}
-            label="Rafraîchir"
+            label="Refresh"
             disabled={busy || !dir}
             onClick={() => {
               setComparison(null);
@@ -267,13 +265,13 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
               });
             }}
           />
-          <IconButton icon={X} label="Fermer" hint="Fermer (Échap)" onClick={onClose} />
+          <IconButton icon={X} label="Close" hint="Close (Esc)" onClick={onClose} />
         </header>
 
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-2 text-xs">
-          <span className="font-mono text-fg">{status ? (status.branch ?? "HEAD détachée") : "…"}</span>
+          <span className="font-mono text-fg">{status ? (status.branch ?? "Detached HEAD") : "…"}</span>
           {status?.base && status.branch !== status.base && (
-            <span className="tabular-nums text-muted" title={`Commits en avance / en retard sur ${status.base}`}>
+            <span className="tabular-nums text-muted" title={`Commits ahead / behind ${status.base}`}>
               ↑{status.ahead} ↓{status.behind} vs {status.base}
             </span>
           )}
@@ -296,14 +294,14 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
         <div className="flex min-h-0 flex-1">
           <div className="scroll-thin flex w-80 shrink-0 flex-col overflow-y-auto border-r border-line">
             <label className="flex flex-col gap-1 px-3 py-2 text-xs text-subtle">
-              Comparer avec…
+              Compare with…
               <select
                 className="h-7 rounded-md border border-line-strong bg-base px-1.5 text-fg outline-none focus:border-accent"
                 value={comparison?.otherId ?? ""}
                 disabled={busy || !dir}
                 onChange={(e) => compareWith(e.target.value)}
               >
-                <option value="">Modifications en cours (vs HEAD)</option>
+                <option value="">Uncommitted changes (vs HEAD)</option>
                 {others.map((p) => (
                   <option key={p.id} value={p.id}>
                     {paneName(p)} · {AGENTS[p.agent].name}
@@ -314,12 +312,12 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
 
             <h3 className="flex items-center px-3 pt-1 pb-1 text-xs text-subtle">
               {comparison
-                ? `Différences avec ${panes[comparison.otherId] ? paneName(panes[comparison.otherId]) : "…"}`
-                : "Fichiers modifiés"}
+                ? `Differences with ${panes[comparison.otherId] ? paneName(panes[comparison.otherId]) : "…"}`
+                : "Changed files"}
               <span className="ml-auto tabular-nums">{files.length}</span>
             </h3>
             {files.length === 0 ? (
-              <p className="px-3 pb-3 text-xs text-subtle">{status ? "Aucune modification." : "Chargement…"}</p>
+              <p className="px-3 pb-3 text-xs text-subtle">{status ? "No changes." : "Loading…"}</p>
             ) : (
               <ul className="pb-2">
                 {files.map((f) => (
@@ -340,11 +338,11 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   placeholder="feat(scope): description"
-                  aria-label="Message de commit"
+                  aria-label="Commit message"
                   className="resize-y rounded-md border border-line-strong bg-base px-2 py-1.5 text-xs text-fg outline-none placeholder:text-subtle focus:border-accent"
                 />
                 <p className="text-xs text-subtle">
-                  Conventional Commits : feat, fix, refactor, docs, test, chore. Tout est indexé (git add -A).
+                  Conventional Commits: feat, fix, refactor, docs, test, chore. Everything is staged (git add -A).
                 </p>
                 <button
                   type="button"
@@ -362,40 +360,40 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
               <Section title="Worktree">
                 <button type="button" className={BTN} disabled={busy} onClick={merge}>
                   <GitMerge size={14} strokeWidth={1.5} aria-hidden="true" />
-                  Merge vers {base}
+                  Merge into {base}
                 </button>
                 <button
                   type="button"
                   className={BTN_DANGER}
                   disabled={busy || !pane.exited}
-                  title={pane.exited ? undefined : "Arrêtez l'agent avant de supprimer son worktree"}
+                  title={pane.exited ? undefined : "Stop the agent before deleting its worktree"}
                   onClick={removeWorktree}
                 >
                   <Trash2 size={14} strokeWidth={1.5} aria-hidden="true" />
-                  Supprimer le worktree
+                  Delete worktree
                 </button>
               </Section>
             )}
 
-            <Section title="Points de restauration">
+            <Section title="Restore points">
               <button
                 type="button"
                 className={BTN}
                 disabled={busy || !dir}
                 onClick={() =>
-                  void act(async () => ((await checkpointPane(pane.id)) ? "Point de restauration créé." : null))
+                  void act(async () => ((await checkpointPane(pane.id)) ? "Restore point created." : null))
                 }
               >
                 <History size={14} strokeWidth={1.5} aria-hidden="true" />
-                Créer un point de restauration
+                Create restore point
               </button>
               {checkpoints.length === 0 ? (
-                <p className="text-xs text-subtle">Aucun point pour cet agent.</p>
+                <p className="text-xs text-subtle">No restore points for this agent.</p>
               ) : (
                 <ul className="flex flex-col">
                   {checkpoints.map((cp) => (
                     <li key={cp.ts} className="flex items-center gap-2 py-0.5 text-xs">
-                      <span className="tabular-nums text-muted">{new Date(cp.ts).toLocaleString("fr-FR")}</span>
+                      <span className="tabular-nums text-muted">{new Date(cp.ts).toLocaleString("en-US")}</span>
                       <span className="font-mono text-subtle">{cp.sha.slice(0, 7)}</span>
                       <button
                         type="button"
@@ -403,7 +401,7 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
                         disabled={busy}
                         onClick={() => restore(cp)}
                       >
-                        Restaurer
+                        Restore
                       </button>
                     </li>
                   ))}
@@ -414,9 +412,9 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
 
           <div className="scroll-thin min-w-0 flex-1 overflow-auto bg-base">
             {selected === null ? (
-              <p className="p-4 text-xs text-subtle">Sélectionnez un fichier pour voir son diff.</p>
+              <p className="p-4 text-xs text-subtle">Select a file to see its diff.</p>
             ) : diff === null ? (
-              <p className="p-4 text-xs text-subtle">Chargement du diff…</p>
+              <p className="p-4 text-xs text-subtle">Loading diff…</p>
             ) : (
               <DiffView key={selected} text={diff} />
             )}

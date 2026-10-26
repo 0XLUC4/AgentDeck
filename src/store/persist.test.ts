@@ -9,7 +9,7 @@ const { useDeck } = await import("./deck");
 const session = { id: "s1", name: "Session 1", savedAt: 1, layout: null, panes: [] };
 
 describe("migrate", () => {
-  it("moves v1 sessions into a 'Par défaut' workspace", () => {
+  it("moves v1 sessions into a 'Default' workspace", () => {
     const saved = migrate({
       version: 1,
       tabs: [session],
@@ -18,7 +18,7 @@ describe("migrate", () => {
       archived: [{ ...session, id: "old" }],
     });
     expect(saved?.version).toBe(2);
-    expect(saved?.workspaces).toEqual([{ id: expect.any(String), name: "Par défaut", path: "" }]);
+    expect(saved?.workspaces).toEqual([{ id: expect.any(String), name: "Default", path: "" }]);
     const wsId = saved?.workspaces[0].id;
     expect(saved?.tabs[0].workspaceId).toBe(wsId);
     expect(saved?.archived[0]).toMatchObject({ id: "old", workspaceId: wsId });

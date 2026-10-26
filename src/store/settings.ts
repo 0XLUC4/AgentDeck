@@ -115,7 +115,7 @@ export const settingsReady: Promise<void> = (async () => {
 /** Applies a change immediately and writes it to disk. Rejects if the write fails (state stays applied). */
 export async function updateSettings(patch: Partial<Settings>): Promise<void> {
   useSettings.setState(patch);
-  if (!store) throw new Error("stockage des réglages indisponible");
+  if (!store) throw new Error("settings storage unavailable");
   await store.set(KEY, useSettings.getState());
   await store.save();
 }

@@ -23,12 +23,12 @@ import { revealPane } from "./Deck";
 import { TaskDetail } from "./TaskDetail";
 
 const GROUP_LABEL: Record<ActivityKey, string> = {
-  waiting: "En attente",
-  error: "Erreur",
-  done: "Terminé",
-  working: "En cours",
-  idle: "Inactif",
-  exited: "Arrêté",
+  waiting: "Waiting",
+  error: "Error",
+  done: "Done",
+  working: "Working",
+  idle: "Idle",
+  exited: "Stopped",
 };
 
 const paneName = (pane: Pane) => pane.title || AGENTS[pane.agent].name;
@@ -72,7 +72,7 @@ function ActivityRow({
           type="button"
           className="flex min-w-0 flex-1 flex-col gap-0.5 py-2 pr-2 pl-3 text-left"
           aria-current={active ? "true" : undefined}
-          aria-label={`${paneName(pane)}, ${AGENTS[pane.agent].name}, ${status ? STATUS[status].label : "Arrêté"}, ${workspace.name} › ${tab.name}`}
+          aria-label={`${paneName(pane)}, ${AGENTS[pane.agent].name}, ${status ? STATUS[status].label : "Stopped"}, ${workspace.name} › ${tab.name}`}
           onClick={() => jumpTo(item)}
         >
           <span className="flex w-full items-center gap-2">
@@ -102,15 +102,15 @@ function ActivityRow({
             <IconButton
               icon={Check}
               size="sm"
-              label={`Voir ce que ${paneName(pane)} a terminé`}
-              hint="Voir ce qu'il a terminé"
+              label={`See what ${paneName(pane)} finished`}
+              hint="See what it finished"
               onClick={onDetail}
             />
             <IconButton
               icon={EyeOff}
               size="sm"
-              label={`Ignorer ${paneName(pane)}`}
-              hint="Ignorer : repasse l'agent en inactif sans ouvrir le détail"
+              label={`Dismiss ${paneName(pane)}`}
+              hint="Dismiss: set the agent back to idle without opening the details"
               className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               onClick={() => deck.acknowledge(pane.id)}
             />
@@ -122,8 +122,8 @@ function ActivityRow({
             <IconButton
               icon={SquareTerminal}
               size="sm"
-              label={`Aller au terminal de ${paneName(pane)}`}
-              hint="Aller au terminal pour répondre"
+              label={`Go to the terminal of ${paneName(pane)}`}
+              hint="Go to the terminal to answer"
               onClick={() => jumpTo(item)}
             />
           </span>
@@ -152,15 +152,15 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
   const detail = groups.flatMap((g) => g.items).find((i) => i.pane.id === detailId);
 
   return (
-    <aside className="flex w-[260px] shrink-0 flex-col border-l border-line bg-panel" aria-label="Activité des agents">
+    <aside className="flex w-[260px] shrink-0 flex-col border-l border-line bg-panel" aria-label="Agent activity">
       <div className="flex h-10 shrink-0 items-center justify-between pr-2 pl-3">
-        <h2 className="text-xs font-medium text-subtle">Activité</h2>
-        <IconButton icon={X} label="Masquer l'activité" hint="Masquer l'activité (Ctrl+Maj+A)" onClick={onClose} />
+        <h2 className="text-xs font-medium text-subtle">Activity</h2>
+        <IconButton icon={X} label="Hide activity" hint="Hide activity (Ctrl+Shift+A)" onClick={onClose} />
       </div>
       <div className="relative flex min-h-0 flex-1 flex-col border-t border-line">
         {detail && <TaskDetail item={detail} onJump={() => jumpTo(detail)} onClose={() => setDetailId(null)} />}
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-          {groups.length === 0 && <p className="px-3 py-4 text-xs text-subtle">Aucun agent lancé.</p>}
+          {groups.length === 0 && <p className="px-3 py-4 text-xs text-subtle">No agents running.</p>}
           {groups.map((group) => (
             <section key={group.key} aria-label={GROUP_LABEL[group.key]}>
               <h3 className="flex items-center border-b border-line px-3 pt-3 pb-1 text-xs text-subtle">
@@ -205,18 +205,18 @@ export function ActivityToggle({ open, onToggle }: { open: boolean; onToggle: ()
         const started = Object.values(state.panes).find(
           (p) => p.status === "waiting" && prev.panes[p.id] && prev.panes[p.id].status !== "waiting",
         );
-        if (started) setAnnouncement(`${AGENTS[started.agent].name} attend votre réponse : ${paneName(started)}`);
+        if (started) setAnnouncement(`${AGENTS[started.agent].name} is waiting for your answer: ${paneName(started)}`);
       }),
     [],
   );
 
-  const summary = [waiting > 0 && `${waiting} en attente`, failed && "erreur"].filter(Boolean).join(", ");
+  const summary = [waiting > 0 && `${waiting} waiting`, failed && "error"].filter(Boolean).join(", ");
   return (
     <span className="relative inline-flex">
       <IconButton
         icon={Activity}
-        label={summary ? `Activité (${summary})` : "Activité"}
-        hint={`${open ? "Masquer" : "Afficher"} l'activité de tous les agents (Ctrl+Maj+A)`}
+        label={summary ? `Activity (${summary})` : "Activity"}
+        hint={`${open ? "Hide" : "Show"} activity of all agents (Ctrl+Shift+A)`}
         aria-pressed={open}
         onClick={onToggle}
       />
@@ -252,13 +252,13 @@ export function PermissionBanner() {
   const more = requests.length - 1;
   return (
     <section
-      aria-label={`${AGENTS[pane.agent].name} demande l'autorisation`}
+      aria-label={`${AGENTS[pane.agent].name} is asking for permission`}
       className="fixed top-12 right-4 z-40 flex w-[340px] flex-col gap-1.5 rounded-lg border border-line-strong bg-raised p-2.5 shadow-lg"
     >
       <p className="flex items-center gap-2 text-xs text-muted">
         <AgentLogo kind={pane.agent} size={14} />
         <span className="min-w-0 flex-1 truncate">
-          <span className="font-medium text-fg">{paneName(pane)}</span> demande l'autorisation
+          <span className="font-medium text-fg">{paneName(pane)}</span> is asking for permission
         </span>
         {more > 0 && <span className="shrink-0 tabular-nums text-subtle">+{more}</span>}
       </p>

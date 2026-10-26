@@ -8,6 +8,6 @@ const paneId = new URLSearchParams(window.location.search).get("pane");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {paneId ? <DetachedPane paneId={paneId} /> : <p className="p-4 text-muted">Pane introuvable.</p>}
+    {paneId ? <DetachedPane paneId={paneId} /> : <p className="p-4 text-muted">Pane not found.</p>}
   </React.StrictMode>,
 );

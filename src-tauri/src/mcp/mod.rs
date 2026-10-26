@@ -1,4 +1,4 @@
-//! MCP server for the "Chef d'orchestre" pane, served at `/mcp` on the hook server.
+//! MCP server for the orchestrator pane, served at `/mcp` on the hook server.
 //! Streamable HTTP transport, plain JSON responses only (no SSE, no session id: both optional).
 //! Ref: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports
 //!
@@ -131,7 +131,7 @@ impl rpc::Host for AppHost<'_> {
             .ok()
             .and_then(|()| wait_decision(&rx, FRONTEND_HOLD, || true));
         lock(&WAITING).remove(&request_id);
-        let answer = answer.ok_or("AgentDeck n'a pas répondu à temps")?;
+        let answer = answer.ok_or("AgentDeck did not answer in time")?;
         match answer["error"].as_str() {
             Some(e) => Err(e.to_owned()),
             None => Ok(answer["result"].clone()),
@@ -170,7 +170,7 @@ pub fn mcp_respond(
 ) -> Result<(), String> {
     let tx = lock(&WAITING)
         .remove(&request_id)
-        .ok_or("Requête expirée ou déjà traitée")?;
+        .ok_or("Request expired or already handled")?;
     let _ = tx.send(Some(json!({ "result": result, "error": error })));
     Ok(())
 }
@@ -248,26 +248,26 @@ fn mcp_config(port: u16) -> Value {
 }
 
 const ROLE_PROMPT: &str = "\
-# Rôle : chef d'orchestre AgentDeck
+# Role: AgentDeck orchestrator
 
-Tu coordonnes les autres agents de codage de ce workspace (Claude Code, Codex, Gemini, Grok, shell) \
-grâce aux outils MCP `agentdeck`. Tu ne codes pas toi-même sauf pour de petites vérifications.
+You coordinate the other coding agents in this workspace (Claude Code, Codex, Gemini, Grok, shell) \
+through the `agentdeck` MCP tools. You do not write code yourself except for small checks.
 
-Méthode :
-1. Comprends la demande, puis découpe-la en sous-tâches indépendantes et bien délimitées.
-2. Regarde les agents existants avec `list_agents` ; lance-en de nouveaux avec `spawn_agent` \
-(un titre clair par sous-tâche, `worktree: true` si plusieurs agents modifient le même dépôt).
-3. Envoie à chacun un prompt autonome et précis avec `send_prompt` (contexte, fichiers, critère de fin).
-4. Attends avec `wait_for` (until: \"done\", ou \"any\" pour réagir au premier) au lieu de sonder en boucle.
-5. Vérifie avec `get_result` (et `read_output` si besoin) ; relance ou corrige si le résultat ne convient pas.
-6. Termine par un résumé : ce qui a été fait, par quel agent, ce qui reste à vérifier.
+Method:
+1. Understand the request, then split it into independent, well-scoped subtasks.
+2. Check existing agents with `list_agents`; start new ones with `spawn_agent` \
+(one clear title per subtask, `worktree: true` if several agents change the same repository).
+3. Send each one a self-contained, precise prompt with `send_prompt` (context, files, definition of done).
+4. Wait with `wait_for` (until: \"done\", or \"any\" to react to the first one) instead of polling in a loop.
+5. Check with `get_result` (and `read_output` if needed); retry or correct if the result is not right.
+6. End with a summary: what was done, by which agent, what is left to verify.
 
-Règles :
-- Si un agent est en statut \"waiting\", il attend une permission : c'est l'utilisateur qui répond, pas toi. \
-Signale-le et attends.
-- Tu ne peux ni fermer ni tuer d'agent, ni agir hors de ton workspace.
-- Si un outil répond « en pause par l'utilisateur », arrête-toi et attends ses instructions.
-- Réponds en français.
+Rules:
+- If an agent has status \"waiting\", it is waiting on a permission: the user answers, not you. \
+Report it and wait.
+- You cannot close or kill agents, or act outside your workspace.
+- If a tool answers \"paused by the user\", stop and wait for their instructions.
+- Reply in the user's language.
 ";
 
 #[cfg(test)]

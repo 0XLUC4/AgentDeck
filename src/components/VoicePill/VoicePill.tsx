@@ -96,11 +96,11 @@ export function VoicePill() {
   }, []);
 
   const label = {
-    idle: transcript || "Prêt",
-    listening: "Écoute en cours",
-    downloading: `Téléchargement du modèle${percent === null ? "…" : ` ${percent} %`}`,
-    transcribing: "Transcription…",
-    error: error || "Erreur vocale",
+    idle: transcript || "Ready",
+    listening: "Listening",
+    downloading: `Downloading model${percent === null ? "…" : ` ${percent}%`}`,
+    transcribing: "Transcribing…",
+    error: error || "Voice error",
   }[state];
 
   return (

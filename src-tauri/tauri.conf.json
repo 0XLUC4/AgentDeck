@@ -50,12 +50,12 @@
     "publisher": "Luca",
     "copyright": "© 2026 Luca",
     "category": "DeveloperTool",
-    "shortDescription": "Tableau de bord multi-agents pour terminaux IA",
-    "longDescription": "AgentDeck lance et supervise plusieurs agents de code (Claude Code, Codex, Gemini CLI, shells) côte à côte, avec statuts, notifications et dictée vocale.",
+    "shortDescription": "Multi-agent dashboard for AI terminals",
+    "longDescription": "AgentDeck runs and supervises several coding agents (Claude Code, Codex, Gemini CLI, shells) side by side, with status tracking, notifications and voice dictation.",
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["French", "English"],
+        "languages": ["English", "French"],
         "displayLanguageSelector": true,
         "startMenuFolder": "AgentDeck"
       }
@@ -71,7 +71,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxRUJBQjlCQTcwRjAxRjAKUldUd0FRK25tNnZyMGVQN0ppbDhaZCt4TG5SVGwvZHMyWUdRVmZOdnQ3bWZtUnBRMHFPdGNKMjgK",
-      "endpoints": ["https://agentdeck-updates.pages.dev/latest.json"],
+      "endpoints": ["https://github.com/0XLUC4/AgentDeck/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
   }

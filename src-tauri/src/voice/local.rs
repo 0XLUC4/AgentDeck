@@ -47,7 +47,7 @@ pub fn ensure_model(
     result.map(|()| path)
 }
 
-// shortcut: checks byte count against Content-Length, not the SHA-256; add it if corrupt models show up.
+// Note: checks byte count against Content-Length, not the SHA-256; add it if corrupt models show up.
 fn download(url: &str, part: &Path, on_progress: &mut impl FnMut(u64, u64)) -> Result<(), String> {
     let mut response = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(30))
@@ -145,9 +145,11 @@ pub fn clean(text: &str, secs: f32) -> String {
         .to_lowercase()
         .trim_matches(|c: char| !c.is_alphanumeric())
         .to_string();
+    // French patterns on purpose: Whisper's typical silence hallucinations in French ("subtitles by", "subscribe").
     let caption = ["sous-titr", "amara.org", "abonnez-vous"]
         .iter()
         .any(|pattern| normalized.contains(pattern));
+    // Short politeness fillers ("thanks", "goodbye") in French and English.
     let filler = secs < 2.0
         && [
             "merci",

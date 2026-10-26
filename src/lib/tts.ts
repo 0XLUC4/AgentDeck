@@ -1,4 +1,4 @@
-// Spoken task summaries (Web Speech API): "<Agent> a terminé : <summary>" when a task ends unseen.
+// Spoken task summaries (Web Speech API): "<Agent> finished: <summary>" when a task ends unseen.
 import { useEffect, useState } from "react";
 import { useDeck } from "../store/deck";
 import { useSettings } from "../store/settings";
@@ -27,7 +27,7 @@ export function cleanForSpeech(text: string, max = SPEECH_MAX_CHARS): string {
 
 export function speechText(agentName: string, summary: string | null): string {
   const clean = summary ? cleanForSpeech(summary) : "";
-  return clean ? `${agentName} a terminé : ${clean}` : `${agentName} a terminé`;
+  return clean ? `${agentName} finished: ${clean}` : `${agentName} finished`;
 }
 
 const supported = () => typeof window !== "undefined" && "speechSynthesis" in window;
@@ -36,20 +36,20 @@ export function stopSpeaking(): void {
   if (supported() && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
 }
 
-/** Speaks with the chosen voice, else the first voice of the dictation language (fr-FR by default). */
+/** Speaks with the chosen voice, else the first voice of the dictation language (the OS language when "auto"). */
 export async function speak(text: string): Promise<void> {
   if (!supported()) return;
   const { voice: voiceUri, rate } = useSettings.getState().speech;
   const language = await getVoiceConfig().then(
-    (c) => (c.language && c.language !== "auto" ? c.language : "fr"),
-    () => "fr",
+    (c) => (c.language && c.language !== "auto" ? c.language : navigator.language),
+    () => navigator.language,
   );
+  const primary = language.toLowerCase().split("-")[0];
   const voices = speechSynthesis.getVoices();
   const voice =
-    voices.find((v) => v.voiceURI === voiceUri) ??
-    voices.find((v) => v.lang.toLowerCase().startsWith(language.toLowerCase()));
+    voices.find((v) => v.voiceURI === voiceUri) ?? voices.find((v) => v.lang.toLowerCase().startsWith(primary));
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = voice?.lang ?? (language === "fr" ? "fr-FR" : language);
+  utterance.lang = voice?.lang ?? language;
   if (voice) utterance.voice = voice;
   utterance.rate = rate;
   speechSynthesis.cancel();

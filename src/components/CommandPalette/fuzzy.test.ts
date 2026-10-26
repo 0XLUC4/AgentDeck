@@ -3,20 +3,21 @@ import { fuzzyScore } from "./fuzzy";
 
 describe("fuzzyScore", () => {
   it("matches subsequences, ignoring case, accents and spaces", () => {
-    expect(fuzzyScore("REGL", "Ouvrir les réglages")).not.toBeNull();
-    expect(fuzzyScore("tout arr", "Tout arrêter")).not.toBeNull();
+    expect(fuzzyScore("SETT", "Open settings")).not.toBeNull();
+    expect(fuzzyScore("resume", "Résumé")).not.toBeNull();
+    expect(fuzzyScore("stop a", "Stop all")).not.toBeNull();
     expect(fuzzyScore("", "anything")).toBe(0);
   });
   it("rejects missing characters and wrong order", () => {
-    expect(fuzzyScore("xyz", "Tout arrêter")).toBeNull();
+    expect(fuzzyScore("xyz", "Stop all")).toBeNull();
     expect(fuzzyScore("ba", "ab")).toBeNull();
   });
   it("ranks substring and word-start matches above scattered ones", () => {
-    const sub = fuzzyScore("mur", "Mode mur") ?? -1;
-    const scattered = fuzzyScore("mur", "Mode multiple ouvert") ?? -1;
+    const sub = fuzzyScore("wall", "Wall mode") ?? -1;
+    const scattered = fuzzyScore("wall", "Window with all lines") ?? -1;
     expect(sub).toBeGreaterThan(scattered);
-    const wordStart = fuzzyScore("ns", "Nouvelle session") ?? -1;
-    const middle = fuzzyScore("ns", "Agrandir pane actif") ?? -1;
+    const wordStart = fuzzyScore("ns", "New session") ?? -1;
+    const middle = fuzzyScore("ns", "Maximize panes") ?? -1;
     expect(wordStart).toBeGreaterThan(middle);
   });
   it("prefers shorter text on equal matches", () => {

@@ -24,18 +24,18 @@ const LABELS: Record<string, string> = {
   control: "Ctrl",
   commandorcontrol: "Ctrl",
   alt: "Alt",
-  shift: "Maj",
+  shift: "Shift",
   super: "Win",
-  space: "Espace",
-  enter: "Entrée",
-  backspace: "Retour",
+  space: "Space",
+  enter: "Enter",
+  backspace: "Backspace",
   arrowup: "↑",
   arrowdown: "↓",
   arrowleft: "←",
   arrowright: "→",
 };
 
-/** "ctrl+space" -> "Ctrl + Espace". */
+/** "ctrl+space" -> "Ctrl + Space". */
 export const formatShortcut = (shortcut: string) =>
   shortcut
     .split("+")

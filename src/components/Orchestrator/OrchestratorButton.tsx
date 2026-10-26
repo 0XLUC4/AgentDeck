@@ -1,4 +1,4 @@
-// Pane header badge for a "Chef d'orchestre": crown + journal of its MCP tool calls + global pause.
+// Pane header badge for an orchestrator pane: crown + journal of its MCP tool calls + global pause.
 import { Crown, Pause, Play, ScrollText, X } from "lucide-react";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -9,11 +9,11 @@ import { IconButton } from "../IconButton/IconButton";
 const EMPTY: ActivityEntry[] = [];
 // Portaled out of the dockview tab, but React events still bubble to the header (drag, maximize).
 const stop = (e: SyntheticEvent) => e.stopPropagation();
-const time = (at: number) => new Date(at).toLocaleTimeString("fr-FR");
+const time = (at: number) => new Date(at).toLocaleTimeString("en-US");
 
 export function OrchestratorCrown({ size = 13 }: { size?: number }) {
   return (
-    <Crown size={size} strokeWidth={1.5} aria-label="Chef d'orchestre" className="shrink-0 text-[var(--color-wait)]" />
+    <Crown size={size} strokeWidth={1.5} aria-label="Orchestrator" className="shrink-0 text-[var(--color-wait)]" />
   );
 }
 
@@ -31,7 +31,7 @@ export function PauseToggle() {
       ) : (
         <Pause size={14} strokeWidth={1.5} aria-hidden="true" />
       )}
-      {paused ? "Reprendre l'orchestrateur" : "Pause orchestrateur"}
+      {paused ? "Resume orchestrator" : "Pause orchestrator"}
     </button>
   );
 }
@@ -60,14 +60,14 @@ function ActivityDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) 
         <div className="flex min-w-0 items-center gap-2">
           <OrchestratorCrown size={16} />
           <h2 id="orchestrator-log-title" className="text-[15px] font-medium">
-            Actions du chef d'orchestre
+            Orchestrator actions
           </h2>
         </div>
-        <IconButton icon={X} label="Fermer" hint="Fermer (Échap)" onClick={onClose} />
+        <IconButton icon={X} label="Close" hint="Close (Esc)" onClick={onClose} />
       </div>
       <div className="p-5">
         {entries.length === 0 ? (
-          <p className="py-3 text-center text-muted">Aucune action pour l'instant.</p>
+          <p className="py-3 text-center text-muted">No actions yet.</p>
         ) : (
           <ol className="scroll-thin flex max-h-96 flex-col overflow-y-auto rounded-md border border-line">
             {entries.map((e) => (
@@ -88,9 +88,7 @@ function ActivityDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) 
       </div>
       <div className="flex items-center gap-2 border-t border-line px-5 py-3">
         <span className="mr-auto text-xs text-subtle" role="status">
-          {paused
-            ? "En pause : lancer, envoyer et interrompre sont refusés"
-            : "Ne peut ni répondre aux permissions ni fermer d'agent"}
+          {paused ? "Paused: launch, send and interrupt are blocked" : "Cannot answer permissions or close agents"}
         </span>
         <PauseToggle />
       </div>
@@ -110,8 +108,8 @@ export function OrchestratorButton({ pane }: { pane: Pane }) {
       <IconButton
         icon={ScrollText}
         size="sm"
-        label="Actions du chef d'orchestre"
-        hint={`Actions du chef d'orchestre (${count})${paused ? " · en pause" : ""}`}
+        label="Orchestrator actions"
+        hint={`Orchestrator actions (${count})${paused ? " · paused" : ""}`}
         onClick={() => setOpen(true)}
       />
       {open && createPortal(<ActivityDialog pane={pane} onClose={() => setOpen(false)} />, document.body)}

@@ -11,7 +11,7 @@ use crate::hooks_server::PaneStatus;
 
 /// Versions we can speak (we only use initialize/ping/tools, unchanged across these).
 pub(super) const VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
-pub const PAUSED_MSG: &str = "Orchestrateur en pause par l'utilisateur";
+pub const PAUSED_MSG: &str = "Orchestrator paused by the user";
 const MUTATING: [&str; 3] = ["spawn_agent", "send_prompt", "interrupt"];
 const MAX_PROMPT: usize = 64 * 1024;
 const MAX_WAIT_S: u64 = 600;
@@ -60,12 +60,12 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "agentdeck", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Outils AgentDeck pour piloter les autres agents de ton workspace.",
+        "instructions": "AgentDeck tools to drive the other agents in your workspace.",
     })
 }
 
 fn definitions() -> Value {
-    let pane = json!({ "type": "string", "description": "paneId (voir list_agents)" });
+    let pane = json!({ "type": "string", "description": "paneId (see list_agents)" });
     let tool = |name: &str, description: &str, properties: Value, required: &[&str]| {
         json!({
             "name": name,
@@ -76,43 +76,43 @@ fn definitions() -> Value {
     json!([
         tool(
             "list_agents",
-            "Liste les agents de ton workspace : paneId, agent, titre, statut, dernière action, session, dossier.",
+            "Lists the agents in your workspace: paneId, agent, title, status, last action, session, folder.",
             json!({}),
             &[]
         ),
         tool(
             "spawn_agent",
-            "Lance un nouvel agent dans ta session. cwd par défaut : le dossier du workspace (doit rester dedans).",
+            "Starts a new agent in your session. Default cwd: the workspace folder (must stay inside it).",
             json!({
                 "agent": { "type": "string", "enum": ["claude", "codex", "gemini", "grok", "shell"] },
                 "title": { "type": "string" },
                 "cwd": { "type": "string" },
-                "worktree": { "type": "boolean", "description": "Worktree Git dédié" },
+                "worktree": { "type": "boolean", "description": "Dedicated Git worktree" },
                 "args": { "type": "array", "items": { "type": "string" } },
             }),
             &["agent", "title"]
         ),
         tool(
             "send_prompt",
-            "Envoie un prompt à un agent (soumis par défaut). Refusé si l'agent attend une permission.",
+            "Sends a prompt to an agent (submitted by default). Refused if the agent is waiting on a permission.",
             json!({ "paneId": pane, "text": { "type": "string" }, "submit": { "type": "boolean", "default": true } }),
             &["paneId", "text"]
         ),
         tool(
             "get_status",
-            "Statut d'un agent, dernière action, temps passé dans ce statut.",
+            "An agent's status, last action and time spent in that status.",
             json!({ "paneId": pane }),
             &["paneId"]
         ),
         tool(
             "get_result",
-            "Dernière tâche terminée d'un agent : prompt, résumé, actions (30 dernières), statut.",
+            "An agent's last finished task: prompt, summary, actions (last 30), status.",
             json!({ "paneId": pane }),
             &["paneId"]
         ),
         tool(
             "wait_for",
-            "Attend que des agents aient fini (done), attendent une réponse (waiting), ou l'un des deux (any).",
+            "Waits until agents are finished (done), waiting for an answer (waiting), or either (any).",
             json!({
                 "paneIds": { "type": "array", "items": { "type": "string" } },
                 "until": { "type": "string", "enum": ["done", "waiting", "any"] },
@@ -122,13 +122,13 @@ fn definitions() -> Value {
         ),
         tool(
             "read_output",
-            "Dernières lignes du terminal d'un agent, en texte brut.",
+            "Last lines of an agent's terminal, as plain text.",
             json!({ "paneId": pane, "lines": { "type": "integer", "minimum": 1, "maximum": MAX_LINES, "default": 50 } }),
             &["paneId"]
         ),
         tool(
             "interrupt",
-            "Interrompt la tâche en cours d'un agent (Échap / Ctrl+C). La session reste ouverte.",
+            "Interrupts an agent's current task (Esc / Ctrl+C). The session stays open.",
             json!({ "paneId": pane }),
             &["paneId"]
         ),
@@ -168,9 +168,11 @@ fn run(name: &str, args: &Value, host: &impl Host) -> Result<Value, String> {
         "spawn_agent" => host.frontend(name, &spawn_args(args)?),
         "send_prompt" => {
             let pane_id = pane_arg(args)?;
-            let text = args["text"].as_str().ok_or("text manquant")?;
+            let text = args["text"].as_str().ok_or("missing text")?;
             if text.trim().is_empty() || text.len() > MAX_PROMPT {
-                return Err(format!("text doit être non vide et ≤ {MAX_PROMPT} octets"));
+                return Err(format!(
+                    "text must be non-empty and at most {MAX_PROMPT} bytes"
+                ));
             }
             let submit = bool_arg(args, "submit", true)?;
             let result = host.frontend(
@@ -194,26 +196,26 @@ fn run(name: &str, args: &Value, host: &impl Host) -> Result<Value, String> {
             Ok(json!({ "paneId": pane_id, "output": text }))
         }
         "wait_for" => wait_for(args, host),
-        _ => Err(format!("outil inconnu : {name}")),
+        _ => Err(format!("unknown tool: {name}")),
     }
 }
 
 fn wait_for(args: &Value, host: &impl Host) -> Result<Value, String> {
     let ids: Vec<String> = args["paneIds"]
         .as_array()
-        .ok_or("paneIds doit être une liste")?
+        .ok_or("paneIds must be a list")?
         .iter()
         .map(|v| {
             v.as_str()
                 .map(str::to_owned)
-                .ok_or("paneIds : chaînes attendues")
+                .ok_or("paneIds: strings expected")
         })
         .collect::<Result<_, _>>()?;
     if ids.is_empty() || ids.len() > 20 {
-        return Err("paneIds : entre 1 et 20 agents".into());
+        return Err("paneIds: between 1 and 20 agents".into());
     }
     let until = Until::parse(args["until"].as_str().unwrap_or(""))
-        .ok_or("until doit valoir done, waiting ou any")?;
+        .ok_or("until must be done, waiting or any")?;
     let timeout = uint_arg(args, "timeoutSec", 300, MAX_WAIT_S)?;
     // The UI checks the scope and reports its view of each pane (covers agents without hooks).
     let current = host.frontend("wait_for", &json!({ "paneIds": ids }))?;
@@ -231,30 +233,30 @@ fn wait_for(args: &Value, host: &impl Host) -> Result<Value, String> {
 /// Validated `spawn_agent` arguments, normalized for the UI.
 fn spawn_args(args: &Value) -> Result<Value, String> {
     let agent: AgentKind = serde_json::from_value(args["agent"].clone())
-        .map_err(|_| "agent doit valoir claude, codex, gemini, grok ou shell")?;
+        .map_err(|_| "agent must be claude, codex, gemini, grok or shell")?;
     let title = args["title"].as_str().map(str::trim).unwrap_or("");
     if title.is_empty() || title.chars().count() > 80 {
-        return Err("title : 1 à 80 caractères".into());
+        return Err("title: 1 to 80 characters".into());
     }
     let cwd = match &args["cwd"] {
         Value::Null => None,
         Value::String(s) if !s.trim().is_empty() => Some(s.trim()),
-        _ => return Err("cwd doit être un chemin".into()),
+        _ => return Err("cwd must be a path".into()),
     };
     let extra: Vec<&str> = match &args["args"] {
         Value::Null => Vec::new(),
         Value::Array(a) => a
             .iter()
-            .map(|v| v.as_str().ok_or("args : chaînes attendues"))
+            .map(|v| v.as_str().ok_or("args: strings expected"))
             .collect::<Result<_, _>>()?,
-        _ => return Err("args doit être une liste de chaînes".into()),
+        _ => return Err("args must be a list of strings".into()),
     };
     if extra.len() > 20
         || extra
             .iter()
             .any(|a| a.len() > 500 || a.contains(char::is_control))
     {
-        return Err("args : 20 arguments max, sans caractères de contrôle".into());
+        return Err("args: at most 20 arguments, no control characters".into());
     }
     Ok(json!({
         "agent": agent,
@@ -269,14 +271,14 @@ fn pane_arg(args: &Value) -> Result<&str, String> {
     args["paneId"]
         .as_str()
         .filter(|p| !p.is_empty() && p.len() <= 64)
-        .ok_or_else(|| "paneId manquant".into())
+        .ok_or_else(|| "missing paneId".into())
 }
 
 fn bool_arg(args: &Value, key: &str, default: bool) -> Result<bool, String> {
     match &args[key] {
         Value::Null => Ok(default),
         Value::Bool(b) => Ok(*b),
-        _ => Err(format!("{key} doit être un booléen")),
+        _ => Err(format!("{key} must be a boolean")),
     }
 }
 
@@ -286,7 +288,7 @@ fn uint_arg(args: &Value, key: &str, default: u64, max: u64) -> Result<u64, Stri
         v => v
             .as_u64()
             .filter(|n| (1..=max).contains(n))
-            .ok_or_else(|| format!("{key} : entier entre 1 et {max}")),
+            .ok_or_else(|| format!("{key}: integer between 1 and {max}")),
     }
 }
 
@@ -317,7 +319,7 @@ mod tests {
             match tool {
                 "read_output" => Ok(json!({ "raw": "\x1b[31ma\x1b[0m\r\nb\r\nc\r\n" })),
                 "wait_for" => Ok(json!({ "statuses": { "p1": "done", "p2": "working" } })),
-                "get_status" if args["paneId"] == "other-ws" => Err("hors workspace".into()),
+                "get_status" if args["paneId"] == "other-ws" => Err("outside workspace".into()),
                 _ => Ok(json!({ "ok": true })),
             }
         }

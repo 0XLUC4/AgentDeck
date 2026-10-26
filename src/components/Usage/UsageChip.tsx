@@ -35,11 +35,11 @@ export function UsageChip({ pane }: { pane: Pane }) {
   }, [tracked, id, cwd, agent, generation, hooked, exited, status]);
 
   if (!tracked || !usage || usage.tokens === 0) return null;
-  const models = usage.models.length ? `\nModèles : ${usage.models.join(", ")}` : "";
+  const models = usage.models.length ? `\nModels: ${usage.models.join(", ")}` : "";
   return (
     <span
       className="shrink-0 font-mono text-xs tabular-nums text-subtle"
-      title={`Depuis le lancement de l'agent\n${usageDetails(usage)}${models}`}
+      title={`Since the agent started\n${usageDetails(usage)}${models}`}
     >
       {usageLabel(usage)}
     </span>

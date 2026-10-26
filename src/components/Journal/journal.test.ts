@@ -72,19 +72,19 @@ describe("journal markdown", () => {
       total: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, tokens: 12_000, cost: 0.31, unpricedTokens: 0 },
       byAgent: [{ key: "claude", tokens: 12_000, cost: 0.31 }],
     });
-    expect(md).toContain("# Journal du 26/10/2026");
-    expect(md).toContain("**Consommation** : 12k tokens · 0,31 $ (Claude Code 0,31 $)");
+    expect(md).toContain("# Journal for 10/26/2026");
+    expect(md).toContain("**Usage**: 12k tokens · $0.31 (Claude Code $0.31)");
     expect(md).toContain("## proj");
-    expect(md).toContain("### Claude Code — 2 tâche(s)");
-    expect(md).toContain("- 10:00 → 10:12 (12 min) — Fix the bug");
-    expect(md).toContain("  - Résultat : Fixed.");
-    expect(md).toContain("[interrompue] — multi line prompt");
-    expect(md).toContain("### Commits — 1");
+    expect(md).toContain("### Claude Code - 2 task(s)");
+    expect(md).toContain("- 10:00 → 10:12 (12 min) - Fix the bug");
+    expect(md).toContain("  - Result: Fixed.");
+    expect(md).toContain("[interrupted] - multi line prompt");
+    expect(md).toContain("### Commits - 1");
     expect(md).toContain("- `abc1234` 15:00 fix: y");
     expect(md.endsWith("\n")).toBe(true);
   });
 
   it("says when the day is empty", () => {
-    expect(journalMarkdown("2026-10-26", [], null)).toContain("Aucune tâche");
+    expect(journalMarkdown("2026-10-26", [], null)).toContain("No tasks");
   });
 });

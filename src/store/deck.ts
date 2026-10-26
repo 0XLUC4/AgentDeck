@@ -182,7 +182,7 @@ export function tabToSession(tab: Tab, panes: Record<string, Pane>, now: number)
   };
 }
 
-export const DEFAULT_WORKSPACE_NAME = "Par défaut";
+export const DEFAULT_WORKSPACE_NAME = "Default";
 
 export const newWorkspace = (path: string, name = folderName(path) || DEFAULT_WORKSPACE_NAME): Workspace => ({
   id: crypto.randomUUID(),

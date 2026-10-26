@@ -131,7 +131,7 @@ pub fn command_for(kind: AgentKind, args: &[String]) -> CommandBuilder {
                     c
                 }
                 // npm installs agents as .cmd shims, which need cmd.exe.
-                // shortcut: cmd.exe mangles quoted paths containing spaces; npm's default prefix has none.
+                // Note: cmd.exe mangles quoted paths containing spaces; npm's default prefix has none.
                 (resolved, _) => {
                     let mut c = CommandBuilder::new("cmd.exe");
                     c.arg("/c");
@@ -237,7 +237,7 @@ pub fn prepare_hooks(kind: AgentKind, cwd: &str, hooks: &HookServer) -> Result<(
     match kind {
         AgentKind::Claude => update_claude_settings(cwd, |s| merge_claude_hooks(s, &hooks.url())),
         // Codex: see `hook_args` (no global config edits).
-        // TODO(team-backend): Gemini CLI has command-only hooks in .gemini/settings.json (unverified
+        // TODO: Gemini CLI has command-only hooks in .gemini/settings.json (unverified
         // locally, not installed); until wired, the frontend's idle detection covers Gemini panes.
         _ => Ok(()),
     }

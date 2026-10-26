@@ -48,7 +48,7 @@ function Tile({ item }: { item: ActivityItem }) {
   const lines = useLastLines(pane.id, pane.generation);
   const key = activityKey(pane);
   const status = key === "exited" ? null : key;
-  const statusLabel = status ? STATUS[status].label : "Arrêté";
+  const statusLabel = status ? STATUS[status].label : "Stopped";
   const name = pane.title || AGENTS[pane.agent].name;
   return (
     <li>
@@ -81,7 +81,7 @@ function Tile({ item }: { item: ActivityItem }) {
           className="h-24 overflow-hidden rounded-md bg-gutter px-2 py-1 font-mono text-[11px] leading-4 whitespace-pre text-muted"
           aria-hidden="true"
         >
-          {lines.length > 0 ? lines.join("\n") : <span className="text-subtle">Aucune sortie</span>}
+          {lines.length > 0 ? lines.join("\n") : <span className="text-subtle">No output</span>}
         </pre>
       </button>
     </li>
@@ -129,7 +129,7 @@ export function WallOverlay() {
     <section
       ref={rootRef}
       tabIndex={-1}
-      aria-label="Mur des agents"
+      aria-label="Agent wall"
       className="absolute inset-0 z-20 flex flex-col bg-gutter outline-none"
       onKeyDown={(e) => {
         if (e.key !== "Escape") return;
@@ -139,7 +139,7 @@ export function WallOverlay() {
     >
       <div className="flex h-10 shrink-0 items-center gap-3 border-b border-line bg-panel pr-2 pl-3">
         <h2 className="text-xs font-medium text-subtle">
-          Mur · {allWorkspaces ? "tous les workspaces" : workspace.name}
+          Wall · {allWorkspaces ? "all workspaces" : workspace.name}
           <span className="ml-2 tabular-nums">{items.length}</span>
         </h2>
         <label className="ml-auto flex items-center gap-2 text-xs text-muted">
@@ -149,18 +149,18 @@ export function WallOverlay() {
             onChange={(e) => useWall.setState({ allWorkspaces: e.target.checked })}
             className="accent-(--color-accent)"
           />
-          Tous les workspaces
+          All workspaces
         </label>
         <IconButton
           icon={X}
-          label="Quitter le mur"
-          hint="Quitter le mur (Échap, Ctrl+Maj+W)"
+          label="Exit wall"
+          hint="Exit wall (Esc, Ctrl+Shift+W)"
           onClick={() => useWall.setState({ open: false })}
         />
       </div>
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
         {items.length === 0 ? (
-          <p className="px-2 py-4 text-xs text-subtle">Aucun agent lancé.</p>
+          <p className="px-2 py-4 text-xs text-subtle">No agents running.</p>
         ) : (
           <ul className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-1.5">
             {items.map((item) => (
@@ -179,8 +179,8 @@ export function WallToggle() {
   return (
     <IconButton
       icon={LayoutGrid}
-      label="Mode mur"
-      hint={`${open ? "Quitter le" : "Afficher le"} mur : tous les agents d'un coup d'œil (Ctrl+Maj+W)`}
+      label="Wall mode"
+      hint={`${open ? "Exit" : "Show"} wall: every agent at a glance (Ctrl+Shift+W)`}
       aria-pressed={open}
       onClick={toggleWall}
     />

@@ -34,7 +34,7 @@ export function listenVoiceTranscripts() {
       if (paneId) await writeToPane(paneId, submit ? `${text}\r` : text);
       else await voiceSend(text, submit);
     } catch (err) {
-      deck.toast(`Dictée non envoyée : ${err instanceof Error ? err.message : String(err)}`);
+      deck.toast(`Dictation not sent: ${err instanceof Error ? err.message : String(err)}`);
     }
   });
 }

@@ -8,23 +8,23 @@ const { cleanForSpeech, speechText } = await import("./tts");
 describe("TTS text cleanup", () => {
   it("strips markdown and code", () => {
     const md =
-      "## Fait\n\n- Ajouté `parseArgs` dans **src/lib**\n- Voir [la doc](https://x.dev)\n\n```ts\nconst a = 1;\n```\nFini.";
-    expect(cleanForSpeech(md)).toBe("Fait Ajouté parseArgs dans src/lib Voir la doc Fini.");
+      "## Done\n\n- Added `parseArgs` in **src/lib**\n- See [the docs](https://x.dev)\n\n```ts\nconst a = 1;\n```\nFinished.";
+    expect(cleanForSpeech(md)).toBe("Done Added parseArgs in src/lib See the docs Finished.");
   });
 
   it("drops an unterminated code block and bare URLs", () => {
-    expect(cleanForSpeech("Voir https://example.com ici\n```\ncode")).toBe("Voir ici");
+    expect(cleanForSpeech("See https://example.com here\n```\ncode")).toBe("See here");
   });
 
   it("cuts long text at a word boundary", () => {
-    const text = cleanForSpeech("mot ".repeat(100));
+    const text = cleanForSpeech("word ".repeat(100));
     expect(text.length).toBeLessThanOrEqual(201);
-    expect(text.endsWith("mot…")).toBe(true);
+    expect(text.endsWith("word…")).toBe(true);
   });
 
   it("builds the sentence", () => {
-    expect(speechText("Codex", "Tests **verts**.")).toBe("Codex a terminé : Tests verts.");
-    expect(speechText("Codex", "```\nx\n```")).toBe("Codex a terminé");
-    expect(speechText("Codex", null)).toBe("Codex a terminé");
+    expect(speechText("Codex", "Tests **green**.")).toBe("Codex finished: Tests green.");
+    expect(speechText("Codex", "```\nx\n```")).toBe("Codex finished");
+    expect(speechText("Codex", null)).toBe("Codex finished");
   });
 });

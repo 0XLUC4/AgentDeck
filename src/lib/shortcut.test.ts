@@ -32,9 +32,9 @@ describe("toTauriShortcut", () => {
 });
 
 describe("formatShortcut", () => {
-  it("renders French labels", () => {
-    expect(formatShortcut("ctrl+space")).toBe("Ctrl + Espace");
-    expect(formatShortcut("ctrl+shift+f9")).toBe("Ctrl + Maj + F9");
-    expect(formatShortcut("CommandOrControl+Shift+A")).toBe("Ctrl + Maj + A");
+  it("renders readable labels", () => {
+    expect(formatShortcut("ctrl+space")).toBe("Ctrl + Space");
+    expect(formatShortcut("ctrl+shift+f9")).toBe("Ctrl + Shift + F9");
+    expect(formatShortcut("CommandOrControl+Shift+A")).toBe("Ctrl + Shift + A");
   });
 });

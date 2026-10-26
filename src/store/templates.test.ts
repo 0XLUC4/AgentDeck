@@ -32,7 +32,7 @@ describe("template serialization", () => {
   const layout = { grid: { root: { data: [{ views: ["a"] }, { views: ["b"] }] } }, panels: { a: { id: "a" }, b: {} } };
   const panes = { a: spec("a", "D:\\proj\\web"), b: spec("b", "C:\\elsewhere", "codex") };
   const template = sessionToTemplate(
-    "Mon modèle",
+    "My template",
     { paneIds: ["a", "b", "gone"], layout: layout as never },
     panes,
     "D:\\proj",

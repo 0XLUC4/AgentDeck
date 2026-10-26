@@ -17,7 +17,7 @@ export interface TemplatePane {
   title: string;
   /** Relative to the workspace folder ("" = the folder itself); null = the workspace folder / last used folder. */
   cwd: string | null;
-  /** Undefined: the agent's defaults from Réglages > Agents. */
+  /** Undefined: the agent's defaults from Settings > Agents. */
   args?: string[];
   worktree?: boolean;
   fontSize?: number;
@@ -166,7 +166,7 @@ export const templatesReady: Promise<void> = (async () => {
 
 async function persist(list: SessionTemplate[]): Promise<void> {
   useTemplates.setState({ list });
-  if (!store) throw new Error("stockage des modèles indisponible");
+  if (!store) throw new Error("template storage unavailable");
   await store.set(KEY, list);
   await store.save();
 }
@@ -177,7 +177,7 @@ export const allTemplates = (list = useTemplates.getState().list) => [...BUILTIN
 export async function saveSessionAsTemplate(name: string, tabId = useDeck.getState().activeTabId): Promise<void> {
   const state = useDeck.getState();
   const tab = state.tabs.find((t) => t.id === tabId);
-  if (!tab || tab.paneIds.length === 0) throw new Error("la session n'a aucun agent");
+  if (!tab || tab.paneIds.length === 0) throw new Error("the session has no agents");
   const workspace = state.workspaces.find((w) => w.id === tab.workspaceId);
   const template = sessionToTemplate(name.trim() || tab.name, tab, state.panes, workspace?.path ?? "");
   await persist([...useTemplates.getState().list, template]);
@@ -195,7 +195,7 @@ export function newSessionFromTemplate(templateId: string): void {
   const workspace = activeWorkspace();
   const { lastCwd } = useDeck.getState();
   if (!workspace.path && !lastCwd) {
-    deck.toast("Aucun dossier de travail : liez un workspace ou ajoutez d'abord un agent.");
+    deck.toast("No working folder: link a workspace or add an agent first.");
     return;
   }
   const { layout, panes } = instantiate(template, workspace.path, lastCwd, useSettings.getState());
