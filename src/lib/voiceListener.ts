@@ -1,6 +1,8 @@
 // Main window side of voice input: Rust emits the transcript, we pick the target pane and type it.
+
+import { sendPrompt } from "../components/Broadcast/send";
 import { activeWorkspace, deck, useDeck } from "../store/deck";
-import { getVoiceConfig, onVoiceTranscript, voiceSend, writeToPane } from "./ipc";
+import { getVoiceConfig, onVoiceTranscript, voiceSend } from "./ipc";
 import { type RouteCandidate, routeTranscript } from "./voiceRoute";
 
 /** Pane ids, most recently focused first. */
@@ -31,7 +33,7 @@ export function listenVoiceTranscripts() {
     try {
       const { submit } = await getVoiceConfig();
       const { paneId, text } = routeTranscript(transcript, voiceCandidates());
-      if (paneId) await writeToPane(paneId, submit ? `${text}\r` : text);
+      if (paneId) await sendPrompt(paneId, text, submit);
       else await voiceSend(text, submit);
     } catch (err) {
       deck.toast(`Dictation not sent: ${err instanceof Error ? err.message : String(err)}`);

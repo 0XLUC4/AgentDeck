@@ -79,13 +79,14 @@ describe("handleMcpRequest", () => {
 
   it("sends prompts, but never to an agent waiting for a permission", async () => {
     await call("send_prompt", { paneId: "a", text: "line1\nline2", submit: true });
-    expect(ipc.writeToPane).toHaveBeenLastCalledWith("a", "\x1b[200~line1\nline2\x1b[201~\r");
+    expect(ipc.writeToPane).toHaveBeenCalledWith("a", "\x1b[200~line1\nline2\x1b[201~");
+    expect(ipc.writeToPane).toHaveBeenLastCalledWith("a", "\r");
     await call("send_prompt", { paneId: "a", text: "draft", submit: false });
     expect(ipc.writeToPane).toHaveBeenLastCalledWith("a", "draft");
     deck.setStatus("b", "waiting", null);
     await expect(call("send_prompt", { paneId: "b", text: "1" })).rejects.toThrow("waiting");
     await expect(call("interrupt", { paneId: "b" })).rejects.toThrow("waiting");
-    expect(ipc.writeToPane).toHaveBeenCalledTimes(2);
+    expect(ipc.writeToPane).toHaveBeenCalledTimes(3);
   });
 
   it("returns the last finished task", async () => {

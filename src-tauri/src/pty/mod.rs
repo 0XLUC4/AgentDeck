@@ -108,6 +108,13 @@ pub fn spawn_pane(
     let args = [agents::hook_args(agent, &pane_id, &state.hooks), args].concat();
     let mut cmd: CommandBuilder = agents::command_for(agent, &args);
     cmd.cwd(&cwd);
+    // When AgentDeck itself is started from a Claude Code session, don't leak that session's
+    // identity (messaging token/socket, child-session markers) into the agents we spawn.
+    for (key, _) in std::env::vars_os() {
+        if key.to_str().is_some_and(is_parent_claude_var) {
+            cmd.env_remove(&key);
+        }
+    }
     cmd.env("AGENTDECK_PANE_ID", &pane_id);
     cmd.env("AGENTDECK_HOOK_URL", state.hooks.url());
     cmd.env("AGENTDECK_HOOK_TOKEN", &state.hooks.token);
@@ -301,6 +308,13 @@ fn stream_output(
     });
 }
 
+/// Session variables set by a parent Claude Code process. User config like CLAUDE_CONFIG_DIR is kept.
+fn is_parent_claude_var(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    key.starts_with("CLAUDE_CODE_")
+        || matches!(key.as_str(), "CLAUDECODE" | "CLAUDE_PID" | "CLAUDE_EFFORT")
+}
+
 /// Pane ids end up in hook URLs and args, and agents run through `cmd.exe /c`
 /// on Windows, which re-parses shell metacharacters: reject both up front.
 fn validate_spawn_input(pane_id: &str, args: &[String]) -> Result<(), String> {
@@ -376,6 +390,16 @@ fn take_valid_utf8(pending: &mut Vec<u8>, max: usize, flush_all: bool) -> String
 #[cfg(test)]
 mod tests {
     use super::take_valid_utf8;
+
+    #[test]
+    fn strips_parent_claude_session_vars_only() {
+        use super::is_parent_claude_var as v;
+        assert!(v("CLAUDE_CODE_MESSAGING_TOKEN"));
+        assert!(v("CLAUDECODE"));
+        assert!(v("claude_pid"));
+        assert!(!v("CLAUDE_CONFIG_DIR"));
+        assert!(!v("PATH"));
+    }
 
     #[test]
     fn rejects_bad_pane_ids_and_shell_metacharacters() {

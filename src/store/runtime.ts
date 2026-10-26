@@ -65,6 +65,11 @@ const errorMessage = (err: unknown) => (err instanceof Error ? err.message : Str
  * `adopt`: the process is still alive in the backend (webview reload), only reattach to it.
  */
 export async function createPane(spec: PaneSpec, tabId: string, adopt = false): Promise<void> {
+  // Already running in this page (restore ran twice after a dev hot reload): keep the existing runtime.
+  if (runtimes.has(spec.id)) {
+    deck.addPane(useDeck.getState().panes[spec.id] ?? newPane(spec), tabId);
+    return;
+  }
   deck.addPane(newPane(spec), tabId);
   const rt: Runtime = {
     buffer: new RingBuffer(),

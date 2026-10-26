@@ -249,7 +249,8 @@ export const deck = {
   updatePane,
   addPane(pane: Pane, tabId: string) {
     set({ panes: { ...get().panes, [pane.id]: pane } });
-    updateTab(tabId, (t) => ({ ...t, paneIds: [...t.paneIds, pane.id] }));
+    // Idempotent: a restore that runs twice (dev hot reload) must not list a pane twice.
+    updateTab(tabId, (t) => (t.paneIds.includes(pane.id) ? t : { ...t, paneIds: [...t.paneIds, pane.id] }));
   },
   removePane(id: string) {
     const { [id]: _removed, ...panes } = get().panes;
