@@ -9,33 +9,16 @@ import { Toasts } from "./app/Toasts";
 import { AgentLogo } from "./components/AgentLogo/AgentLogo";
 import { AgentPicker } from "./components/AgentPicker/AgentPicker";
 import { LinkWorkspaceDialog } from "./components/LinkWorkspace/LinkWorkspaceDialog";
+import { SettingsDialog } from "./components/Settings/SettingsDialog";
 import { onTick } from "./lib/clock";
 import { activeWorkspace, useDeck } from "./store/deck";
 import { restoreAndAutosave } from "./store/persist";
 import { deriveStatuses, listenAgentStatus } from "./store/runtime";
+import { settingsReady, useSettings } from "./store/settings";
 
 // Module-level so StrictMode's double effects don't restore or subscribe twice.
 const ready = restoreAndAutosave();
 listenAgentStatus().catch((err) => console.warn("agent-status listener failed", err));
-
-const ACTIVITY_KEY = "agentdeck.activityOpen";
-
-// Storage can be unavailable (private mode, blocked): the panel then just starts closed.
-function readActivityOpen(): boolean {
-  try {
-    return localStorage.getItem(ACTIVITY_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function saveActivityOpen(open: boolean): void {
-  try {
-    localStorage.setItem(ACTIVITY_KEY, open ? "1" : "0");
-  } catch {
-    // not persisted; harmless
-  }
-}
 
 function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
   const workspace = useDeck((s) => activeWorkspace(s));
@@ -79,26 +62,36 @@ export default function App() {
   const [picking, setPicking] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [linking, setLinking] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(readActivityOpen);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const tabs = useDeck((s) => s.tabs);
   const activeTabId = useDeck((s) => s.activeTabId);
   const activeEmpty = useDeck((s) => s.tabs.find((t) => t.id === s.activeTabId)?.paneIds.length === 0);
 
   useEffect(() => {
-    void ready.then(() => setHydrated(true));
+    // Settings first: terminals read the font at mount; panels start as configured.
+    void Promise.all([ready, settingsReady]).then(() => {
+      const { sidebarOpen, activityOpen } = useSettings.getState();
+      setSidebarOpen(sidebarOpen);
+      setActivityOpen(activityOpen);
+      setHydrated(true);
+    });
     return onTick(() => deriveStatuses());
   }, []);
 
-  useEffect(() => saveActivityOpen(activityOpen), [activityOpen]);
-
-  // Ctrl+Shift+A toggles the activity panel; capture phase so the terminal never receives it.
+  // Ctrl+Shift+A toggles the activity panel, Ctrl+, opens Réglages; capture phase so the terminal never receives them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyA") {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.type === "keydown" && !e.repeat) setActivityOpen((open) => !open);
-      }
+      const activity = e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyA";
+      const settings = e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",";
+      // The voice shortcut recorder needs every combo.
+      const recording = e.target instanceof HTMLElement && e.target.closest("[data-shortcut-recorder]");
+      if ((!activity && !settings) || recording) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      if (activity) setActivityOpen((open) => !open);
+      else setSettingsOpen(true);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -111,6 +104,7 @@ export default function App() {
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         activityOpen={activityOpen}
         onToggleActivity={() => setActivityOpen(!activityOpen)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && <Sidebar onLink={() => setLinking(true)} />}
@@ -136,6 +130,7 @@ export default function App() {
       </div>
       {picking && <AgentPicker onClose={() => setPicking(false)} />}
       {linking && <LinkWorkspaceDialog onClose={() => setLinking(false)} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       <Toasts />
     </div>
   );

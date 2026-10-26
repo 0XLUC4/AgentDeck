@@ -14,6 +14,7 @@ import {
 import { notify } from "../lib/notify";
 import { RingBuffer } from "../lib/ringBuffer";
 import { activeTab, deck, newPane, type PaneSpec, useDeck } from "./deck";
+import { useSettings } from "./settings";
 
 /** Output within this window counts as "working" for panes without hooks. */
 const ACTIVITY_WINDOW_MS = 3000;
@@ -240,7 +241,9 @@ export function deriveStatuses(now = Date.now()): void {
   }
 }
 
-/** Subscribes once to hook status events; notifies on done/waiting when the user isn't looking. */
+const NOTIFY_TEXT = { done: "a terminé", waiting: "attend votre réponse", error: "a rencontré une erreur" } as const;
+
+/** Subscribes once to hook status events; notifies per the user's notification settings. */
 export function listenAgentStatus(): Promise<UnlistenFn> {
   return onAgentStatus((e) => {
     const state = useDeck.getState();
@@ -248,10 +251,13 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
     if (!prev) return;
     deck.updatePane(e.paneId, (p) => ({ ...p, hooked: true }));
     deck.setStatus(e.paneId, e.status, e.lastAction);
+    const event = e.status as keyof typeof NOTIFY_TEXT;
+    if (e.status === prev.status || !(event in NOTIFY_TEXT)) return;
+    const prefs = useSettings.getState().notify;
     const unseen = !document.hasFocus() || state.activePaneId !== e.paneId;
-    if (unseen && e.status !== prev.status && (e.status === "done" || e.status === "waiting")) {
-      const what = e.status === "done" ? "a terminé" : "attend votre réponse";
-      void notify(`${AGENTS[prev.agent].name} ${what}`, prev.title);
+    if (prefs[event] && (unseen || !prefs.onlyUnseen) && (prefs.enabled || prefs.sound)) {
+      const title = `${AGENTS[prev.agent].name} ${NOTIFY_TEXT[event]}`;
+      void notify(title, prev.title, { system: prefs.enabled, sound: prefs.sound });
     }
   });
 }

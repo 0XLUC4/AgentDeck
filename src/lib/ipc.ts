@@ -1,7 +1,18 @@
 // Typed wrappers around Tauri commands and events. Single source of IPC names.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AgentInfo, AgentStatusEvent, FolderInfo, OpenProject, SpawnOptions, VoiceState } from "./types";
+import type {
+  AgentInfo,
+  AgentStatusEvent,
+  FolderInfo,
+  ModelStatus,
+  OpenProject,
+  SpawnOptions,
+  VoiceConfig,
+  VoiceDownload,
+  VoiceState,
+  WhisperModel,
+} from "./types";
 
 export const spawnPane = (opts: SpawnOptions) => invoke<void>("spawn_pane", { ...opts });
 export const writeToPane = (paneId: string, data: string) => invoke<void>("write_to_pane", { paneId, data });
@@ -17,6 +28,13 @@ export const inspectFolder = (path: string) => invoke<FolderInfo>("inspect_folde
 export const voiceStart = () => invoke<void>("voice_start");
 export const voiceStop = () => invoke<void>("voice_stop");
 export const voiceSend = (text: string, submit: boolean) => invoke<void>("voice_send", { text, submit });
+export const getVoiceConfig = () => invoke<VoiceConfig>("voice_get_config");
+export const setVoiceConfig = (config: Omit<VoiceConfig, "hasApiKey">) =>
+  invoke<VoiceConfig>("voice_set_config", { config });
+export const setVoiceApiKey = (key: string | null) => invoke<void>("voice_set_api_key", { key });
+export const listWhisperModels = () => invoke<ModelStatus[]>("voice_list_models");
+export const downloadWhisperModel = (model: WhisperModel) => invoke<void>("voice_download_model", { model });
+// event "voice-download" payload { received: number; total: number | null }
 
 export const onPaneOutput = (paneId: string, cb: (data: string) => void): Promise<UnlistenFn> =>
   listen<string>(`pane-output:${paneId}`, (e) => cb(e.payload));
@@ -31,3 +49,5 @@ export const onVoiceState = (cb: (state: VoiceState) => void) =>
 export const onVoiceTranscript = (cb: (text: string) => void) =>
   listen<string>("voice-transcript", (e) => cb(e.payload));
 export const onVoiceError = (cb: (message: string) => void) => listen<string>("voice-error", (e) => cb(e.payload));
+export const onVoiceDownload = (cb: (progress: VoiceDownload) => void) =>
+  listen<VoiceDownload>("voice-download", (e) => cb(e.payload));

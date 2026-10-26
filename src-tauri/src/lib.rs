@@ -45,6 +45,11 @@ pub fn run() {
             voice::voice_start,
             voice::voice_stop,
             voice::voice_send,
+            voice::voice_get_config,
+            voice::voice_set_config,
+            voice::voice_set_api_key,
+            voice::voice_list_models,
+            voice::voice_download_model,
             workspace::list_open_projects,
             workspace::inspect_folder,
         ])

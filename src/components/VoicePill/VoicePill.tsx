@@ -1,6 +1,6 @@
-// Floating dictation pill: live mic bars, transcribing dots, errors, last transcript.
+// Floating dictation pill: live mic bars, model download progress, transcribing dots, errors, last transcript.
 import { useEffect, useRef, useState } from "react";
-import { onVoiceError, onVoiceLevel, onVoiceState, onVoiceTranscript } from "../../lib/ipc";
+import { onVoiceDownload, onVoiceError, onVoiceLevel, onVoiceState, onVoiceTranscript } from "../../lib/ipc";
 import type { VoiceState } from "../../lib/types";
 
 const BAR_COUNT = 14;
@@ -78,6 +78,7 @@ export function VoicePill() {
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [percent, setPercent] = useState<number | null>(null);
 
   useEffect(() => {
     const unlisteners = [
@@ -87,6 +88,7 @@ export function VoicePill() {
       }),
       onVoiceError(setError),
       onVoiceTranscript(setTranscript),
+      onVoiceDownload(({ received, total }) => setPercent(total ? Math.floor((received * 100) / total) : null)),
     ];
     return () => {
       for (const unlisten of unlisteners) unlisten.then((off) => off()).catch(() => {});
@@ -96,7 +98,8 @@ export function VoicePill() {
   const label = {
     idle: transcript || "Prêt",
     listening: "Écoute en cours",
-    transcribing: "Transcription en cours",
+    downloading: `Téléchargement du modèle${percent === null ? "…" : ` ${percent} %`}`,
+    transcribing: "Transcription…",
     error: error || "Erreur vocale",
   }[state];
 
@@ -113,6 +116,11 @@ export function VoicePill() {
         {state === "transcribing" && <Dots />}
         {state === "error" && (
           <span data-tauri-drag-region className="truncate text-sm text-red-400">
+            {label}
+          </span>
+        )}
+        {state === "downloading" && (
+          <span data-tauri-drag-region className="truncate text-sm text-white/70 tabular-nums">
             {label}
           </span>
         )}
