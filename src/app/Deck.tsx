@@ -126,8 +126,8 @@ export function Deck({ tab }: { tab: Tab }) {
         panel.api.close();
       }
     }
-    // A restored layout that already matches the panes is kept as is.
-    if (changed && useSettings.getState().autoGrid) arrangePanesInGrid(tab.id);
+    // Auto grid also applies to restored layouts, so a session always opens as a grid.
+    if (useSettings.getState().autoGrid && (changed || tab.paneIds.length > 1)) arrangePanesInGrid(tab.id);
   }, [api, tab.paneIds, tab.id]);
 
   useEffect(() => {
