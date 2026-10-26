@@ -21,8 +21,13 @@ const PRESETS = [
   { label: "Groq", apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", apiModel: "whisper-large-v3-turbo" },
 ];
 
-const formatSize = (bytes: number | null) =>
-  bytes === null ? "" : bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} Go` : `${Math.round(bytes / 1e6)} Mo`;
+/** Download sizes of the ggml models, shown before download so users know what they're getting. */
+const MODEL_SIZE: Record<WhisperModel, string> = {
+  base: "148 Mo",
+  small: "488 Mo",
+  medium: "1,5 Go",
+  "large-v3-turbo": "1,6 Go",
+};
 
 interface Progress {
   model: WhisperModel;
@@ -112,8 +117,9 @@ function ModelList({ config, onSelect }: { config: VoiceConfig; onSelect: (model
                 onChange={() => onSelect(m.model)}
                 className="size-4 accent-[var(--color-accent)]"
               />
-              <span className="font-mono text-xs text-fg">{m.model}</span>
-              <span className="text-xs text-subtle">{formatSize(m.sizeBytes)}</span>
+              <span className="font-mono text-xs text-fg">
+                {m.model} <span className="text-subtle">({MODEL_SIZE[m.model]})</span>
+              </span>
             </label>
             {m.downloaded ? (
               <span className="inline-flex items-center gap-1 text-xs text-ok">
