@@ -70,8 +70,11 @@ pub fn spawn_pane(
     cols: u16,
     rows: u16,
     title: Option<String>,
+    env: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     validate_spawn_input(&pane_id, &args)?;
+    let env = env.unwrap_or_default();
+    validate_extra_env(&env)?;
     if state
         .panes
         .0
@@ -105,6 +108,9 @@ pub fn spawn_pane(
     cmd.env("AGENTDECK_HOOK_TOKEN", &state.hooks.token);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    for (key, value) in &env {
+        cmd.env(key, value);
+    }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave); // child owns it now; dropping lets EOF propagate on exit
@@ -292,6 +298,17 @@ fn validate_spawn_input(pane_id: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Extra env vars the frontend may set: only the orchestrator's MCP secret (a UUID).
+fn validate_extra_env(env: &HashMap<String, String>) -> Result<(), String> {
+    let ok = env.iter().all(|(k, v)| {
+        k == "AGENTDECK_MCP_SECRET"
+            && (1..=64).contains(&v.len())
+            && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    });
+    ok.then_some(())
+        .ok_or_else(|| "env variable not allowed".into())
+}
+
 /// On exit: frees the pane slot if `run` still owns it (so the id can be respawned).
 /// Returns false when a newer run already reuses the id: its exit must not be reported.
 fn is_current_run(app: &AppHandle, pane_id: &str, run: u64) -> bool {
@@ -347,6 +364,17 @@ mod tests {
         if cfg!(windows) {
             assert!(v("ok", &["x & calc".into()]).is_err());
         }
+    }
+
+    #[test]
+    fn extra_env_is_whitelisted() {
+        use super::validate_extra_env as v;
+        use std::collections::HashMap;
+        let env = |k: &str, val: &str| HashMap::from([(k.to_owned(), val.to_owned())]);
+        assert!(v(&HashMap::new()).is_ok());
+        assert!(v(&env("AGENTDECK_MCP_SECRET", "3f2b-aa")).is_ok());
+        assert!(v(&env("PATH", "x")).is_err());
+        assert!(v(&env("AGENTDECK_MCP_SECRET", "a b")).is_err());
     }
 
     #[test]

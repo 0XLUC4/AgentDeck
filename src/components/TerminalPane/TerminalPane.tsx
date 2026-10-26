@@ -3,9 +3,11 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
+import { forwardsInput } from "../../lib/detach";
 import { deck } from "../../store/deck";
 import { attachOutput, reportSize, sendInput } from "../../store/runtime";
 import { DEFAULT_FONT_FAMILY, useSettings } from "../../store/settings";
+import { isDetached } from "../Detached/host";
 
 // Hex mirrors of --color-base / --color-fg in index.css (xterm needs plain colors).
 const THEME = { background: "#100e0c", foreground: "#ebe7e2", cursor: "#f1e7d2", selectionBackground: "#3b3732" };
@@ -49,13 +51,15 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     });
 
     const detach = attachOutput(paneId, (data) => term.write(data));
-    const input = term.onData((data) => sendInput(paneId, data));
+    // Only the owner window forwards: xterm auto-replies to terminal queries, so a second forwarder doubles them.
+    const owner = () => forwardsInput(false, isDetached(paneId));
+    const input = term.onData((data) => owner() && sendInput(paneId, data));
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const refit = () => {
       if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden
       fit.fit();
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => reportSize(paneId, term.cols, term.rows), 100);
+      resizeTimer = setTimeout(() => owner() && reportSize(paneId, term.cols, term.rows), 100);
     };
     const observer = new ResizeObserver(refit);
     observer.observe(host);

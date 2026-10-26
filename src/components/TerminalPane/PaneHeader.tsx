@@ -1,11 +1,13 @@
 import {
   CheckCheck,
+  ExternalLink,
   GitBranch,
   Maximize2,
   Minimize2,
   Pause,
   Pencil,
   RotateCcw,
+  SquareArrowDownLeft,
   SquareTerminal,
   X,
   ZoomIn,
@@ -18,8 +20,10 @@ import type { Pane } from "../../store/deck";
 import { deck, FONT_SIZE } from "../../store/deck";
 import { closePane, focusPane, interruptPane, restartPane } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
+import { toggleDetached, useDetached } from "../Detached/host";
 import { GitPanel } from "../Git/GitPanel";
 import { IconButton } from "../IconButton/IconButton";
+import { OrchestratorButton } from "../Orchestrator/OrchestratorButton";
 import { QueueButton } from "../Queue/QueueButton";
 import { StatusBadge } from "../StatusBadge/StatusBadge";
 import { UsageChip } from "../Usage/UsageChip";
@@ -79,6 +83,7 @@ function TitleField({ pane, onDone }: { pane: Pane; onDone: () => void }) {
 export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize }: Props) {
   const [renaming, setRenaming] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
+  const detached = useDetached((s) => s[pane.id] === true);
   const agent = AGENTS[pane.agent];
 
   return (
@@ -93,6 +98,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
       }}
     >
       <AgentLogo kind={pane.agent} size={14} />
+      <OrchestratorButton pane={pane} />
       {renaming ? (
         <TitleField pane={pane} onDone={() => setRenaming(false)} />
       ) : (
@@ -160,6 +166,12 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               hint="Zoomer (Ctrl+=, Ctrl+0 pour réinitialiser)"
               onClick={() => deck.zoom(pane.id, 1)}
               disabled={pane.fontSize >= FONT_SIZE.max}
+            />
+            <IconButton
+              icon={detached ? SquareArrowDownLeft : ExternalLink}
+              size="sm"
+              label={detached ? "Rattacher" : "Détacher dans une fenêtre"}
+              onClick={() => toggleDetached(pane.id)}
             />
             <IconButton
               icon={maximized ? Minimize2 : Maximize2}

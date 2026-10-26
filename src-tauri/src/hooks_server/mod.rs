@@ -16,10 +16,10 @@ use permissions::{PENDING, PERMISSION_HOLD, wait_decision};
 
 /// Header carrying the per-run secret; also how our Claude hook entries are recognized.
 pub const TOKEN_HEADER: &str = "X-AgentDeck-Token";
-const PANE_HEADER: &str = "X-AgentDeck-Pane";
+pub(crate) const PANE_HEADER: &str = "X-AgentDeck-Pane";
 /// Preferred port keeps `.claude/settings.local.json` stable across app runs.
 const PREFERRED_PORT: u16 = 47800;
-const MAX_BODY: u64 = 1024 * 1024;
+pub(crate) const MAX_BODY: u64 = 1024 * 1024;
 /// Cap on prompt/summary sent to the UI (bytes).
 const MAX_TEXT: usize = 8 * 1024;
 /// Only the end of a transcript is read when looking for the last assistant message.
@@ -81,6 +81,9 @@ pub fn start(app: AppHandle) -> HookServer {
             // One thread per request: a slow body (or a held permission request) must not stall other panes.
             let (app, expected) = (app.clone(), expected.clone());
             std::thread::spawn(move || {
+                if req.url().split('?').next() == Some("/mcp") {
+                    return crate::mcp::serve(&app, req, &expected);
+                }
                 let reply = match handle(&mut req, &expected) {
                     Ok(hook) => process(&app, &hook),
                     Err(code) => Response::empty(code).boxed(),
@@ -100,6 +103,7 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
     }
     PENDING.cancel_stale(&hook.pane_id, &hook.json);
     if let Some(event) = status_event(hook) {
+        crate::mcp::STATUS.set(&event.pane_id, event.status);
         let _ = app.emit("agent-status", event);
     }
     if hook.json["hook_event_name"] != "PermissionRequest" {
@@ -129,7 +133,7 @@ fn pane_exists(app: &AppHandle, pane_id: &str) -> bool {
         .is_some_and(|s| s.panes.0.lock().is_ok_and(|p| p.contains_key(pane_id)))
 }
 
-fn header<'a>(req: &'a Request, name: &'static str) -> Option<&'a str> {
+pub(crate) fn header<'a>(req: &'a Request, name: &'static str) -> Option<&'a str> {
     req.headers()
         .iter()
         .find(|h| h.field.equiv(name))
@@ -201,7 +205,7 @@ fn handle(req: &mut Request, token: &str) -> Result<Hook, u16> {
 }
 
 /// Constant-time comparison (length leak is fine: tokens are fixed-length UUIDs).
-fn token_ok(given: &str, expected: &str) -> bool {
+pub(crate) fn token_ok(given: &str, expected: &str) -> bool {
     given.len() == expected.len()
         && given
             .bytes()

@@ -2,6 +2,7 @@ import { Activity, Check, EyeOff, SquareTerminal, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AgentLogo } from "../components/AgentLogo/AgentLogo";
 import { IconButton } from "../components/IconButton/IconButton";
+import { OrchestratorCrown } from "../components/Orchestrator/OrchestratorButton";
 import { PermissionCard } from "../components/Permission/PermissionCard";
 import { permissionsForPane, usePermissions } from "../components/Permission/permissions";
 import { STATUS, StatusDot } from "../components/StatusBadge/StatusBadge";
@@ -76,6 +77,7 @@ function ActivityRow({
         >
           <span className="flex w-full items-center gap-2">
             <AgentLogo kind={pane.agent} size={14} />
+            {pane.orchestrator && <OrchestratorCrown size={12} />}
             <span className={`min-w-0 flex-1 truncate font-medium ${active ? "text-fg" : "text-muted"}`}>
               {paneName(pane)}
             </span>

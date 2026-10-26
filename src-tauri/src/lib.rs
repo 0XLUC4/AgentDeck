@@ -2,6 +2,7 @@ mod agents;
 mod git;
 mod history;
 mod hooks_server;
+mod mcp;
 mod pty;
 mod tray;
 mod usage;
@@ -53,6 +54,9 @@ pub fn run() {
             agents::detect_agents,
             agents::uninstall_hooks,
             hooks_server::permissions::answer_permission,
+            mcp::mcp_register,
+            mcp::mcp_respond,
+            mcp::mcp_set_paused,
             git::git_status,
             git::git_diff,
             git::git_diff_trees,

@@ -3,6 +3,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { AGENTS, interruptKey } from "../lib/agents";
 import {
   killPane,
+  mcpRegister,
   onAgentStatus,
   onPaneExit,
   onPaneOutput,
@@ -36,6 +37,8 @@ const runtimes = new Map<string, Runtime>();
 
 /** Spawn time of the pane's current process, or null before it starts. */
 export const paneStartedAt = (id: string): number | null => runtimes.get(id)?.startedAt ?? null;
+/** Buffered raw terminal output of a pane ("" when unknown). */
+export const paneOutput = (id: string): string => runtimes.get(id)?.buffer.text() ?? "";
 /** In-flight stop/restart per pane: a second click joins the first instead of racing a second spawn. */
 const stopping = new Map<string, Promise<void>>();
 const restarting = new Map<string, Promise<void>>();
@@ -97,15 +100,19 @@ async function spawn(id: string): Promise<void> {
   const { cols, rows } = rt;
   rt.startedAt = Date.now();
   try {
+    // Orchestrator wiring (MCP config, role prompt, secret) is regenerated on each spawn; the secret only
+    // goes to this process's env.
+    const mcp = pane.orchestrator ? await mcpRegister(id) : null;
     await spawnPane({
       paneId: id,
       agent: pane.agent,
       cwd: pane.cwd,
-      args: pane.args,
+      args: mcp ? [...mcp.args, ...pane.args] : pane.args,
       worktree: pane.worktree,
       cols,
       rows,
       title: pane.title,
+      env: mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : undefined,
     });
     // The terminal may have been fitted while spawning.
     if (rt.cols !== cols || rt.rows !== rows) await resizePane(id, rt.cols, rt.rows);
@@ -176,6 +183,9 @@ export async function closePane(id: string): Promise<void> {
   for (const unlisten of rt?.unlisten ?? []) unlisten();
   await killPane(id).catch((err) => console.warn("kill_pane failed", err));
 }
+
+/** Buffered scrollback of a pane (for detached windows). */
+export const paneOutputText = (id: string): string => runtimes.get(id)?.buffer.text() ?? "";
 
 /** Replays buffered output then streams new output. Returns a detach function. */
 export function attachOutput(id: string, onData: (data: string) => void): () => void {

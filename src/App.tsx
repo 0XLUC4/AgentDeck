@@ -10,6 +10,7 @@ import { AgentLogo } from "./components/AgentLogo/AgentLogo";
 import { AgentPicker } from "./components/AgentPicker/AgentPicker";
 import { BroadcastHost } from "./components/Broadcast/Broadcast";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
+import { startDetachHost } from "./components/Detached/host";
 import { startJournalRecorder } from "./components/Journal/recorder";
 import { LinkWorkspaceDialog } from "./components/LinkWorkspace/LinkWorkspaceDialog";
 import { listenPermissions } from "./components/Permission/permissions";
@@ -17,6 +18,7 @@ import { SettingsDialog } from "./components/Settings/SettingsDialog";
 import { TemplatePickerHost } from "./components/Templates/TemplatePicker";
 import { WallOverlay } from "./components/Wall/Wall";
 import { onTick } from "./lib/clock";
+import { listenOrchestrator } from "./lib/orchestrator";
 import { useTraySync } from "./lib/tray";
 import { startTaskSpeech } from "./lib/tts";
 import { checkForUpdateSilently } from "./lib/updater";
@@ -35,7 +37,9 @@ listenVoiceTranscripts().catch((err) => console.warn("voice-transcript listener 
 startQueueRunner();
 startTaskSpeech();
 listenPermissions().catch((err) => console.warn("agent-permission listener failed", err));
+listenOrchestrator().catch((err) => console.warn("orchestrator listener failed", err));
 void checkForUpdateSilently();
+startDetachHost();
 
 function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
   const workspace = useDeck((s) => activeWorkspace(s));

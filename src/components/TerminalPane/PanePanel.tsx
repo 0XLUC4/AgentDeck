@@ -1,9 +1,10 @@
 import type { IDockviewPanelProps } from "dockview-react";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, SquareArrowDownLeft } from "lucide-react";
 import { useEffect } from "react";
 import { AGENTS } from "../../lib/agents";
 import { useDeck } from "../../store/deck";
 import { focusPane, restartPane } from "../../store/runtime";
+import { reattachPane, useDetached } from "../Detached/host";
 import { TerminalPane } from "./TerminalPane";
 
 export interface PanePanelParams {
@@ -14,6 +15,7 @@ export interface PanePanelParams {
 export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>) {
   const pane = useDeck((s) => s.panes[params.paneId]);
   const title = pane?.title ?? "";
+  const detached = useDetached((s) => s[params.paneId] === true);
 
   useEffect(() => api.setTitle(title || "Agent"), [api, title]);
 
@@ -26,7 +28,22 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
       onMouseDown={() => focusPane(pane.id)}
       aria-label={`${AGENTS[pane.agent].name} : ${pane.title}`}
     >
-      <TerminalPane key={pane.generation} paneId={pane.id} fontSize={pane.fontSize} />
+      {detached ? (
+        // The detached window owns the terminal; ours is unmounted and replays the buffer on reattach.
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted">
+          Détaché dans une fenêtre
+          <button
+            type="button"
+            onClick={() => void reattachPane(pane.id)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-line-strong px-2.5 py-1 font-medium text-fg transition-colors hover:bg-hover"
+          >
+            <SquareArrowDownLeft size={14} strokeWidth={1.5} aria-hidden="true" />
+            Rattacher
+          </button>
+        </div>
+      ) : (
+        <TerminalPane key={pane.generation} paneId={pane.id} fontSize={pane.fontSize} />
+      )}
       {pane.exited && (
         <div
           role="status"

@@ -55,6 +55,8 @@ export interface SpawnOptions {
   rows: number;
   /** Pane title, saved with the terminal history. */
   title?: string;
+  /** Extra env for the process; the backend only accepts AGENTDECK_MCP_SECRET (orchestrators). */
+  env?: Record<string, string>;
 }
 
 /** A project folder currently open in an app (VS Code, Cursor, Explorer...). From `list_open_projects`. */
@@ -192,4 +194,20 @@ export interface GitCommitInfo {
   time: string;
   author: string;
   subject: string;
+}
+
+/** `mcp-request` event: one orchestrator tool call to run in the UI, answered with `mcp_respond`. */
+export interface McpRequest {
+  requestId: string;
+  orchestratorId: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** `mcp-activity` event: an orchestrator tool call, after it ran (`error` null on success). */
+export interface McpActivity {
+  orchestratorId: string;
+  tool: string;
+  args: Record<string, unknown>;
+  error: string | null;
 }

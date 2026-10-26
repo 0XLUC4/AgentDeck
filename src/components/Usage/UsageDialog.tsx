@@ -1,6 +1,7 @@
 import { Gauge, TriangleAlert } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { AGENTS } from "../../lib/agents";
+import { closeDialog, openDialog, useDialogs } from "../../lib/dialogs";
 import { usageSummary } from "../../lib/ipc";
 import type { UsageKeyed, UsageRange, UsageSummary, UsageTotals } from "../../lib/types";
 import { folderName, useDeck, type Workspace } from "../../store/deck";
@@ -188,16 +189,16 @@ export function UsageDialog({ onClose }: { onClose: () => void }) {
 
 /** Title bar button + dialog. */
 export function UsageButton() {
-  const [open, setOpen] = useState(false);
+  const open = useDialogs((s) => s.open === "usage");
   return (
     <>
       <IconButton
         icon={Gauge}
         label="Consommation"
         hint="Consommation : tokens et coût"
-        onClick={() => setOpen(true)}
+        onClick={() => openDialog("usage")}
       />
-      {open && <UsageDialog onClose={() => setOpen(false)} />}
+      {open && <UsageDialog onClose={closeDialog} />}
     </>
   );
 }

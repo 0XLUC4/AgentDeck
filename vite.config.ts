@@ -1,8 +1,9 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
@@ -12,7 +13,7 @@ export default defineConfig(() => ({
   // Two windows: main dashboard + floating voice pill.
   build: {
     rollupOptions: {
-      input: { main: "index.html", voice: "voice.html" },
+      input: { main: "index.html", voice: "voice.html", pane: "pane.html" },
     },
   },
 
