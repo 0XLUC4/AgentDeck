@@ -1,7 +1,7 @@
 // Typed wrappers around Tauri commands and events. Single source of IPC names.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AgentInfo, AgentStatusEvent, SpawnOptions, VoiceState } from "./types";
+import type { AgentInfo, AgentStatusEvent, FolderInfo, OpenProject, SpawnOptions, VoiceState } from "./types";
 
 export const spawnPane = (opts: SpawnOptions) => invoke<void>("spawn_pane", { ...opts });
 export const writeToPane = (paneId: string, data: string) => invoke<void>("write_to_pane", { paneId, data });
@@ -11,6 +11,8 @@ export const killPane = (paneId: string) => invoke<void>("kill_pane", { paneId }
 export const setActivePane = (paneId: string | null) => invoke<void>("set_active_pane", { paneId });
 export const detectAgents = () => invoke<AgentInfo[]>("detect_agents");
 export const uninstallHooks = (cwd: string) => invoke<void>("uninstall_hooks", { cwd });
+export const listOpenProjects = () => invoke<OpenProject[]>("list_open_projects");
+export const inspectFolder = (path: string) => invoke<FolderInfo>("inspect_folder", { path });
 
 export const voiceStart = () => invoke<void>("voice_start");
 export const voiceStop = () => invoke<void>("voice_stop");

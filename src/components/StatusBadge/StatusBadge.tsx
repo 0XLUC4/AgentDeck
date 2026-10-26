@@ -1,22 +1,30 @@
 import type { PaneStatus } from "../../lib/types";
 
-const STATUS: Record<PaneStatus, { label: string; dot: string }> = {
-  done: { label: "Terminé", dot: "bg-green-500" },
-  working: { label: "En cours", dot: "bg-blue-500 animate-pulse" },
-  waiting: { label: "En attente", dot: "bg-orange-500" },
-  error: { label: "Erreur", dot: "bg-red-500" },
-  idle: { label: "Inactif", dot: "bg-zinc-400" },
+export const STATUS: Record<PaneStatus, { label: string; color: string }> = {
+  done: { label: "Terminé", color: "var(--color-ok)" },
+  working: { label: "En cours", color: "var(--color-busy)" },
+  waiting: { label: "En attente de votre réponse", color: "var(--color-wait)" },
+  error: { label: "Erreur", color: "var(--color-bad)" },
+  idle: { label: "Inactif", color: "var(--color-subtle)" },
 };
 
-export function StatusBadge({ status }: { status: PaneStatus }) {
-  const { label, dot } = STATUS[status];
+export function StatusDot({ status }: { status: PaneStatus }) {
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-2 py-0.5 text-xs"
-      title={`Statut : ${label}`}
-    >
-      <span className={`size-2 rounded-full ${dot}`} aria-hidden="true" />
-      {label}
+      className={`size-2 shrink-0 rounded-full ${status === "waiting" ? "status-dot-pulse" : ""}`}
+      style={{ background: STATUS[status].color }}
+      aria-hidden="true"
+    />
+  );
+}
+
+/** Status dot; the label is the tooltip and is read by screen readers. */
+export function StatusBadge({ status }: { status: PaneStatus }) {
+  const { label } = STATUS[status];
+  return (
+    <span className="inline-flex size-4 shrink-0 items-center justify-center" title={`Statut : ${label}`}>
+      <StatusDot status={status} />
+      <span className="sr-only">{label}</span>
     </span>
   );
 }

@@ -1,10 +1,40 @@
 @import "tailwindcss";
 
+/*
+ * Warm graphite neutrals (hue 70, tiny chroma) + one ivory accent.
+ * Color is reserved for agent identity and status; chrome stays quiet.
+ */
 @theme {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  --color-gutter: oklch(0.13 0.004 70);
+  --color-base: oklch(0.165 0.005 70);
+  --color-panel: oklch(0.195 0.006 70);
+  --color-raised: oklch(0.235 0.007 70);
+  --color-hover: oklch(0.27 0.008 70);
+  --color-line: oklch(0.28 0.007 70);
+  --color-line-strong: oklch(0.36 0.008 70);
+  --color-fg: oklch(0.93 0.008 80);
+  --color-muted: oklch(0.76 0.008 75);
+  --color-subtle: oklch(0.6 0.008 75);
+  --color-accent: oklch(0.93 0.03 85);
+  --color-accent-hover: oklch(0.98 0.02 85);
+  --color-on-accent: oklch(0.2 0.01 70);
+
+  --color-ok: oklch(0.76 0.15 150);
+  --color-busy: oklch(0.74 0.13 245);
+  --color-wait: oklch(0.8 0.16 65);
+  --color-bad: oklch(0.68 0.19 25);
+  --color-close: oklch(0.58 0.21 27);
+
+  /* Agent brand colors (simple-icons hex, lifted where too dark for this background). */
   --color-agent-claude: #d97757;
-  --color-agent-codex: #10a37f;
-  --color-agent-gemini: #4285f4;
-  --color-agent-shell: #a1a1aa;
+  --color-agent-codex: oklch(0.86 0.01 80);
+  --color-agent-gemini: #8e75b2;
+  --color-agent-shell: oklch(0.76 0.008 75);
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 html,
@@ -15,23 +45,85 @@ body,
 
 body {
   margin: 0;
-  background: #09090b;
+  background: var(--color-gutter);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
   color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
 }
 
-/* Waiting for the user: loud pulsing orange ring. */
-.pane-waiting {
-  animation: pane-waiting-pulse 1.2s ease-in-out infinite;
+/* One focus ring everywhere. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
-@keyframes pane-waiting-pulse {
-  0%,
-  100% {
-    box-shadow: inset 0 0 0 2px #f97316;
-  }
+::selection {
+  background: oklch(0.4 0.02 80);
+}
+
+/* Waiting for the user: the status dot pulses (the only looping animation in the app). */
+.status-dot-pulse {
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
   50% {
-    box-shadow:
-      inset 0 0 0 4px #f97316,
-      0 0 12px #f97316;
+    opacity: 0.3;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-pulse {
+    animation: none;
+  }
+}
+
+/* Dockview, retuned to our tokens. Our pane header is the dockview tab (see Deck.tsx). */
+.dockview-theme-agentdeck {
+  --dv-group-view-background-color: var(--color-base);
+  --dv-tabs-and-actions-container-background-color: var(--color-base);
+  --dv-tabs-and-actions-container-height: 30px;
+  --dv-tabs-and-actions-container-font-size: 13px;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--color-panel);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--color-panel);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-base);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-base);
+  --dv-activegroup-visiblepanel-tab-color: var(--color-fg);
+  --dv-activegroup-hiddenpanel-tab-color: var(--color-subtle);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--color-muted);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--color-subtle);
+  --dv-tab-divider-color: var(--color-line);
+  --dv-separator-border: transparent;
+  --dv-paneview-header-border-color: var(--color-line);
+  --dv-drag-over-background-color: color-mix(in oklch, var(--color-accent) 12%, transparent);
+  --dv-drag-over-border-color: var(--color-accent);
+  --dv-active-sash-color: var(--color-line-strong);
+  --dv-sash-color: transparent;
+  --dv-icon-hover-background-color: var(--color-hover);
+  --dv-tabs-container-scrollbar-color: var(--color-line-strong);
+  --dv-border-radius: 8px;
+  background: var(--color-gutter);
+}
+
+.dockview-theme-agentdeck .dv-groupview {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+}
+
+.dockview-theme-agentdeck .dv-tabs-and-actions-container {
+  border-bottom: 1px solid var(--color-line);
+}
+
+.dockview-theme-agentdeck .dv-tab {
+  padding: 0;
+}
+
+/* Thin, quiet scrollbars in chrome lists. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
 }

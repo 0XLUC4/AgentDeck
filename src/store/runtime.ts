@@ -29,6 +29,20 @@ interface Runtime {
 }
 
 const runtimes = new Map<string, Runtime>();
+/** In-flight stop/restart per pane: a second click joins the first instead of racing a second spawn. */
+const stopping = new Map<string, Promise<void>>();
+const restarting = new Map<string, Promise<void>>();
+/** Pane the backend routes voice input to. */
+let backendActivePane: string | null = null;
+
+/** Runs `job` once per id at a time; concurrent callers share the same promise. */
+function once(inflight: Map<string, Promise<void>>, id: string, job: () => Promise<void>): Promise<void> {
+  const running = inflight.get(id);
+  if (running) return running;
+  const promise = job().finally(() => inflight.delete(id));
+  inflight.set(id, promise);
+  return promise;
+}
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -59,6 +73,11 @@ export async function createPane(spec: PaneSpec, tabId: string): Promise<void> {
     ]);
   } catch (err) {
     failPane(spec.id, err);
+    return;
+  }
+  // Closed while subscribing: drop the listeners instead of leaking them.
+  if (runtimes.get(spec.id) !== rt) {
+    for (const unlisten of rt.unlisten) unlisten();
     return;
   }
   await spawn(spec.id);
@@ -93,7 +112,9 @@ function failPane(id: string, err: unknown): void {
 }
 
 /** Kills the process and waits for its exit event (3 s max), leaving the pane in the exited state. */
-export async function stopPane(id: string): Promise<void> {
+export const stopPane = (id: string): Promise<void> => once(stopping, id, () => doStop(id));
+
+async function doStop(id: string): Promise<void> {
   const rt = runtimes.get(id);
   const pane = useDeck.getState().panes[id];
   if (!rt || !pane || pane.exited) return;
@@ -107,10 +128,13 @@ export async function stopPane(id: string): Promise<void> {
   deck.updatePane(id, (p) => ({ ...p, exited: true }));
 }
 
-export async function restartPane(id: string): Promise<void> {
+export const restartPane = (id: string): Promise<void> => once(restarting, id, () => doRestart(id));
+
+async function doRestart(id: string): Promise<void> {
   const rt = runtimes.get(id);
   if (!rt) return;
   await stopPane(id);
+  if (runtimes.get(id) !== rt) return; // closed meanwhile
   rt.buffer.clear();
   deck.updatePane(id, (p) => ({
     ...p,
@@ -128,6 +152,10 @@ export async function closePane(id: string): Promise<void> {
   const rt = runtimes.get(id);
   runtimes.delete(id);
   deck.removePane(id);
+  if (backendActivePane === id) {
+    backendActivePane = null;
+    setActivePane(null).catch((err) => console.warn("set_active_pane failed", err));
+  }
   for (const unlisten of rt?.unlisten ?? []) unlisten();
   await killPane(id).catch((err) => console.warn("kill_pane failed", err));
 }
@@ -158,6 +186,11 @@ export function archiveSession(tabId: string): void {
   for (const id of deck.archiveTab(tabId)) void closePane(id);
 }
 
+/** Forgets a workspace and kills its agents. Files on disk are never touched. */
+export function unlinkWorkspace(workspaceId: string): void {
+  for (const id of deck.unlinkWorkspace(workspaceId)) void closePane(id);
+}
+
 export function reopenSession(sessionId: string): void {
   const reopened = deck.unarchive(sessionId);
   if (!reopened) return;
@@ -185,6 +218,7 @@ export function reportSize(id: string, cols: number, rows: number): void {
 export function focusPane(id: string): void {
   if (useDeck.getState().activePaneId === id) return;
   useDeck.setState({ activePaneId: id });
+  backendActivePane = id;
   setActivePane(id).catch((err) => console.warn("set_active_pane failed", err));
 }
 

@@ -1,4 +1,4 @@
-// UI state: panes, session tabs, archived sessions, toasts. Side effects (PTY, IPC) live in runtime.ts.
+// UI state: workspaces, panes, session tabs, archived sessions, toasts. Side effects (PTY, IPC) live in runtime.ts.
 import type { SerializedDockview } from "dockview-react";
 import { create } from "zustand";
 import type { AgentKind, PaneStatus } from "../lib/types";
@@ -28,9 +28,20 @@ export interface Pane extends PaneSpec {
   generation: number;
 }
 
+/** A linked project folder. Owns its sessions (open tabs + archived). Unlinking never touches files. */
+export interface Workspace {
+  id: string;
+  name: string;
+  /** Folder path; "" for the default workspace (agents then start in the last used folder). */
+  path: string;
+  /** Set when the folder was a Git repository when linked (branch as of that moment). */
+  git?: { branch: string | null };
+}
+
 export interface Tab {
   id: string;
   name: string;
+  workspaceId: string;
   paneIds: string[];
   layout: SerializedDockview | null;
 }
@@ -39,6 +50,7 @@ export interface Tab {
 export interface SavedSession {
   id: string;
   name: string;
+  workspaceId: string;
   savedAt: number;
   layout: SerializedDockview | null;
   panes: PaneSpec[];
@@ -50,6 +62,7 @@ export interface Toast {
 }
 
 interface DeckState {
+  workspaces: Workspace[];
   panes: Record<string, Pane>;
   tabs: Tab[];
   activeTabId: string;
@@ -69,6 +82,14 @@ export function applyStatus(pane: Pane, status: PaneStatus, lastAction: string |
     taskStartedAt: keepsTimer ? (pane.taskStartedAt ?? now) : null,
     completedCount: pane.completedCount + (status === "done" && pane.status !== "done" ? 1 : 0),
   };
+}
+
+const URGENCY: PaneStatus[] = ["waiting", "error", "working", "done", "idle"];
+
+/** The status a session shows in lists: its most urgent pane's, or null when it has no pane. */
+export function sessionStatus(paneIds: string[], panes: Record<string, Pane>): PaneStatus | null {
+  const statuses = new Set(paneIds.flatMap((id) => (panes[id] ? [panes[id].status] : [])));
+  return URGENCY.find((s) => statuses.has(s)) ?? null;
 }
 
 export const clampFontSize = (size: number) =>
@@ -96,9 +117,10 @@ export const toSpec = ({ id, agent, title, cwd, args, worktree, completedCount, 
   fontSize,
 });
 
-export const newTab = (name: string, layout: SerializedDockview | null = null): Tab => ({
+export const newTab = (name: string, workspaceId: string, layout: SerializedDockview | null = null): Tab => ({
   id: crypto.randomUUID(),
   name,
+  workspaceId,
   paneIds: [],
   layout,
 });
@@ -108,15 +130,39 @@ export function tabToSession(tab: Tab, panes: Record<string, Pane>, now: number)
   return {
     id: tab.id,
     name: tab.name,
+    workspaceId: tab.workspaceId,
     savedAt: now,
     layout: tab.layout,
     panes: tab.paneIds.flatMap((id) => (panes[id] ? [toSpec(panes[id])] : [])),
   };
 }
 
-const firstTab = newTab("Session 1");
+export const DEFAULT_WORKSPACE_NAME = "Par défaut";
+
+export const newWorkspace = (path: string, name = folderName(path) || DEFAULT_WORKSPACE_NAME): Workspace => ({
+  id: crypto.randomUUID(),
+  name,
+  path,
+});
+
+/** Last segment of a Windows or POSIX path. */
+export const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? "";
+
+const normalizePath = (path: string) =>
+  path
+    .replace(/[\\/]+$/, "")
+    .replace(/\//g, "\\")
+    .toLowerCase();
+
+/** Workspace already linked to this folder (case- and slash-insensitive, Windows style). */
+export const workspaceForPath = (path: string, workspaces: Workspace[]) =>
+  path ? workspaces.find((w) => w.path && normalizePath(w.path) === normalizePath(path)) : undefined;
+
+const firstWorkspace = newWorkspace("");
+const firstTab = newTab("Session 1", firstWorkspace.id);
 
 export const useDeck = create<DeckState>(() => ({
+  workspaces: [firstWorkspace],
   panes: {},
   tabs: [firstTab],
   activeTabId: firstTab.id,
@@ -134,10 +180,25 @@ const updatePane = (id: string, fn: (pane: Pane) => Pane) => {
   if (pane) set({ panes: { ...get().panes, [id]: fn(pane) } });
 };
 
+const sessionsOf = (workspaceId: string) => get().archived.filter((s) => s.workspaceId === workspaceId);
+
 const updateTab = (id: string, fn: (tab: Tab) => Tab) =>
   set({ tabs: get().tabs.map((t) => (t.id === id ? fn(t) : t)) });
 
 export const activeTab = () => get().tabs.find((t) => t.id === get().activeTabId);
+
+/** The active workspace is the one owning the active tab. */
+export const activeWorkspace = (state: DeckState = get()) => {
+  const wsId = state.tabs.find((t) => t.id === state.activeTabId)?.workspaceId;
+  return state.workspaces.find((w) => w.id === wsId) ?? state.workspaces[0];
+};
+
+/** Tab to show after `tabs` changed: keep the active one, else one of the same workspace, else the first. */
+function pickActive(tabs: Tab[], preferWorkspace: string | undefined): string {
+  const { activeTabId } = get();
+  if (tabs.some((t) => t.id === activeTabId)) return activeTabId;
+  return (tabs.find((t) => t.workspaceId === preferWorkspace) ?? tabs[0]).id;
+}
 
 export const deck = {
   updatePane,
@@ -165,16 +226,23 @@ export const deck = {
       fontSize: delta === "reset" ? FONT_SIZE.default : clampFontSize(p.fontSize + delta),
     }));
   },
-  addTab(tab = newTab(`Session ${get().tabs.length + 1}`)) {
+  /** Opens a new session tab in a workspace (the active one by default) and shows it. */
+  addTab(tab?: Tab) {
+    if (!tab) {
+      const ws = activeWorkspace().id;
+      const count = get().tabs.filter((t) => t.workspaceId === ws).length + sessionsOf(ws).length;
+      tab = newTab(`Session ${count + 1}`, ws);
+    }
     set({ tabs: [...get().tabs, tab], activeTabId: tab.id });
     return tab.id;
   },
-  /** Removes the tab only. Always keeps one tab. */
+  /** Removes the tab only. Every workspace keeps at least one open tab. */
   removeTab(id: string) {
+    const removed = get().tabs.find((t) => t.id === id);
+    if (!removed) return;
     const tabs = get().tabs.filter((t) => t.id !== id);
-    if (tabs.length === 0) tabs.push(newTab("Session 1"));
-    const activeTabId = tabs.some((t) => t.id === get().activeTabId) ? get().activeTabId : tabs[0].id;
-    set({ tabs, activeTabId });
+    if (!tabs.some((t) => t.workspaceId === removed.workspaceId)) tabs.push(newTab("Session 1", removed.workspaceId));
+    set({ tabs, activeTabId: pickActive(tabs, removed.workspaceId) });
   },
   /** Moves a tab (layout + pane specs) to the archive. The caller kills its PTYs. Returns the pane ids. */
   archiveTab(id: string, now = Date.now()): string[] {
@@ -190,7 +258,10 @@ export const deck = {
     const session = get().archived.find((s) => s.id === id);
     if (!session) return null;
     set({ archived: get().archived.filter((s) => s.id !== id) });
-    const tabId = deck.addTab({ id: session.id, name: session.name, paneIds: [], layout: session.layout });
+    const workspaceId = get().workspaces.some((w) => w.id === session.workspaceId)
+      ? session.workspaceId
+      : activeWorkspace().id;
+    const tabId = deck.addTab({ id: session.id, name: session.name, workspaceId, paneIds: [], layout: session.layout });
     return { tabId, panes: session.panes };
   },
   deleteArchived(id: string) {
@@ -201,6 +272,45 @@ export const deck = {
   },
   setTabLayout(id: string, layout: SerializedDockview) {
     updateTab(id, (t) => ({ ...t, layout }));
+  },
+  /** Links a folder as a new workspace with one empty session, and shows it. */
+  linkWorkspace(path: string, name?: string, git?: Workspace["git"]): Workspace {
+    const ws: Workspace = git ? { ...newWorkspace(path, name), git } : newWorkspace(path, name);
+    set({ workspaces: [...get().workspaces, ws] });
+    deck.addTab(newTab("Session 1", ws.id));
+    return ws;
+  },
+  renameWorkspace(id: string, name: string) {
+    set({ workspaces: get().workspaces.map((w) => (w.id === id ? { ...w, name } : w)) });
+  },
+  selectWorkspace(id: string) {
+    if (activeWorkspace().id === id) return;
+    const tab = get().tabs.find((t) => t.workspaceId === id);
+    if (tab) set({ activeTabId: tab.id });
+  },
+  /**
+   * Forgets a workspace with its open and archived sessions (files on disk are untouched).
+   * Always keeps one workspace. The caller kills the returned panes.
+   */
+  unlinkWorkspace(id: string): string[] {
+    const state = get();
+    if (!state.workspaces.some((w) => w.id === id)) return [];
+    const doomed = state.tabs.filter((t) => t.workspaceId === id);
+    const paneIds = doomed.flatMap((t) => t.paneIds);
+    const { panes } = state;
+    const workspaces = state.workspaces.filter((w) => w.id !== id);
+    if (workspaces.length === 0) workspaces.push(newWorkspace(""));
+    const tabs = state.tabs.filter((t) => t.workspaceId !== id);
+    if (tabs.length === 0) tabs.push(newTab("Session 1", workspaces[0].id));
+    set({
+      workspaces,
+      tabs,
+      panes: Object.fromEntries(Object.entries(panes).filter(([paneId]) => !paneIds.includes(paneId))),
+      archived: state.archived.filter((s) => s.workspaceId !== id),
+      activeTabId: pickActive(tabs, undefined),
+      activePaneId: paneIds.includes(state.activePaneId ?? "") ? null : state.activePaneId,
+    });
+    return paneIds;
   },
   toast(message: string) {
     const id = Date.now() + Math.random();

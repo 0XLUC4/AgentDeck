@@ -6,7 +6,8 @@ import { useEffect, useRef } from "react";
 import { deck } from "../../store/deck";
 import { attachOutput, reportSize, sendInput } from "../../store/runtime";
 
-const THEME = { background: "#09090b", foreground: "#e4e4e7", cursor: "#e4e4e7", selectionBackground: "#3f3f46" };
+// Hex mirrors of --color-base / --color-fg in index.css (xterm needs plain colors).
+const THEME = { background: "#100e0c", foreground: "#ebe7e2", cursor: "#f1e7d2", selectionBackground: "#3b3732" };
 
 /** Ctrl+<key> zoom shortcuts, handled before xterm sends them to the process. */
 const ZOOM_KEYS: Record<string, number | "reset"> = { "=": 1, "+": 1, "-": -1, "0": "reset" };
@@ -76,5 +77,5 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     view.refit();
   }, [fontSize]);
 
-  return <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-[#09090b] p-1" />;
+  return <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-base py-1 pl-2" />;
 }
