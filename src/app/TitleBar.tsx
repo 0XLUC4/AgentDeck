@@ -17,6 +17,7 @@ import { openBroadcast } from "../components/Broadcast/Broadcast";
 import { HistoryButton } from "../components/History/HistoryDialog";
 import { IconButton } from "../components/IconButton/IconButton";
 import { JournalButton } from "../components/Journal/JournalDialog";
+import { UpdateButton } from "../components/Update/UpdateButton";
 import { UsageButton } from "../components/Usage/UsageDialog";
 import { WallToggle } from "../components/Wall/Wall";
 import { activeTab, activeWorkspace, useDeck } from "../store/deck";
@@ -189,6 +190,7 @@ export function TitleBar({
         <JournalButton />
         <ActivityToggle open={activityOpen} onToggle={onToggleActivity} />
         <IconButton icon={Settings} label="Settings" hint="Settings (Ctrl+,)" onClick={onOpenSettings} />
+        <UpdateButton />
       </div>
       <span className="h-5 w-px bg-line" aria-hidden="true" />
       <WindowControls />
