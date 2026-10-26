@@ -1,0 +1,43 @@
+[package]
+name = "agentdeck"
+version = "0.1.0"
+description = "Multi-agent terminal dashboard"
+authors = ["Luca"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "agentdeck_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-store = "2.5.0"
+tauri-plugin-notification = "2.7.0"
+tauri-plugin-global-shortcut = "2.4.1"
+tauri-plugin-dialog = "2.8.3"
+toml_edit = "0.25.17"
+portable-pty = "0.9.0"
+tiny_http = "0.12.0"
+cpal = "0.18.2"
+uuid = { version = "1.29.0", features = ["v4"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "multipart", "json"] }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

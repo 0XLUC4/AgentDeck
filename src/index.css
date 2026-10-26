@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  --color-agent-claude: #d97757;
+  --color-agent-codex: #10a37f;
+  --color-agent-gemini: #4285f4;
+  --color-agent-shell: #a1a1aa;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
