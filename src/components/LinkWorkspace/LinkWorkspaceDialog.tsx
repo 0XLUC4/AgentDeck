@@ -19,9 +19,9 @@ import { IconButton } from "../IconButton/IconButton";
 type Source = "apps" | "git" | "folder";
 
 const SOURCES: { id: Source; label: string; icon: LucideIcon }[] = [
-  { id: "apps", label: "Application ouverte", icon: AppWindow },
-  { id: "git", label: "Projet Git", icon: GitBranch },
-  { id: "folder", label: "Dossier existant", icon: Folder },
+  { id: "apps", label: "Open app", icon: AppWindow },
+  { id: "git", label: "Git project", icon: GitBranch },
+  { id: "folder", label: "Existing folder", icon: Folder },
 ];
 
 /** What will be linked. `git` is undefined when unknown or not a repository. */
@@ -44,7 +44,7 @@ function GitLine({ branch, remote }: { branch: string | null; remote: string | n
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
       <GitBranch size={13} strokeWidth={1.5} className="shrink-0" aria-hidden="true" />
-      <span className="shrink-0 text-fg">{branch ?? "HEAD détachée"}</span>
+      <span className="shrink-0 text-fg">{branch ?? "Detached HEAD"}</span>
       {remote && <span className="truncate text-subtle">{remote}</span>}
     </span>
   );
@@ -70,12 +70,12 @@ function OpenApps({ selected, onPick }: { selected: string | null; onPick: (c: C
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-subtle">Projets ouverts dans vos éditeurs et l'Explorateur.</p>
-        <IconButton icon={RefreshCw} label="Actualiser" onClick={refresh} disabled={projects === null} />
+        <p className="text-xs text-subtle">Projects open in your editors and File Explorer.</p>
+        <IconButton icon={RefreshCw} label="Refresh" onClick={refresh} disabled={projects === null} />
       </div>
       <div className="scroll-thin max-h-64 overflow-y-auto" aria-busy={projects === null}>
         {projects === null ? (
-          <ul className="flex flex-col gap-1" aria-label="Chargement">
+          <ul className="flex flex-col gap-1" aria-label="Loading">
             {[0, 1, 2].map((i) => (
               <li key={i} className="flex h-11 flex-col justify-center gap-1.5 px-2">
                 <span className="h-2.5 w-1/3 rounded bg-raised" />
@@ -86,10 +86,10 @@ function OpenApps({ selected, onPick }: { selected: string | null; onPick: (c: C
         ) : error ? (
           <p role="alert" className="flex items-start gap-2 py-3 text-xs text-muted">
             <TriangleAlert size={14} strokeWidth={1.5} className="mt-px shrink-0 text-wait" aria-hidden="true" />
-            <span>Liste des applications indisponible ({error}). Utilisez « Projet Git » ou « Dossier existant ».</span>
+            <span>App list unavailable ({error}). Use "Git project" or "Existing folder".</span>
           </p>
         ) : projects.length === 0 ? (
-          <p className="py-6 text-center text-muted">Aucune application avec un projet ouvert</p>
+          <p className="py-6 text-center text-muted">No apps with an open project</p>
         ) : (
           groupByApp(projects).map(([app, list]) => {
             const Icon = appIcon(app);
@@ -123,7 +123,7 @@ function OpenApps({ selected, onPick }: { selected: string | null; onPick: (c: C
                         {p.isGit && (
                           <span
                             className="inline-flex shrink-0 items-center gap-1 text-xs text-muted"
-                            title="Dépôt Git"
+                            title="Git repository"
                           >
                             <GitBranch size={13} strokeWidth={1.5} aria-hidden="true" />
                             Git
@@ -159,9 +159,9 @@ function FolderSource({
   async function browse() {
     let dir: string | string[] | null;
     try {
-      dir = await openDialog({ directory: true, title: requireGit ? "Choisir un dépôt Git" : "Choisir un dossier" });
+      dir = await openDialog({ directory: true, title: requireGit ? "Choose a Git repository" : "Choose a folder" });
     } catch (err) {
-      setInspectError(`Sélection du dossier impossible : ${errorMessage(err)}`);
+      setInspectError(`Could not pick folder: ${errorMessage(err)}`);
       return;
     }
     if (typeof dir !== "string") return;
@@ -193,19 +193,19 @@ function FolderSource({
         className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-line px-3 text-fg transition-colors duration-150 hover:bg-hover disabled:opacity-50"
       >
         <FolderOpen size={16} strokeWidth={1.5} aria-hidden="true" />
-        {busy ? "Analyse…" : "Choisir un dossier…"}
+        {busy ? "Inspecting…" : "Choose a folder…"}
       </button>
 
       {info && !info.exists && (
         <p role="alert" className="text-xs text-bad">
-          Ce dossier n'existe pas.
+          This folder does not exist.
         </p>
       )}
       {notGit ? (
         <div role="alert" className="flex flex-col gap-2 rounded-md bg-wait/10 px-3 py-2.5 text-xs">
           <span className="flex items-center gap-2 text-wait">
             <TriangleAlert size={14} strokeWidth={1.5} aria-hidden="true" />
-            Ce dossier n'est pas un dépôt Git
+            This folder is not a Git repository
           </span>
           <span className="truncate font-mono text-subtle">{info.path}</span>
           <button
@@ -216,7 +216,7 @@ function FolderSource({
             }}
             className="w-fit text-fg underline underline-offset-2"
           >
-            L'utiliser comme dossier simple
+            Use it as a plain folder
           </button>
         </div>
       ) : (
@@ -230,15 +230,13 @@ function FolderSource({
         )
       )}
       {inspectError && (
-        <p className="text-xs text-subtle">
-          Informations Git indisponibles ({inspectError}). Le dossier sera lié tel quel.
-        </p>
+        <p className="text-xs text-subtle">Git info unavailable ({inspectError}). The folder will be linked as is.</p>
       )}
     </div>
   );
 }
 
-/** "Lier un workspace": pick a project from an open app, a Git repository or any folder, then name it. */
+/** "Link workspace": pick a project from an open app, a Git repository or any folder, then name it. */
 export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -273,7 +271,7 @@ export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
     const existing = workspaceForPath(choice.path, useDeck.getState().workspaces);
     if (existing) {
       deck.selectWorkspace(existing.id);
-      deck.toast(`« ${existing.name} » est déjà lié.`);
+      deck.toast(`"${existing.name}" is already linked.`);
     } else {
       const git = choice.git ? { branch: choice.git.branch } : undefined;
       deck.linkWorkspace(choice.path, name.trim() || undefined, git);
@@ -291,9 +289,9 @@ export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
       <form onSubmit={submit} className="flex flex-col gap-5 p-5">
         <div className="flex items-center justify-between">
           <h2 id="link-ws-title" className="text-[15px] font-medium">
-            Lier un workspace
+            Link workspace
           </h2>
-          <IconButton icon={X} label="Fermer" onClick={onClose} />
+          <IconButton icon={X} label="Close" onClick={onClose} />
         </div>
 
         <div role="tablist" aria-label="Source" className="grid grid-cols-3 gap-1 rounded-lg bg-base p-1">
@@ -330,14 +328,14 @@ export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="link-ws-name" className="text-xs text-muted">
-            Nom
+            Name
           </label>
           <input
             id="link-ws-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={!choice}
-            placeholder={choice ? folderName(choice.path) : "Choisissez d'abord un projet"}
+            placeholder={choice ? folderName(choice.path) : "Choose a project first"}
             className="h-9 rounded-md border border-line bg-base px-2.5 text-fg outline-none transition-colors duration-150 placeholder:text-subtle hover:border-line-strong focus:border-accent disabled:opacity-50"
           />
         </div>
@@ -348,14 +346,14 @@ export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
             onClick={onClose}
             className="h-8 rounded-md px-3 text-muted transition-colors duration-150 hover:bg-hover hover:text-fg"
           >
-            Annuler
+            Cancel
           </button>
           <button
             type="submit"
             disabled={!choice}
             className="h-8 rounded-md bg-accent px-3.5 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover disabled:opacity-40"
           >
-            Lier le workspace
+            Link workspace
           </button>
         </div>
       </form>

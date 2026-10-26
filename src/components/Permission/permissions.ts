@@ -35,9 +35,7 @@ export async function answer(req: PermissionRequest, decision: PermissionDecisio
   try {
     await answerPermission(req.requestId, decision, message);
   } catch (err) {
-    deck.toast(
-      `Réponse non transmise (${err instanceof Error ? err.message : String(err)}) : répondez dans le terminal.`,
-    );
+    deck.toast(`Answer not sent (${err instanceof Error ? err.message : String(err)}): reply in the terminal.`);
   }
 }
 
@@ -52,7 +50,7 @@ export async function listenPermissions(): Promise<UnlistenFn> {
       const prefs = useSettings.getState().notify;
       const unseen = !document.hasFocus() || state.activePaneId !== req.paneId;
       if (prefs.waiting && (unseen || !prefs.onlyUnseen) && (prefs.enabled || prefs.sound)) {
-        const title = `${AGENTS[pane.agent].name} demande l'autorisation : ${req.summary}`;
+        const title = `${AGENTS[pane.agent].name} is asking for permission: ${req.summary}`;
         void notify(title, pane.title, { system: prefs.enabled, sound: prefs.sound });
       }
     }),

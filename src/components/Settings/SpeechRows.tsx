@@ -1,4 +1,4 @@
-// Réglages > Notifications: spoken summary of finished tasks (Web Speech API).
+// Settings > Notifications: spoken summary of finished tasks (Web Speech API).
 import { Volume2 } from "lucide-react";
 import { speak, useSpeechVoices } from "../../lib/tts";
 import { type Settings, updateSettings } from "../../store/settings";
@@ -10,38 +10,38 @@ export function SpeechRows({ s, save }: { s: Settings; save: (task: Promise<unkn
   return (
     <>
       <Row
-        label="Lire le résumé à voix haute"
-        hint="Quand une tâche se termine et que vous ne regardez pas ; une touche coupe la lecture"
+        label="Read summary aloud"
+        hint="When a task finishes while you are away; any key stops it"
         htmlFor="set-tts"
       >
         <Toggle id="set-tts" checked={s.speech.enabled} onChange={(v) => set({ enabled: v })} />
       </Row>
       {s.speech.enabled && (
         <>
-          <Row label="Voix" hint="Par défaut : la langue de la dictée, sinon français" htmlFor="set-tts-voice">
+          <Row
+            label="Voice"
+            hint="Default: the dictation language, otherwise the system language"
+            htmlFor="set-tts-voice"
+          >
             <select
               id="set-tts-voice"
               value={s.speech.voice}
               onChange={(e) => set({ voice: e.target.value })}
               className={`${field} w-64`}
             >
-              <option value="">Automatique</option>
+              <option value="">Automatic</option>
               {voices.map((v) => (
                 <option key={v.voiceURI} value={v.voiceURI}>
                   {v.name} ({v.lang})
                 </option>
               ))}
             </select>
-            <button
-              type="button"
-              className={button}
-              onClick={() => void speak("Claude Code a terminé : test de voix.")}
-            >
+            <button type="button" className={button} onClick={() => void speak("Claude Code finished: voice test.")}>
               <Volume2 size={14} strokeWidth={1.5} aria-hidden="true" />
-              Tester
+              Test
             </button>
           </Row>
-          <Row label="Débit" htmlFor="set-tts-rate">
+          <Row label="Speed" htmlFor="set-tts-rate">
             <input
               id="set-tts-rate"
               type="range"

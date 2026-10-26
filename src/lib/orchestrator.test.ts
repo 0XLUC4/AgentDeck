@@ -71,11 +71,9 @@ describe("handleMcpRequest", () => {
   });
 
   it("refuses non-orchestrators, itself and foreign panes", async () => {
-    await expect(handleMcpRequest({ orchestratorId: "a", tool: "list_agents", args: {} })).rejects.toThrow(
-      "introuvable",
-    );
-    await expect(call("get_status", { paneId: "orch" })).rejects.toThrow("toi-même");
-    await expect(call("send_prompt", { paneId: "x", text: "hi" })).rejects.toThrow("introuvable");
+    await expect(handleMcpRequest({ orchestratorId: "a", tool: "list_agents", args: {} })).rejects.toThrow("not found");
+    await expect(call("get_status", { paneId: "orch" })).rejects.toThrow("yourself");
+    await expect(call("send_prompt", { paneId: "x", text: "hi" })).rejects.toThrow("not found");
     expect(ipc.writeToPane).not.toHaveBeenCalled();
   });
 
@@ -85,8 +83,8 @@ describe("handleMcpRequest", () => {
     await call("send_prompt", { paneId: "a", text: "draft", submit: false });
     expect(ipc.writeToPane).toHaveBeenLastCalledWith("a", "draft");
     deck.setStatus("b", "waiting", null);
-    await expect(call("send_prompt", { paneId: "b", text: "1" })).rejects.toThrow("attend");
-    await expect(call("interrupt", { paneId: "b" })).rejects.toThrow("attend");
+    await expect(call("send_prompt", { paneId: "b", text: "1" })).rejects.toThrow("waiting");
+    await expect(call("interrupt", { paneId: "b" })).rejects.toThrow("waiting");
     expect(ipc.writeToPane).toHaveBeenCalledTimes(2);
   });
 
@@ -126,7 +124,7 @@ describe("handleMcpRequest", () => {
     expect(pane.cwd).toBe("C:\\proj\\sub");
     expect(useDeck.getState().tabs[0].paneIds).toContain(r.paneId);
     expect(ipc.spawnPane).toHaveBeenCalledOnce();
-    await expect(call("spawn_agent", { agent: "codex", title: "t", cwd: "C:\\other" })).rejects.toThrow("rester");
+    await expect(call("spawn_agent", { agent: "codex", title: "t", cwd: "C:\\other" })).rejects.toThrow("stay inside");
   });
 });
 
@@ -143,7 +141,7 @@ describe("resolveInside", () => {
 describe("summarizeCall", () => {
   it("names targets by title", () => {
     const { panes } = useDeck.getState();
-    expect(summarizeCall("send_prompt", { paneId: "b", text: "go  now" }, panes)).toBe("b (codex) : go now");
+    expect(summarizeCall("send_prompt", { paneId: "b", text: "go  now" }, panes)).toBe("b (codex): go now");
     expect(summarizeCall("wait_for", { paneIds: ["a", "zzzzzzzzzz"], until: "done" }, panes)).toBe(
       "a (claude), zzzzzzzz → done",
     );

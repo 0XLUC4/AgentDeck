@@ -27,24 +27,24 @@ import { button, ErrorText, errorMessage, field, Row, Section, Toggle } from "./
 import { SpeechRows } from "./SpeechRows";
 import { VoiceSection } from "./VoiceSection";
 
-/** Runs a save and reports it in the dialog header ("Enregistré" or the error). */
+/** Runs a save and reports it in the dialog header ("Saved" or the error). */
 export type Save = (task: Promise<unknown>) => void;
 
 type SectionId = "general" | "notifications" | "voice" | "agents" | "templates" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
-  { id: "general", label: "Général", icon: SlidersHorizontal },
+  { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "voice", label: "Voix", icon: Mic },
+  { id: "voice", label: "Voice", icon: Mic },
   { id: "agents", label: "Agents", icon: Bot },
-  { id: "templates", label: "Modèles", icon: LayoutTemplate },
-  { id: "about", label: "À propos", icon: Info },
+  { id: "templates", label: "Templates", icon: LayoutTemplate },
+  { id: "about", label: "About", icon: Info },
 ];
 
 function General({ s, save }: { s: Settings; save: Save }) {
   return (
-    <Section title="Général">
-      <Row label="Taille de police du terminal" hint="Pour les nouveaux agents" htmlFor="set-font-size">
+    <Section title="General">
+      <Row label="Terminal font size" hint="For new agents" htmlFor="set-font-size">
         <input
           id="set-font-size"
           type="range"
@@ -56,7 +56,7 @@ function General({ s, save }: { s: Settings; save: Save }) {
         />
         <span className="w-10 text-right font-mono text-xs text-muted tabular-nums">{s.fontSize} px</span>
       </Row>
-      <Row label="Police du terminal" hint="Pour les nouveaux agents" htmlFor="set-font-family">
+      <Row label="Terminal font" hint="For new agents" htmlFor="set-font-family">
         <input
           id="set-font-family"
           value={s.fontFamily}
@@ -65,13 +65,13 @@ function General({ s, save }: { s: Settings; save: Save }) {
           className={`${field} w-64 font-mono text-xs`}
         />
       </Row>
-      <Row label="Confirmer « Tout arrêter » et « Tout relancer »" htmlFor="set-confirm">
+      <Row label='Confirm "Stop all" and "Restart all"' htmlFor="set-confirm">
         <Toggle id="set-confirm" checked={s.confirmBulk} onChange={(v) => save(updateSettings({ confirmBulk: v }))} />
       </Row>
-      <Row label="Workspaces affichés au démarrage" htmlFor="set-sidebar">
+      <Row label="Show workspaces on startup" htmlFor="set-sidebar">
         <Toggle id="set-sidebar" checked={s.sidebarOpen} onChange={(v) => save(updateSettings({ sidebarOpen: v }))} />
       </Row>
-      <Row label="Panneau d'activité affiché au démarrage" htmlFor="set-activity">
+      <Row label="Show activity panel on startup" htmlFor="set-activity">
         <Toggle
           id="set-activity"
           checked={s.activityOpen}
@@ -81,8 +81,8 @@ function General({ s, save }: { s: Settings; save: Save }) {
       <AutostartRow save={save} />
       <HistorySettings save={save} />
       <Row
-        label="Fermer dans la barre système"
-        hint="Fermer la fenêtre la masque ; « Quitter » depuis l'icône arrête tout"
+        label="Close to system tray"
+        hint="Closing the window hides it; Quit from the tray icon stops everything"
         htmlFor="set-close-tray"
       >
         <Toggle
@@ -96,25 +96,25 @@ function General({ s, save }: { s: Settings; save: Save }) {
 }
 
 const EVENTS: { key: "done" | "waiting" | "error"; label: string }[] = [
-  { key: "done", label: "Terminé" },
-  { key: "waiting", label: "En attente" },
-  { key: "error", label: "Erreur" },
+  { key: "done", label: "Done" },
+  { key: "waiting", label: "Waiting" },
+  { key: "error", label: "Error" },
 ];
 
 function Notifications({ s, save }: { s: Settings; save: Save }) {
   const set = (patch: Partial<Settings["notify"]>) => save(updateSettings({ notify: { ...s.notify, ...patch } }));
   return (
     <Section title="Notifications">
-      <Row label="Notifications système" htmlFor="set-notify">
+      <Row label="System notifications" htmlFor="set-notify">
         <Toggle id="set-notify" checked={s.notify.enabled} onChange={(v) => set({ enabled: v })} />
       </Row>
-      <Row label="Son" htmlFor="set-sound">
+      <Row label="Sound" htmlFor="set-sound">
         <Toggle id="set-sound" checked={s.notify.sound} onChange={(v) => set({ sound: v })} />
       </Row>
       <fieldset className="flex items-center justify-between gap-6 py-3">
-        <legend className="sr-only">Événements notifiés</legend>
+        <legend className="sr-only">Notified events</legend>
         <span className="text-fg" aria-hidden="true">
-          Événements
+          Events
         </span>
         <div className="flex gap-4">
           {EVENTS.map(({ key, label }) => (
@@ -131,8 +131,8 @@ function Notifications({ s, save }: { s: Settings; save: Save }) {
         </div>
       </fieldset>
       <Row
-        label="Seulement si je ne regarde pas"
-        hint="Fenêtre en arrière-plan ou agent qui n'est pas le panneau actif"
+        label="Only when I'm not looking"
+        hint="Window in the background, or the agent is not the active pane"
         htmlFor="set-unseen"
       >
         <Toggle id="set-unseen" checked={s.notify.onlyUnseen} onChange={(v) => set({ onlyUnseen: v })} />
@@ -145,7 +145,7 @@ function Notifications({ s, save }: { s: Settings; save: Save }) {
 function Agents({ s, save }: { s: Settings; save: Save }) {
   return (
     <Section title="Agents">
-      <p className="pb-2 text-xs text-subtle">Valeurs pré-remplies dans « Ajouter un agent ».</p>
+      <p className="pb-2 text-xs text-subtle">Values prefilled in "Add agent".</p>
       {AGENT_KINDS.map((kind) => {
         const defaults = s.agents[kind];
         const set = (patch: Partial<typeof defaults>) =>
@@ -157,9 +157,9 @@ function Agents({ s, save }: { s: Settings; save: Save }) {
               <span className="truncate text-fg">{AGENTS[kind].name}</span>
             </span>
             <input
-              aria-label={`Arguments par défaut pour ${AGENTS[kind].name}`}
+              aria-label={`Default arguments for ${AGENTS[kind].name}`}
               value={defaults.args}
-              placeholder="Arguments par défaut"
+              placeholder="Default arguments"
               onChange={(e) => set({ args: e.target.value })}
               className={`${field} flex-1 font-mono text-xs`}
             />
@@ -167,7 +167,7 @@ function Agents({ s, save }: { s: Settings; save: Save }) {
               <Toggle
                 checked={defaults.worktree}
                 onChange={(v) => set({ worktree: v })}
-                label={`Worktree Git par défaut pour ${AGENTS[kind].name}`}
+                label={`Default Git worktree for ${AGENTS[kind].name}`}
               />
               Worktree
             </span>
@@ -197,12 +197,12 @@ function About() {
 
   const fail = (err: unknown) => setError(errorMessage(err));
   return (
-    <Section title="À propos">
+    <Section title="About">
       <Row label="Version">
         <span className="font-mono text-xs text-muted">{version ?? "…"}</span>
       </Row>
       <UpdateRow />
-      <Row label="Dossier des données" hint={dataDir ?? "…"}>
+      <Row label="Data folder" hint={dataDir ?? "…"}>
         <button
           type="button"
           disabled={!dataDir}
@@ -210,7 +210,7 @@ function About() {
           className={button}
         >
           <FolderOpen size={14} strokeWidth={1.5} aria-hidden="true" />
-          Ouvrir
+          Open
         </button>
       </Row>
       <div className="flex flex-wrap gap-2 py-3">
@@ -226,7 +226,7 @@ function About() {
   );
 }
 
-/** "Réglages": full-height modal, sections on the left. Every change applies and saves immediately. */
+/** "Settings": full-height modal, sections on the left. Every change applies and saves immediately. */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const settings = useSettings();
@@ -250,7 +250,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       },
       (err) => {
         setSaved(false);
-        setError(`Enregistrement impossible : ${errorMessage(err)}`);
+        setError(`Could not save: ${errorMessage(err)}`);
       },
     );
   }, []);
@@ -263,12 +263,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       className="m-auto h-[calc(100vh-3rem)] max-h-[48rem] w-[min(56rem,94vw)] overflow-hidden rounded-xl border border-line bg-panel p-0 text-fg backdrop:bg-gutter/70"
     >
       <div className="flex h-full">
-        <nav
-          aria-label="Sections des réglages"
-          className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-line p-3"
-        >
+        <nav aria-label="Settings sections" className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-line p-3">
           <h2 id="settings-title" className="px-2 pt-1 pb-3 text-[15px] font-medium">
-            Réglages
+            Settings
           </h2>
           {SECTIONS.map(({ id, label, icon: Icon }) => (
             <button
@@ -293,9 +290,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               }`}
             >
               <Check size={12} strokeWidth={1.5} aria-hidden="true" />
-              {saved ? "Enregistré" : ""}
+              {saved ? "Saved" : ""}
             </span>
-            <IconButton icon={X} label="Fermer" hint="Fermer (Échap)" onClick={onClose} />
+            <IconButton icon={X} label="Close" hint="Close (Esc)" onClick={onClose} />
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-6">
             {error && <ErrorText>{error}</ErrorText>}

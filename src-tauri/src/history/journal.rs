@@ -27,7 +27,7 @@ fn valid_date(date: &str) -> bool {
 
 fn day_file(dir: &Path, date: &str) -> Result<PathBuf, String> {
     if !valid_date(date) {
-        return Err("date invalide (AAAA-MM-JJ)".into());
+        return Err("invalid date (YYYY-MM-DD)".into());
     }
     Ok(dir.join(format!("{date}.json")))
 }
@@ -41,7 +41,7 @@ fn read_day(path: &Path) -> Vec<Value> {
 
 fn append(dir: &Path, date: &str, entry: Value) -> Result<(), String> {
     if serde_json::to_vec(&entry).map_err(|e| e.to_string())?.len() > MAX_ENTRY_BYTES {
-        return Err("entrée de journal trop volumineuse".into());
+        return Err("journal entry too large".into());
     }
     let path = day_file(dir, date)?;
     let _guard = WRITE.lock().map_err(|e| e.to_string())?;
@@ -58,7 +58,7 @@ fn append(dir: &Path, date: &str, entry: Value) -> Result<(), String> {
 /// Appends a finished task to today's journal (local date).
 #[tauri::command(async)]
 pub fn journal_append(entry: Value) -> Result<(), String> {
-    let dir = DIR.get().ok_or("journal indisponible")?;
+    let dir = DIR.get().ok_or("journal unavailable")?;
     append(
         dir,
         &chrono::Local::now().format("%Y-%m-%d").to_string(),
@@ -69,7 +69,7 @@ pub fn journal_append(entry: Value) -> Result<(), String> {
 /// Tasks saved on `date` (YYYY-MM-DD); empty when none.
 #[tauri::command(async)]
 pub fn journal_read(date: String) -> Result<Vec<Value>, String> {
-    let dir = DIR.get().ok_or("journal indisponible")?;
+    let dir = DIR.get().ok_or("journal unavailable")?;
     Ok(read_day(&day_file(dir, &date)?))
 }
 
@@ -134,7 +134,7 @@ pub fn write_text_file(
         return Ok(None);
     };
     let path = target.into_path().map_err(|e| e.to_string())?;
-    std::fs::write(&path, contents).map_err(|e| format!("écriture impossible : {e}"))?;
+    std::fs::write(&path, contents).map_err(|e| format!("cannot write file: {e}"))?;
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 

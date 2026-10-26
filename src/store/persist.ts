@@ -39,7 +39,7 @@ export function migrate(saved: unknown): Saved | null {
   const data = saved as Saved | SavedV1 | undefined;
   if (data?.version === 2) return data.workspaces.length > 0 && data.tabs.length > 0 ? data : null;
   if (data?.version !== 1 || data.tabs.length === 0) return null;
-  // Old sessions go into a "Par défaut" workspace; agents there keep starting in the last used folder.
+  // Old sessions go into a "Default" workspace; agents there keep starting in the last used folder.
   const ws: Workspace = { id: crypto.randomUUID(), name: DEFAULT_WORKSPACE_NAME, path: "" };
   return {
     version: 2,
@@ -94,7 +94,7 @@ export async function restoreAndAutosave(): Promise<void> {
       }
     }
   } catch (err) {
-    deck.toast(`Impossible de restaurer la session : ${err instanceof Error ? err.message : String(err)}`);
+    deck.toast(`Could not restore the session: ${err instanceof Error ? err.message : String(err)}`);
   }
   useDeck.subscribe((state, prev) => {
     const changed =

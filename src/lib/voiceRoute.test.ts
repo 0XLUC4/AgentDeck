@@ -10,15 +10,15 @@ const panes: RouteCandidate[] = [
 
 describe("routeTranscript", () => {
   it("routes an agent name prefix and strips it", () => {
-    expect(routeTranscript("Codex, lance les tests.", panes)).toEqual({ paneId: "x1", text: "lance les tests." });
-    expect(routeTranscript("Gemini: rien", panes)).toEqual({ paneId: null, text: "Gemini: rien" });
+    expect(routeTranscript("Codex, run the tests.", panes)).toEqual({ paneId: "x1", text: "run the tests." });
+    expect(routeTranscript("Gemini: nothing", panes)).toEqual({ paneId: null, text: "Gemini: nothing" });
     expect(routeTranscript("Shell dir", panes)).toEqual({ paneId: "s1", text: "dir" });
   });
 
   it("is case, accent and mis-transcription tolerant", () => {
-    expect(routeTranscript("CLAUDE fais une revue", panes).paneId).toBe("c1");
-    expect(routeTranscript("Cloud, fais une revue", panes)).toEqual({ paneId: "c1", text: "fais une revue" });
-    expect(routeTranscript("Codecs : corrige le build", panes)).toEqual({ paneId: "x1", text: "corrige le build" });
+    expect(routeTranscript("CLAUDE do a review", panes).paneId).toBe("c1");
+    expect(routeTranscript("Cloud, do a review", panes)).toEqual({ paneId: "c1", text: "do a review" });
+    expect(routeTranscript("Codecs : fix the build", panes)).toEqual({ paneId: "x1", text: "fix the build" });
     expect(routeTranscript("Clàude Code, go", panes)).toEqual({ paneId: "c1", text: "go" });
   });
 
@@ -28,16 +28,16 @@ describe("routeTranscript", () => {
   });
 
   it("matches pane titles, longest first", () => {
-    expect(routeTranscript("Back end, ajoute une route", panes)).toEqual({ paneId: "c2", text: "ajoute une route" });
-    expect(routeTranscript("front: le bouton", panes)).toEqual({ paneId: "c1", text: "le bouton" });
+    expect(routeTranscript("Back end, add a route", panes)).toEqual({ paneId: "c2", text: "add a route" });
+    expect(routeTranscript("front: the button", panes)).toEqual({ paneId: "c1", text: "the button" });
   });
 
   it("leaves the transcript alone when nothing matches", () => {
-    expect(routeTranscript("Ajoute un test", panes)).toEqual({ paneId: null, text: "Ajoute un test" });
+    expect(routeTranscript("Add a test", panes)).toEqual({ paneId: null, text: "Add a test" });
     expect(routeTranscript("Claude.", panes)).toEqual({ paneId: null, text: "Claude." });
     expect(routeTranscript("Codex", [])).toEqual({ paneId: null, text: "Codex" });
     // A name later in the sentence is not a prefix.
-    expect(routeTranscript("Demande à Claude", panes).paneId).toBeNull();
-    expect(routeTranscript("Claudette arrive", panes).paneId).toBeNull();
+    expect(routeTranscript("Ask Claude", panes).paneId).toBeNull();
+    expect(routeTranscript("Claudette is coming", panes).paneId).toBeNull();
   });
 });

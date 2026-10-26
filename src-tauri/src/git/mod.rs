@@ -18,7 +18,7 @@ const BRANCH_PREFIX: &str = "agentdeck/";
 const CHECKPOINT_REFS: &str = "refs/agentdeck/checkpoints";
 const CHECKPOINT_SUBJECT: &str = "agentdeck checkpoint";
 const CHECKPOINTS_KEPT: usize = 50;
-// shortcut: SHA-1 empty tree only; SHA-256 repos without any commit can't show a status yet.
+// Note: SHA-1 empty tree only; SHA-256 repos without any commit can't show a status yet.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -102,9 +102,9 @@ fn run_trim(dir: &Path, args: &[&str]) -> Result<String, String> {
 fn repo_root(cwd: &str) -> Result<PathBuf, String> {
     let dir = Path::new(cwd);
     if cwd.is_empty() || !dir.is_dir() {
-        return Err(format!("dossier introuvable : {cwd}"));
+        return Err(format!("folder not found: {cwd}"));
     }
-    find_repo_root(dir).ok_or_else(|| format!("pas un dépôt Git : {cwd}"))
+    find_repo_root(dir).ok_or_else(|| format!("not a Git repository: {cwd}"))
 }
 
 fn is_hex_sha(s: &str) -> bool {
@@ -120,7 +120,7 @@ fn check_pane_id(pane_id: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err("identifiant de panneau invalide".into())
+        Err("invalid pane id".into())
     }
 }
 
@@ -158,7 +158,7 @@ fn main_worktree(root: &Path) -> Result<PathBuf, String> {
         .next()
         .and_then(|l| l.strip_prefix("worktree "))
         .map(PathBuf::from)
-        .ok_or_else(|| "dépôt principal introuvable".into())
+        .ok_or_else(|| "main repository not found".into())
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -172,10 +172,10 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 fn agent_worktree(root: &Path) -> Result<(String, PathBuf), String> {
     let branch = current_branch(root)
         .filter(|b| b.starts_with(BRANCH_PREFIX))
-        .ok_or("réservé aux worktrees AgentDeck (branche agentdeck/*)")?;
+        .ok_or("only for AgentDeck worktrees (agentdeck/* branch)")?;
     let main = main_worktree(root)?;
     if same_dir(&main, root) {
-        return Err("ce dossier est le dépôt principal, pas un worktree".into());
+        return Err("this folder is the main repository, not a worktree".into());
     }
     Ok((branch, main))
 }
@@ -189,7 +189,7 @@ fn snapshot_tree(root: &Path) -> Result<String, String> {
     )?;
     // Seeding from the real index keeps git's stat cache: only changed files get hashed.
     if Path::new(&real).is_file() {
-        std::fs::copy(&real, &index).map_err(|e| format!("copie de l'index : {e}"))?;
+        std::fs::copy(&real, &index).map_err(|e| format!("copy index: {e}"))?;
     }
     let tree = run(root, &["add", "-A"], Some(&index))
         .and_then(|_| run(root, &["write-tree"], Some(&index)));
@@ -246,7 +246,7 @@ fn changes(root: &Path, from: &str, to: &str) -> Result<Vec<FileChange>, String>
 
 fn unified_diff(root: &Path, from: &str, to: &str, path: &str) -> Result<String, String> {
     if path.is_empty() {
-        return Err("fichier manquant".into());
+        return Err("missing file".into());
     }
     run(
         root,
@@ -293,7 +293,7 @@ fn commit(cwd: &str, message: &str) -> Result<String, String> {
     let root = repo_root(cwd)?;
     let message = message.trim();
     if message.is_empty() {
-        return Err("message de commit vide".into());
+        return Err("empty commit message".into());
     }
     run(&root, &["add", "-A"], None)?;
     run(&root, &["commit", "-q", "-m", message], None)?;
@@ -305,13 +305,13 @@ fn merge_worktree(cwd: &str) -> Result<String, String> {
     let (branch, main) = agent_worktree(&root)?;
     if !run_trim(&root, &["status", "--porcelain"])?.is_empty() {
         return Err(format!(
-            "{branch} a des modifications non commitées : committez-les d'abord"
+            "{branch} has uncommitted changes: commit them first"
         ));
     }
     let dirty = run_trim(&main, &["status", "--porcelain", "--untracked-files=no"])?;
     if !dirty.is_empty() {
         return Err(format!(
-            "le dépôt principal ({}) a des modifications non commitées, merge refusé :\n{dirty}",
+            "the main repository ({}) has uncommitted changes, merge refused:\n{dirty}",
             main.display()
         ));
     }
@@ -322,12 +322,12 @@ fn merge_worktree(cwd: &str) -> Result<String, String> {
             .replace('\n', ", ");
         let _ = run(&main, &["merge", "--abort"], None);
         return Err(if conflicts.is_empty() {
-            format!("merge de {branch} dans {target} impossible : {err}")
+            format!("cannot merge {branch} into {target}: {err}")
         } else {
-            format!("conflits en mergeant {branch} dans {target} (merge annulé) : {conflicts}")
+            format!("conflicts merging {branch} into {target} (merge aborted): {conflicts}")
         });
     }
-    Ok(format!("{branch} mergé dans {target}"))
+    Ok(format!("{branch} merged into {target}"))
 }
 
 fn remove_worktree(cwd: &str) -> Result<(), String> {
@@ -444,14 +444,14 @@ fn checkpoint(cwd: &str, pane_id: &str) -> Result<Option<String>, String> {
 fn restore_checkpoint(cwd: &str, pane_id: &str, sha: &str) -> Result<Option<String>, String> {
     check_pane_id(pane_id)?;
     if !is_hex_sha(sha) {
-        return Err("point de restauration invalide".into());
+        return Err("invalid restore point".into());
     }
     let root = repo_root(cwd)?;
     if !checkpoint_refs(&root, pane_id)?
         .iter()
         .any(|(_, c)| c.sha == sha)
     {
-        return Err("point de restauration inconnu".into());
+        return Err("unknown restore point".into());
     }
     let info = run_trim(&root, &["log", "-1", "--format=%P%n%s", sha])?;
     let (parents, subject) = info.split_once('\n').unwrap_or((&info, ""));
@@ -479,7 +479,7 @@ fn compare(cwd: &str, other_cwd: &str) -> Result<Comparison, String> {
         )
     };
     if !same_dir(Path::new(&common(&a)?), Path::new(&common(&b)?)) {
-        return Err("les deux panneaux ne sont pas dans le même dépôt".into());
+        return Err("the two panes are not in the same repository".into());
     }
     let (from, to) = (snapshot_tree(&a)?, snapshot_tree(&b)?);
     Ok(Comparison {
@@ -514,7 +514,7 @@ pub fn git_diff_trees(
     path: String,
 ) -> Result<String, String> {
     if !is_hex_sha(&from) || !is_hex_sha(&to) {
-        return Err("arbre invalide".into());
+        return Err("invalid tree".into());
     }
     unified_diff(&repo_root(&cwd)?, &from, &to, &path)
 }
@@ -691,11 +691,7 @@ mod tests {
         let wt = PathBuf::from(wt);
         assert_eq!(pane_dir(&s(&repo), "abcdef12", true), s(&wt));
         std::fs::write(wt.join("feature.txt"), "f\n").unwrap();
-        assert!(
-            merge_worktree(&s(&wt))
-                .unwrap_err()
-                .contains("non commitées")
-        );
+        assert!(merge_worktree(&s(&wt)).unwrap_err().contains("uncommitted"));
         commit(&s(&wt), "feat: add feature").unwrap();
         let st = status(&s(&wt)).unwrap();
         assert!(st.agent_worktree);
@@ -711,7 +707,7 @@ mod tests {
 
         std::fs::write(repo.join("a.txt"), "dirty\n").unwrap();
         let err = merge_worktree(&s(&wt)).unwrap_err();
-        assert!(err.contains("dépôt principal"), "{err}");
+        assert!(err.contains("main repository"), "{err}");
         assert!(!repo.join("feature.txt").exists());
 
         run(&repo, &["checkout", "-q", "--", "a.txt"], None).unwrap();
@@ -748,7 +744,7 @@ mod tests {
         std::fs::write(repo.join("a.txt"), "user\n").unwrap();
         commit(&s(&repo), "user").unwrap();
         let err = merge_worktree(&s(&wt)).unwrap_err();
-        assert!(err.contains("conflits") && err.contains("a.txt"), "{err}");
+        assert!(err.contains("conflicts") && err.contains("a.txt"), "{err}");
         assert!(
             run_trim(&repo, &["status", "--porcelain"])
                 .unwrap()

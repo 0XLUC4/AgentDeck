@@ -1,4 +1,4 @@
-// Auto-update: manual check from Réglages > À propos, plus one silent check at startup.
+// Auto-update: manual check from Settings > About, plus one silent check at startup.
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { deck } from "../store/deck";
@@ -17,7 +17,7 @@ export async function checkForUpdateSilently(): Promise<void> {
   try {
     const update = await check();
     if (update) {
-      deck.toast(`AgentDeck ${update.version} est disponible : Réglages › À propos pour l'installer.`);
+      deck.toast(`AgentDeck ${update.version} is available: install it from Settings › About.`);
     }
   } catch {
     // Endpoint unreachable or not published yet: stay quiet.

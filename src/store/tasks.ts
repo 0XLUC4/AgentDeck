@@ -75,7 +75,7 @@ export const tasks = {
     const before = useTasks.getState()[paneId]?.current;
     const after = applyTaskEvent(useTasks.getState()[paneId], e, now, fallbackStart);
     useTasks.setState({ [paneId]: after });
-    // shortcut: snapshot runs async after the hook answered, so a very fast first edit can land before it.
+    // Note: snapshot runs async after the hook answered, so a very fast first edit can land before it.
     if (after.current && after.current.startedAt !== before?.startedAt) onTaskStart(paneId);
   },
   remove(paneId: string) {

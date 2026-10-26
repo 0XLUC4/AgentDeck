@@ -31,7 +31,7 @@ export const stripAnsi = (text: string) => text.replace(ANSI, "");
 
 /**
  * Last non-blank lines of raw terminal output as plain text. A bare \r rewinds the line, so the last segment wins.
- * shortcut: cursor-addressed TUI redraws are not emulated (may show stale lines); read xterm's buffer if that matters.
+ * Note: cursor-addressed TUI redraws are not emulated (may show stale lines); read xterm's buffer if that matters.
  */
 export function lastLines(raw: string, count = 6): string[] {
   return stripAnsi(raw)

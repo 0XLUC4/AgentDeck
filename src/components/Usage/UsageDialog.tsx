@@ -11,9 +11,9 @@ import { formatCost, formatTokens, isAgentKind, usageDetails } from "./format";
 import { Modal, Segmented } from "./Modal";
 
 const RANGES: { id: UsageRange; label: string }[] = [
-  { id: "today", label: "Aujourd'hui" },
-  { id: "7d", label: "7 jours" },
-  { id: "30d", label: "30 jours" },
+  { id: "today", label: "Today" },
+  { id: "7d", label: "7 days" },
+  { id: "30d", label: "30 days" },
 ];
 
 const norm = (p: string) =>
@@ -37,7 +37,7 @@ export function byWorkspace(rows: UsageKeyed[], workspaces: Workspace[]): UsageK
   for (const row of rows) {
     const cwd = norm(row.key);
     const ws = workspaces.find((w) => w.path && (cwd === norm(w.path) || cwd.startsWith(`${norm(w.path)}\\`)));
-    const key = ws?.name ?? (folderName(row.key) || "Inconnu");
+    const key = ws?.name ?? (folderName(row.key) || "Unknown");
     const acc = merged.get(key) ?? { key, ...emptyTotals() };
     for (const f of ["input", "output", "cacheWrite", "cacheRead", "tokens", "cost", "unpricedTokens"] as const) {
       acc[f] += row[f];
@@ -91,12 +91,12 @@ function DayChart({ days }: { days: UsageKeyed[] }) {
   const max = Math.max(...days.map(value), 1e-9);
   const label = (key: string) => {
     const [, m, d] = key.split("-");
-    return `${d}/${m}`;
+    return `${m}/${d}`;
   };
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="text-xs font-medium text-subtle">Par jour</h3>
-      <div className="flex h-32 items-end gap-1" role="img" aria-label="Consommation par jour">
+      <h3 className="text-xs font-medium text-subtle">By day</h3>
+      <div className="flex h-32 items-end gap-1" role="img" aria-label="Usage by day">
         {days.map((day) => (
           <div
             key={day.key}
@@ -138,46 +138,46 @@ export function UsageDialog({ onClose }: { onClose: () => void }) {
   }, [range]);
 
   return (
-    <Modal title="Consommation" onClose={onClose}>
+    <Modal title="Usage" onClose={onClose}>
       <div className="flex flex-col gap-5">
         <div className="flex items-center justify-between gap-3">
-          <Segmented label="Période" options={RANGES} value={range} onChange={setRange} />
-          <span className="text-xs text-subtle">Claude Code et Codex · coût estimé au tarif API</span>
+          <Segmented label="Period" options={RANGES} value={range} onChange={setRange} />
+          <span className="text-xs text-subtle">Claude Code and Codex · cost estimated at API pricing</span>
         </div>
         {error ? (
           <p role="alert" className="flex items-center gap-2 text-xs text-bad">
             <TriangleAlert size={14} strokeWidth={1.5} aria-hidden="true" />
-            Lecture impossible : {error}
+            Could not read usage: {error}
           </p>
         ) : !data ? (
           <p className="py-8 text-center text-muted" aria-busy="true">
-            Lecture des transcriptions…
+            Reading transcripts…
           </p>
         ) : (
           <>
             <div className="flex items-baseline gap-3">
               <span className="text-2xl font-semibold tabular-nums">{formatCost(data.total.cost)}</span>
               <span className="font-mono text-xs text-muted" title={usageDetails(data.total)}>
-                {formatTokens(data.total.tokens)} tokens · {formatTokens(data.total.output)} en sortie
+                {formatTokens(data.total.tokens)} tokens · {formatTokens(data.total.output)} output
               </span>
             </div>
             {data.total.unpricedTokens > 0 && (
               <p className="text-xs text-subtle">
-                {formatTokens(data.total.unpricedTokens)} tokens de modèles sans tarif connu ne sont pas inclus dans le
-                coût.
+                {formatTokens(data.total.unpricedTokens)} tokens from models with no known price are not included in the
+                cost.
               </p>
             )}
             {data.total.tokens === 0 ? (
-              <p className="py-6 text-center text-muted">Aucune consommation sur la période</p>
+              <p className="py-6 text-center text-muted">No usage in this period</p>
             ) : (
               <>
                 {data.byDay.length > 1 && <DayChart days={data.byDay} />}
                 <BarList
-                  title="Par agent"
+                  title="By agent"
                   rows={data.byAgent}
                   icon={(key) => (isAgentKind(key) ? <AgentLogo kind={key} size={14} /> : null)}
                 />
-                <BarList title="Par workspace" rows={byWorkspace(data.byWorkspaceCwd, workspaces)} />
+                <BarList title="By workspace" rows={byWorkspace(data.byWorkspaceCwd, workspaces)} />
               </>
             )}
           </>
@@ -192,12 +192,7 @@ export function UsageButton() {
   const open = useDialogs((s) => s.open === "usage");
   return (
     <>
-      <IconButton
-        icon={Gauge}
-        label="Consommation"
-        hint="Consommation : tokens et coût"
-        onClick={() => openDialog("usage")}
-      />
+      <IconButton icon={Gauge} label="Usage" hint="Usage: tokens and cost" onClick={() => openDialog("usage")} />
       {open && <UsageDialog onClose={closeDialog} />}
     </>
   );

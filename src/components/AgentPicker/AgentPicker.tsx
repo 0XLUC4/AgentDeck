@@ -18,18 +18,18 @@ const field =
   "h-9 min-w-0 rounded-md border border-line bg-base px-2.5 text-fg placeholder:text-subtle outline-none transition-colors duration-150 hover:border-line-strong focus:border-accent";
 
 function InstallState({ known, ok }: { known: boolean; ok: boolean }) {
-  if (!known) return <span className="text-xs text-subtle">Détection…</span>;
+  if (!known) return <span className="text-xs text-subtle">Detecting…</span>;
   return ok ? (
     <span className="inline-flex items-center gap-1 text-xs text-ok">
       <Check size={12} strokeWidth={1.5} aria-hidden="true" />
-      Installé
+      Installed
     </span>
   ) : (
-    <span className="text-xs text-subtle">Non trouvé</span>
+    <span className="text-xs text-subtle">Not found</span>
   );
 }
 
-/** Modal "Ajouter un agent". Native <dialog>: Esc closes, background is inert. */
+/** Modal "Add agent". Native <dialog>: Esc closes, background is inert. */
 export function AgentPicker({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const workspace = useDeck((s) => activeWorkspace(s));
@@ -46,11 +46,11 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
       .then((list) => setInfos(Object.fromEntries(list.map((info) => [info.kind, info]))))
       .catch((err) => {
         setInfos({});
-        setError(`Détection des agents impossible : ${errorMessage(err)}`);
+        setError(`Could not detect agents: ${errorMessage(err)}`);
       });
   }, []);
 
-  // Each agent comes prefilled with its defaults from Réglages > Agents.
+  // Each agent comes prefilled with its defaults from Settings > Agents.
   function pickAgent(kind: AgentKind) {
     const defaults = useSettings.getState().agents[kind];
     setAgent(kind);
@@ -66,14 +66,14 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
       const dir = await openDialog({ directory: true, defaultPath: cwd || undefined });
       if (typeof dir === "string") setCwd(dir);
     } catch (err) {
-      setError(`Sélection du dossier impossible : ${errorMessage(err)}`);
+      setError(`Could not pick folder: ${errorMessage(err)}`);
     }
   }
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (!cwd) return setError("Choisissez un dossier de travail.");
-    if (!installed(agent)) return setError(`${AGENTS[agent].name} n'est pas installé.`);
+    if (!cwd) return setError("Choose a working folder.");
+    if (!installed(agent)) return setError(`${AGENTS[agent].name} is not installed.`);
     const { activeTabId } = useDeck.getState();
     useDeck.setState({ lastCwd: cwd });
     void createPane(
@@ -103,11 +103,11 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between pt-4 pr-3 pl-5">
           <div>
             <h2 id="agent-picker-title" className="text-[15px] font-medium">
-              Ajouter un agent
+              Add agent
             </h2>
-            <p className="text-xs text-subtle">Dans {workspace.name}</p>
+            <p className="text-xs text-subtle">In {workspace.name}</p>
           </div>
-          <IconButton icon={X} label="Fermer" onClick={onClose} />
+          <IconButton icon={X} label="Close" onClick={onClose} />
         </div>
 
         <div className="flex flex-col gap-5 p-5">
@@ -148,7 +148,7 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
                       className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-fg hover:bg-hover"
                     >
                       <Download size={12} strokeWidth={1.5} aria-hidden="true" />
-                      Installer
+                      Install
                     </button>
                   )}
                 </label>
@@ -158,14 +158,14 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="agent-cwd" className="text-xs font-medium text-muted">
-              Dossier de travail
+              Working folder
             </label>
             <div className="flex gap-2">
               <input
                 id="agent-cwd"
                 value={cwd}
                 onChange={(e) => setCwd(e.target.value)}
-                placeholder="C:\chemin\du\projet"
+                placeholder="C:\path\to\project"
                 className={`${field} flex-1 font-mono text-xs`}
               />
               <button
@@ -174,7 +174,7 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
                 className="inline-flex h-9 items-center gap-1.5 rounded-md border border-line px-3 text-muted transition-colors duration-150 hover:bg-hover hover:text-fg"
               >
                 <FolderOpen size={15} strokeWidth={1.5} aria-hidden="true" />
-                Parcourir
+                Browse
               </button>
             </div>
           </div>
@@ -182,13 +182,13 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
           <div className="flex flex-col gap-1.5">
             <label htmlFor="agent-args" className="flex items-center gap-1.5 text-xs font-medium text-muted">
               <SquareTerminal size={13} strokeWidth={1.5} aria-hidden="true" />
-              Arguments <span className="font-normal text-subtle">(optionnel)</span>
+              Arguments <span className="font-normal text-subtle">(optional)</span>
             </label>
             <input
               id="agent-args"
               value={args}
               onChange={(e) => setArgs(e.target.value)}
-              placeholder='--model sonnet --append "texte avec espaces"'
+              placeholder='--model sonnet --append "text with spaces"'
               className={`${field} font-mono text-xs`}
             />
           </div>
@@ -203,9 +203,11 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
             <span className="flex flex-col gap-0.5">
               <span className="flex items-center gap-1.5 font-medium">
                 <GitBranch size={14} strokeWidth={1.5} aria-hidden="true" />
-                Worktree Git dédié
+                Dedicated Git worktree
               </span>
-              <span className="text-xs text-subtle">L'agent travaille sur sa propre copie, sans gêner les autres.</span>
+              <span className="text-xs text-subtle">
+                The agent works on its own copy without getting in the way of others.
+              </span>
             </span>
           </label>
 
@@ -222,14 +224,14 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
             onClick={onClose}
             className="h-8 rounded-md px-3 text-muted transition-colors duration-150 hover:bg-hover hover:text-fg"
           >
-            Annuler
+            Cancel
           </button>
           <button
             type="submit"
             className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3.5 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover"
           >
             <Play size={14} strokeWidth={1.5} aria-hidden="true" />
-            Lancer
+            Launch
           </button>
         </div>
       </form>

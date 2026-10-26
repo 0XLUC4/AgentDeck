@@ -58,44 +58,44 @@ function TitleBar({ pane, send }: { pane: Pane | null; send: (body: RemoteBody) 
     >
       {pane && <AgentLogo kind={pane.agent} size={14} />}
       <span data-tauri-drag-region className="truncate font-medium text-fg">
-        {pane ? pane.title || AGENTS[pane.agent].name : "Chargement…"}
+        {pane ? pane.title || AGENTS[pane.agent].name : "Loading…"}
       </span>
       {pane && <StatusBadge status={pane.status} />}
       {pane?.exited && (
         <span data-tauri-drag-region className="truncate text-xs text-subtle">
-          Processus terminé : R pour relancer
+          Process exited: press R to restart
         </span>
       )}
       <div data-tauri-drag-region className="h-full min-w-6 flex-1" />
-      <div className="flex items-center gap-0.5 pr-1" role="toolbar" aria-label="Actions du pane">
+      <div className="flex items-center gap-0.5 pr-1" role="toolbar" aria-label="Pane actions">
         <IconButton
           icon={ZoomOut}
           size="sm"
-          label="Dézoomer"
-          hint="Dézoomer (Ctrl+-)"
+          label="Zoom out"
+          hint="Zoom out (Ctrl+-)"
           onClick={() => send({ kind: "zoom", delta: -1 })}
           disabled={!pane || pane.fontSize <= FONT_SIZE.min}
         />
         <IconButton
           icon={ZoomIn}
           size="sm"
-          label="Zoomer"
-          hint="Zoomer (Ctrl+=, Ctrl+0 pour réinitialiser)"
+          label="Zoom in"
+          hint="Zoom in (Ctrl+=, Ctrl+0 to reset)"
           onClick={() => send({ kind: "zoom", delta: 1 })}
           disabled={!pane || pane.fontSize >= FONT_SIZE.max}
         />
         <IconButton
           icon={SquareArrowDownLeft}
           size="sm"
-          label="Rattacher"
-          hint="Rattacher à la fenêtre principale"
+          label="Reattach"
+          hint="Reattach to the main window"
           onClick={close}
         />
       </div>
       <button
         type="button"
-        aria-label="Fermer la fenêtre (rattache le pane)"
-        title="Fermer (rattache le pane)"
+        aria-label="Close window (reattaches the pane)"
+        title="Close (reattaches the pane)"
         className="inline-flex h-full w-[46px] items-center justify-center text-muted transition-colors duration-150 hover:bg-close hover:text-fg focus-visible:-outline-offset-2"
         onClick={close}
       >

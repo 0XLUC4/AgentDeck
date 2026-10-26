@@ -37,7 +37,7 @@ function Prompt({ text }: { text: string }) {
       </p>
       {long && (
         <button type="button" className="w-fit text-xs text-subtle hover:text-fg" onClick={() => setOpen(!open)}>
-          {open ? "Réduire" : "Tout afficher"}
+          {open ? "Show less" : "Show all"}
         </button>
       )}
     </>
@@ -49,12 +49,12 @@ function TaskBody({ task }: { task: Task }) {
   const now = useNow();
   return (
     <>
-      <Section title="Demande">
-        {task.prompt ? <Prompt text={task.prompt} /> : <p className="text-xs text-subtle">Demande non reçue.</p>}
+      <Section title="Prompt">
+        {task.prompt ? <Prompt text={task.prompt} /> : <p className="text-xs text-subtle">No prompt received.</p>}
       </Section>
       <Section title={`Actions (${task.actions.length})`}>
         {task.actions.length === 0 ? (
-          <p className="text-xs text-subtle">Aucune action outil.</p>
+          <p className="text-xs text-subtle">No tool actions.</p>
         ) : (
           <ol className="flex flex-col gap-1">
             {task.actions.map((action) => {
@@ -72,18 +72,18 @@ function TaskBody({ task }: { task: Task }) {
           </ol>
         )}
       </Section>
-      <Section title={task.status === "error" ? "Erreur" : "Résultat"}>
+      <Section title={task.status === "error" ? "Error" : "Result"}>
         {task.summary ? (
           <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-fg">{task.summary}</p>
         ) : (
-          <p className="text-xs text-subtle">{task.endedAt ? "Aucun résumé reçu." : "Tâche en cours…"}</p>
+          <p className="text-xs text-subtle">{task.endedAt ? "No summary received." : "Task in progress…"}</p>
         )}
       </Section>
     </>
   );
 }
 
-const firstLine = (task: Task) => task.prompt?.split("\n", 1)[0] || "Tâche sans demande";
+const firstLine = (task: Task) => task.prompt?.split("\n", 1)[0] || "Task without a prompt";
 
 /** Slide-over inside the activity panel: what a finished agent did. */
 export function TaskDetail({ item, onJump, onClose }: { item: ActivityItem; onJump: () => void; onClose: () => void }) {
@@ -104,7 +104,7 @@ export function TaskDetail({ item, onJump, onClose }: { item: ActivityItem; onJu
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       },
-      () => deck.toast("Impossible de copier le résultat"),
+      () => deck.toast("Could not copy the result"),
     );
   };
 
@@ -112,15 +112,15 @@ export function TaskDetail({ item, onJump, onClose }: { item: ActivityItem; onJu
     <div
       className="absolute inset-0 z-10 flex flex-col bg-panel"
       role="dialog"
-      aria-label={`Détail de la tâche : ${name}`}
+      aria-label={`Task details: ${name}`}
       onKeyDown={(e) => e.key === "Escape" && onClose()}
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line pr-2 pl-1.5">
         <button
           ref={back}
           type="button"
-          aria-label="Retour à l'activité"
-          title="Retour (Échap)"
+          aria-label="Back to activity"
+          title="Back (Esc)"
           className="inline-flex size-7 items-center justify-center rounded-md text-subtle hover:bg-hover hover:text-fg"
           onClick={onClose}
         >
@@ -129,7 +129,7 @@ export function TaskDetail({ item, onJump, onClose }: { item: ActivityItem; onJu
         <AgentLogo kind={pane.agent} size={14} />
         <span className="min-w-0 flex-1 truncate font-medium text-fg">{name}</span>
         {task && (
-          <span className="shrink-0 text-xs tabular-nums text-subtle" title="Durée">
+          <span className="shrink-0 text-xs tabular-nums text-subtle" title="Duration">
             {formatElapsed((task.endedAt ?? now) - task.startedAt)}
           </span>
         )}
@@ -138,12 +138,12 @@ export function TaskDetail({ item, onJump, onClose }: { item: ActivityItem; onJu
         {task ? (
           <TaskBody task={task} />
         ) : (
-          <p className="px-3 py-4 text-xs text-subtle">Aucun détail disponible pour cet agent (pas de hooks).</p>
+          <p className="px-3 py-4 text-xs text-subtle">No details available for this agent (no hooks).</p>
         )}
         <div className="flex flex-wrap gap-1.5 border-b border-line px-3 py-2.5">
           <button type="button" className={BUTTON} onClick={onJump}>
             <SquareTerminal size={13} strokeWidth={1.5} aria-hidden="true" />
-            Aller au terminal
+            Go to terminal
           </button>
           {pane.status === "done" && (
             <button
@@ -155,18 +155,18 @@ export function TaskDetail({ item, onJump, onClose }: { item: ActivityItem; onJu
               }}
             >
               <Check size={13} strokeWidth={1.5} aria-hidden="true" />
-              Marquer comme vu
+              Mark as seen
             </button>
           )}
           {task?.summary && (
             <button type="button" className={BUTTON} onClick={copy}>
               <Copy size={13} strokeWidth={1.5} aria-hidden="true" />
-              {copied ? "Copié" : "Copier le résultat"}
+              {copied ? "Copied" : "Copy result"}
             </button>
           )}
         </div>
         {previous.length > 0 && (
-          <Section title={`Tâches précédentes (${previous.length})`}>
+          <Section title={`Previous tasks (${previous.length})`}>
             <ul className="flex flex-col">
               {previous.map((prev) => (
                 <li key={prev.startedAt}>

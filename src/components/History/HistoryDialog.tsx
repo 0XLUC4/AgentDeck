@@ -48,7 +48,13 @@ function Highlighted({ text, query }: { text: string; query: string }) {
 }
 
 const when = (ms: number) =>
-  new Date(ms).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  new Date(ms).toLocaleString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
 
 function RunHeader({ meta, runId }: { meta: HistoryRunMeta | null; runId: string }) {
   const kind = meta && isAgentKind(meta.agent) ? meta.agent : null;
@@ -97,7 +103,7 @@ function Viewer({ runId, line, query, onBack }: { runId: string; line: number; q
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <IconButton icon={ArrowLeft} label="Retour aux résultats" onClick={onBack} />
+        <IconButton icon={ArrowLeft} label="Back to results" onClick={onBack} />
         <div className="min-w-0 flex-1">{win && <RunHeader meta={win.meta} runId={runId} />}</div>
       </div>
       {error && <p className="text-xs text-bad">{error}</p>}
@@ -110,7 +116,7 @@ function Viewer({ runId, line, query, onBack }: { runId: string; line: number; q
               className="inline-flex items-center gap-1.5 self-center text-xs text-muted hover:text-fg"
             >
               <ChevronUp size={14} strokeWidth={1.5} aria-hidden="true" />
-              Lignes précédentes
+              Previous lines
             </button>
           )}
           <div className="overflow-x-auto rounded-md bg-base py-2 font-mono text-xs leading-5">
@@ -138,7 +144,7 @@ function Viewer({ runId, line, query, onBack }: { runId: string; line: number; q
               className="inline-flex items-center gap-1.5 self-center text-xs text-muted hover:text-fg"
             >
               <ChevronDown size={14} strokeWidth={1.5} aria-hidden="true" />
-              Lignes suivantes
+              Next lines
             </button>
           )}
         </>
@@ -177,7 +183,7 @@ export function HistoryDialog({ onClose }: { onClose: () => void }) {
   }, [query]);
 
   return (
-    <Modal title="Historique des terminaux" onClose={onClose} className="w-[min(56rem,94vw)]">
+    <Modal title="Terminal history" onClose={onClose} className="w-[min(56rem,94vw)]">
       {open ? (
         <Viewer runId={open.runId} line={open.line} query={query.trim()} onBack={() => setOpen(null)} />
       ) : (
@@ -189,8 +195,8 @@ export function HistoryDialog({ onClose }: { onClose: () => void }) {
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Rechercher dans la sortie de tous les terminaux…"
-              aria-label="Rechercher"
+              placeholder="Search the output of every terminal…"
+              aria-label="Search"
               className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-subtle"
             />
           </label>
@@ -201,15 +207,13 @@ export function HistoryDialog({ onClose }: { onClose: () => void }) {
             </p>
           )}
           {hits === null ? (
-            <p className="py-8 text-center text-muted">
-              Sortie des terminaux enregistrée en texte brut, conservée 30 jours.
-            </p>
+            <p className="py-8 text-center text-muted">Terminal output is saved as plain text and kept for 30 days.</p>
           ) : hits.length === 0 ? (
-            <p className="py-8 text-center text-muted">Aucun résultat</p>
+            <p className="py-8 text-center text-muted">No results</p>
           ) : (
             <>
               <p className="text-xs text-subtle" aria-live="polite">
-                {hits.length >= LIMIT ? `${LIMIT}+ résultats (les plus récents)` : `${hits.length} résultat(s)`}
+                {hits.length >= LIMIT ? `${LIMIT}+ results (most recent)` : `${hits.length} result(s)`}
               </p>
               {groupByRun(hits).map(([runId, group]) => (
                 <section key={runId} className="flex flex-col gap-1.5">
@@ -263,8 +267,8 @@ export function HistoryButton() {
     <>
       <IconButton
         icon={History}
-        label="Historique"
-        hint="Rechercher dans l'historique (Ctrl+Maj+F)"
+        label="History"
+        hint="Search history (Ctrl+Shift+F)"
         onClick={() => openDialog("history")}
       />
       {open && <HistoryDialog onClose={closeDialog} />}

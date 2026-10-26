@@ -88,7 +88,7 @@ export function groupJournal(entries: JournalEntry[], commits: WorkspaceCommits[
     const key = norm(path);
     let g = groups.get(key);
     if (!g) {
-      g = { key: path, name: name || lastSegment(path) || "Sans workspace", agents: [], commits: [] };
+      g = { key: path, name: name || lastSegment(path) || "No workspace", agents: [], commits: [] };
       groups.set(key, g);
     }
     return g;
@@ -113,18 +113,18 @@ const oneLine = (text: string, max: number) => {
 };
 
 export const clockTime = (ms: number) =>
-  new Date(ms).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  new Date(ms).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 export const STATUS_LABEL: Partial<Record<PaneStatus, string>> = {
-  error: "erreur",
-  working: "interrompue",
-  waiting: "interrompue",
+  error: "error",
+  working: "interrupted",
+  waiting: "interrupted",
 };
 
 export function taskLine(e: JournalEntry): string {
   const status = STATUS_LABEL[e.status];
   const head = `${clockTime(e.startedAt)} → ${clockTime(e.endedAt)} (${formatSince(e.endedAt - e.startedAt)})`;
-  return `${head}${status ? ` [${status}]` : ""} — ${e.prompt ? oneLine(e.prompt, 200) : "(tâche sans demande)"}`;
+  return `${head}${status ? ` [${status}]` : ""} - ${e.prompt ? oneLine(e.prompt, 200) : "(task without a prompt)"}`;
 }
 
 /** Local YYYY-MM-DD, the backend's day-file name. */
@@ -137,28 +137,25 @@ export function journalMarkdown(
   usage: { total: UsageTotals; byAgent: { key: string; tokens: number; cost: number }[] } | null,
 ): string {
   const [y, m, d] = date.split("-");
-  const out = [`# Journal du ${d}/${m}/${y}`, ""];
+  const out = [`# Journal for ${m}/${d}/${y}`, ""];
   if (usage && usage.total.tokens > 0) {
     const agents = usage.byAgent
       .map((a) => `${isAgentKind(a.key) ? AGENTS[a.key].name : a.key} ${formatCost(a.cost)}`)
       .join(", ");
-    out.push(
-      `**Consommation** : ${formatTokens(usage.total.tokens)} tokens · ${formatCost(usage.total.cost)} (${agents})`,
-      "",
-    );
+    out.push(`**Usage**: ${formatTokens(usage.total.tokens)} tokens · ${formatCost(usage.total.cost)} (${agents})`, "");
   }
-  if (groups.length === 0) out.push("_Aucune tâche ni commit aujourd'hui._", "");
+  if (groups.length === 0) out.push("_No tasks or commits today._", "");
   for (const g of groups) {
     out.push(`## ${g.name}`, "");
     if (g.key) out.push(`\`${g.key}\``, "");
     for (const { agent, tasks } of g.agents) {
-      out.push(`### ${AGENTS[agent].name} — ${tasks.length} tâche(s)`, "");
+      out.push(`### ${AGENTS[agent].name} - ${tasks.length} task(s)`, "");
       for (const t of tasks) {
         out.push(`- ${taskLine(t)}`);
-        if (t.summary) out.push(`  - Résultat : ${oneLine(t.summary, 400)}`);
+        if (t.summary) out.push(`  - Result: ${oneLine(t.summary, 400)}`);
         if (t.actions.length)
           out.push(
-            `  - ${t.actions.length} action(s) : ${t.actions
+            `  - ${t.actions.length} action(s): ${t.actions
               .slice(-3)
               .map((a) => oneLine(a, 80))
               .join(" · ")}`,
@@ -167,7 +164,7 @@ export function journalMarkdown(
       out.push("");
     }
     if (g.commits.length) {
-      out.push(`### Commits — ${g.commits.length}`, "");
+      out.push(`### Commits - ${g.commits.length}`, "");
       for (const c of g.commits) out.push(`- \`${c.hash}\` ${clockTime(Date.parse(c.time))} ${c.subject}`);
       out.push("");
     }

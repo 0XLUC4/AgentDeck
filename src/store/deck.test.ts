@@ -50,7 +50,7 @@ describe("applyStatus", () => {
   });
 });
 
-const W1 = { id: "w1", name: "Par défaut", path: "" };
+const W1 = { id: "w1", name: "Default", path: "" };
 
 describe("deck actions", () => {
   beforeEach(() =>

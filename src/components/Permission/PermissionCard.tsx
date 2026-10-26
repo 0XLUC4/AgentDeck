@@ -23,7 +23,7 @@ const PRIMARY = `${BUTTON} bg-accent text-on-accent hover:bg-accent-hover`;
 const SECONDARY = `${BUTTON} border border-line-strong text-fg hover:bg-hover`;
 const DANGER = `${BUTTON} text-bad hover:bg-bad/15`;
 
-/** A pending tool approval: exactly what will run, and Autoriser / Toujours autoriser / Refuser. Never auto-allows. */
+/** A pending tool approval: exactly what will run, and Allow / Always allow / Deny. Never auto-allows. */
 export function PermissionCard({ request, onJump }: { request: PermissionRequest; onJump?: () => void }) {
   const [refusing, setRefusing] = useState(false);
   const [reason, setReason] = useState("");
@@ -37,7 +37,7 @@ export function PermissionCard({ request, onJump }: { request: PermissionRequest
 
   return (
     <fieldset
-      aria-label={`Autorisation demandée : ${request.summary}`}
+      aria-label={`Permission requested: ${request.summary}`}
       className="flex min-w-0 flex-col gap-1.5 rounded-md border border-wait/40 bg-base p-2"
     >
       <p className="flex items-start gap-1.5 text-xs text-fg">
@@ -49,7 +49,7 @@ export function PermissionCard({ request, onJump }: { request: PermissionRequest
         detail
       ) : (
         <details className="text-xs text-subtle">
-          <summary className="cursor-pointer select-none hover:text-fg">Détail</summary>
+          <summary className="cursor-pointer select-none hover:text-fg">Details</summary>
           <div className="mt-1">{detail}</div>
         </details>
       )}
@@ -62,7 +62,7 @@ export function PermissionCard({ request, onJump }: { request: PermissionRequest
           }}
         >
           <input
-            // biome-ignore lint/a11y/noAutofocus: opened by an explicit "Refuser" click, the reason is the next step.
+            // biome-ignore lint/a11y/noAutofocus: opened by an explicit "Deny" click, the reason is the next step.
             autoFocus
             value={reason}
             onChange={(e) => setReason(e.target.value)}
@@ -72,42 +72,42 @@ export function PermissionCard({ request, onJump }: { request: PermissionRequest
                 setRefusing(false);
               }
             }}
-            placeholder="Raison (facultatif), transmise à l'agent"
-            aria-label="Raison du refus (facultatif)"
+            placeholder="Reason (optional), sent to the agent"
+            aria-label="Reason for denying (optional)"
             className="h-6 rounded border border-line-strong bg-gutter px-1.5 text-xs text-fg placeholder:text-subtle"
           />
           <span className="flex gap-1.5">
             <button type="submit" className={`${BUTTON} bg-bad/20 text-bad hover:bg-bad/30`}>
-              Refuser
+              Deny
             </button>
             <button type="button" className={SECONDARY} onClick={() => setRefusing(false)}>
-              Annuler
+              Cancel
             </button>
           </span>
         </form>
       ) : (
         <span className="flex flex-wrap gap-1.5">
           <button type="button" className={PRIMARY} onClick={() => void answer(request, "allow")}>
-            Autoriser
+            Allow
           </button>
           {request.suggestions.length > 0 && (
             <button
               type="button"
               className={SECONDARY}
-              title={`Autorise et ajoute la règle ${request.suggestions.join(", ")} proposée par l'agent`}
-              aria-label={`Toujours autoriser ${request.suggestions.join(", ")}`}
+              title={`Allow and add the rule ${request.suggestions.join(", ")} suggested by the agent`}
+              aria-label={`Always allow ${request.suggestions.join(", ")}`}
               onClick={() => void answer(request, "allow_always")}
             >
-              Toujours autoriser
+              Always allow
             </button>
           )}
           <button type="button" className={DANGER} onClick={() => setRefusing(true)}>
-            Refuser
+            Deny
           </button>
           <button
             type="button"
             className={`${BUTTON} ml-auto text-subtle hover:bg-hover hover:text-fg`}
-            title="Rend la main à l'invite de l'agent dans son terminal"
+            title="Hand back to the agent's prompt in its terminal"
             onClick={() => {
               void answer(request, "ask");
               onJump?.();

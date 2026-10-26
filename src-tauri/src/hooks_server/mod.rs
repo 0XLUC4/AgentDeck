@@ -64,7 +64,7 @@ pub struct AgentStatusEvent {
 /// Starts the hook server on a background thread.
 pub fn start(app: AppHandle) -> HookServer {
     let token = uuid::Uuid::new_v4().to_string();
-    // shortcut: a second AgentDeck instance falls back to a random port and rewrites the Claude settings.
+    // Note: a second AgentDeck instance falls back to a random port and rewrites the Claude settings.
     let server =
         Server::http(("127.0.0.1", PREFERRED_PORT)).or_else(|_| Server::http("127.0.0.1:0"));
     let server = match server {
@@ -175,7 +175,7 @@ fn handle(req: &mut Request, token: &str) -> Result<Hook, u16> {
     if req.body_length().is_some_and(|n| n as u64 > MAX_BODY) {
         return Err(413);
     }
-    // shortcut: no percent-decoding; pane ids are UUIDs.
+    // Note: no percent-decoding; pane ids are UUIDs.
     let query_pane = query
         .split('&')
         .find_map(|kv| kv.strip_prefix("pane="))

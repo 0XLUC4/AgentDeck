@@ -11,11 +11,7 @@ const isWorking = (paneIds: string[]) => paneIds.some((id) => useDeck.getState()
 export function closeSession(tabId: string) {
   const tab = useDeck.getState().tabs.find((t) => t.id === tabId);
   if (!tab) return;
-  if (
-    isWorking(tab.paneIds) &&
-    !window.confirm(`Des agents de « ${tab.name} » travaillent encore. Archiver quand même ?`)
-  )
-    return;
+  if (isWorking(tab.paneIds) && !window.confirm(`Agents in "${tab.name}" are still working. Archive anyway?`)) return;
   archiveSession(tabId);
 }
 
@@ -31,7 +27,7 @@ function SessionTab({ tab, active, onRename }: { tab: Tab; active: boolean; onRe
         type="button"
         role="tab"
         aria-selected={active}
-        title="Double-clic ou F2 pour renommer"
+        title="Double-click or F2 to rename"
         className="flex h-full items-center gap-2 pr-1 pl-3"
         onClick={() => useDeck.setState({ activeTabId: tab.id })}
         onDoubleClick={onRename}
@@ -45,8 +41,8 @@ function SessionTab({ tab, active, onRename }: { tab: Tab; active: boolean; onRe
       <IconButton
         icon={X}
         size="sm"
-        label={`Fermer et archiver ${tab.name}`}
-        hint="Fermer (la session reste dans la barre latérale, rouvrable)"
+        label={`Close and archive ${tab.name}`}
+        hint="Close (the session stays in the sidebar and can be reopened)"
         className={active ? "" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"}
         onClick={() => closeSession(tab.id)}
       />
@@ -72,7 +68,7 @@ export function TabBar({ onAddAgent }: { onAddAgent: () => void }) {
               // biome-ignore lint/a11y/noAutofocus: the user just asked to rename this tab
               autoFocus
               defaultValue={tab.name}
-              aria-label="Nom de la session"
+              aria-label="Session name"
               className="h-8 w-40 shrink-0 rounded-md border border-line-strong bg-base px-2.5 text-fg outline-none focus:border-accent"
               onBlur={(e) => {
                 deck.renameTab(tab.id, e.target.value.trim() || tab.name);
@@ -88,7 +84,7 @@ export function TabBar({ onAddAgent }: { onAddAgent: () => void }) {
           ),
         )}
       </div>
-      <IconButton icon={Plus} label="Nouvelle session" onClick={() => deck.addTab()} />
+      <IconButton icon={Plus} label="New session" onClick={() => deck.addTab()} />
 
       <button
         type="button"
@@ -96,7 +92,7 @@ export function TabBar({ onAddAgent }: { onAddAgent: () => void }) {
         className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover"
       >
         <Plus size={15} strokeWidth={1.5} aria-hidden="true" />
-        Ajouter un agent
+        Add agent
       </button>
     </nav>
   );

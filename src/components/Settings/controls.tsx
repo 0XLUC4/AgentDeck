@@ -1,4 +1,4 @@
-// Small form primitives shared by the Réglages sections.
+// Small form primitives shared by the Settings sections.
 import type { ReactNode } from "react";
 
 export const field =

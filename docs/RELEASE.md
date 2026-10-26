@@ -1,13 +1,12 @@
-# Publier une version d'AgentDeck
+# Publishing a release
 
-## 1. Préparer
+## Prepare
 
-- Monter la version dans `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` et `package.json` (mêmes numéros).
-- La clé privée de signature des mises à jour est dans `%USERPROFILE%\.tauri\agentdeck.key` (sans mot de passe).
-  **Ne jamais la committer. La sauvegarder** (gestionnaire de mots de passe) : sans elle, les installations
-  existantes ne pourront plus accepter de mise à jour. La clé publique est dans `plugins.updater.pubkey`.
+- Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`.
+- The private signing key lives in `%USERPROFILE%\.tauri\agentdeck.key`. Never commit it and keep it
+  somewhere safe: without it, existing installs can no longer update.
 
-## 2. Construire (Windows, PowerShell)
+## Build
 
 ```powershell
 $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$env:USERPROFILE\.tauri\agentdeck.key"
@@ -15,42 +14,33 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 pnpm tauri build
 ```
 
-Sortie dans `src-tauri/target/release/bundle/` :
+The output lands in `src-tauri/target/release/bundle/` (`nsis/*.exe`, `msi/*.msi` and their `.sig` files).
 
-- `nsis/AgentDeck_<version>_x64-setup.exe` + `.sig` (installeur par utilisateur, FR/EN)
-- `msi/AgentDeck_<version>_x64_fr-FR.msi` / `_en-US.msi` + `.sig`
+## latest.json
 
-## 3. `latest.json`
-
-L'application interroge `https://agentdeck-updates.pages.dev/latest.json` (voir `plugins.updater.endpoints`).
+The app checks `https://github.com/0XLUC4/AgentDeck/releases/latest/download/latest.json`.
 
 ```json
 {
   "version": "0.2.0",
-  "notes": "Nouveautés de la version",
+  "notes": "What changed",
   "pub_date": "2026-11-01T12:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "<contenu du fichier AgentDeck_0.2.0_x64-setup.exe.sig>",
-      "url": "https://agentdeck-updates.pages.dev/AgentDeck_0.2.0_x64-setup.exe"
+      "signature": "<contents of the .exe.sig file>",
+      "url": "https://github.com/0XLUC4/AgentDeck/releases/download/v0.2.0/AgentDeck_0.2.0_x64-setup.exe"
     }
   }
 }
 ```
 
-- `signature` = le **contenu** du `.sig`, pas son chemin.
-- `version` doit être supérieure à la version installée (semver), sinon rien n'est proposé.
+`signature` is the contents of the `.sig` file, not its path. `version` must be higher than the installed version.
 
-## 4. Héberger sur Cloudflare (plus tard)
-
-**Pages** (le plus simple, fichiers ≤ 25 Mo) :
+## Publish
 
 ```powershell
-mkdir release; copy src-tauri\target\release\bundle\nsis\*.exe release\; # + latest.json
-pnpm dlx wrangler pages deploy release --project-name agentdeck-updates
+gh release create v0.2.0 --title "AgentDeck 0.2.0" --notes "..." `
+  src-tauri/target/release/bundle/nsis/AgentDeck_0.2.0_x64-setup.exe `
+  src-tauri/target/release/bundle/msi/AgentDeck_0.2.0_x64_en-US.msi `
+  latest.json
 ```
-
-**R2** (gros fichiers) : déposer l'installeur dans un bucket public (domaine personnalisé ou `r2.dev`),
-mettre son URL dans `latest.json`, et servir `latest.json` depuis Pages ou R2.
-Si l'endpoint change, mettre à jour `plugins.updater.endpoints` **avant** de distribuer la version :
-les versions déjà installées ne connaissent que l'ancienne URL.

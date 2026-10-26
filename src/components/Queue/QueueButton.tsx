@@ -40,13 +40,13 @@ function QueueDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) {
       <div className="flex items-center justify-between pt-4 pr-3 pl-5">
         <div className="min-w-0">
           <h2 id="queue-title" className="text-[15px] font-medium">
-            File d'attente
+            Queue
           </h2>
           <p className="truncate text-xs text-subtle">
-            {pane.title || AGENTS[pane.agent].name} · envoi automatique 1,5 s après chaque tâche terminée
+            {pane.title || AGENTS[pane.agent].name} · sent automatically 1.5 s after each finished task
           </p>
         </div>
-        <IconButton icon={X} label="Fermer" hint="Fermer (Échap)" onClick={onClose} />
+        <IconButton icon={X} label="Close" hint="Close (Esc)" onClick={onClose} />
       </div>
 
       <div className="flex flex-col gap-3 p-5">
@@ -59,15 +59,15 @@ function QueueDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) {
             onKeyDown={(e) => {
               if (e.key === "Enter" && e.ctrlKey) add();
             }}
-            placeholder="Prompt à mettre en file (Ctrl+Entrée)"
-            aria-label="Nouveau prompt"
+            placeholder="Prompt to queue (Ctrl+Enter)"
+            aria-label="New prompt"
             className="min-h-16 min-w-0 flex-1 resize-y rounded-md border border-line bg-base px-2.5 py-1.5 text-fg outline-none transition-colors duration-150 placeholder:text-subtle hover:border-line-strong focus:border-accent"
           />
-          <IconButton icon={Plus} type="submit" label="Ajouter" disabled={!text.trim()} />
+          <IconButton icon={Plus} type="submit" label="Add" disabled={!text.trim()} />
         </form>
 
         {queue.items.length === 0 ? (
-          <p className="py-3 text-center text-muted">File vide.</p>
+          <p className="py-3 text-center text-muted">Queue is empty.</p>
         ) : (
           <ol className="scroll-thin flex max-h-72 flex-col overflow-y-auto rounded-md border border-line">
             {queue.items.map((item, i) => (
@@ -80,14 +80,14 @@ function QueueDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) {
                 <IconButton
                   icon={ArrowUp}
                   size="sm"
-                  label="Monter"
+                  label="Move up"
                   disabled={i === 0}
                   onClick={() => queues.move(pane.id, item.id, -1)}
                 />
                 <IconButton
                   icon={ArrowDown}
                   size="sm"
-                  label="Descendre"
+                  label="Move down"
                   disabled={i === queue.items.length - 1}
                   onClick={() => queues.move(pane.id, item.id, 1)}
                 />
@@ -95,7 +95,7 @@ function QueueDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) {
                   icon={Trash2}
                   size="sm"
                   tone="danger"
-                  label="Supprimer"
+                  label="Remove"
                   onClick={() => queues.remove(pane.id, item.id)}
                 />
               </li>
@@ -106,7 +106,7 @@ function QueueDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) {
 
       <div className="flex items-center gap-2 border-t border-line px-5 py-3">
         <span className="mr-auto text-xs text-subtle" role="status">
-          {queue.paused ? "En pause" : `${queue.items.length} en attente`}
+          {queue.paused ? "Paused" : `${queue.items.length} queued`}
         </span>
         <button
           type="button"
@@ -118,17 +118,17 @@ function QueueDialog({ pane, onClose }: { pane: Pane; onClose: () => void }) {
           ) : (
             <Pause size={14} strokeWidth={1.5} aria-hidden="true" />
           )}
-          {queue.paused ? "Reprendre" : "Mettre en pause"}
+          {queue.paused ? "Resume" : "Pause"}
         </button>
         <button
           type="button"
           disabled={busy || queue.items.length === 0}
-          title={busy ? "L'agent est occupé : le suivant partira quand il aura terminé" : undefined}
+          title={busy ? "The agent is busy: the next prompt goes out when it finishes" : undefined}
           onClick={() => void sendNext(pane.id)}
           className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
         >
           <Send size={14} strokeWidth={1.5} aria-hidden="true" />
-          Envoyer le suivant
+          Send next
         </button>
       </div>
     </dialog>
@@ -150,9 +150,9 @@ export function QueueButton({ pane, active }: { pane: Pane; active: boolean }) {
       // Disabled buttons get no pointer events: the tooltip lives on the wrapper.
       <span
         className={`inline-flex ${visibility}`}
-        title="File d'attente : uniquement pour Claude Code et Codex (fin de tâche détectée par les hooks)"
+        title="Queue: Claude Code and Codex only (task end is detected by hooks)"
       >
-        <IconButton icon={ListPlus} size="sm" label="File d'attente indisponible" disabled />
+        <IconButton icon={ListPlus} size="sm" label="Queue unavailable" disabled />
       </span>
     );
   }
@@ -161,8 +161,8 @@ export function QueueButton({ pane, active }: { pane: Pane; active: boolean }) {
       <IconButton
         icon={ListPlus}
         size="sm"
-        label="File d'attente"
-        hint={count > 0 ? `File d'attente : ${count} prompt(s)${paused ? " (en pause)" : ""}` : "File d'attente"}
+        label="Queue"
+        hint={count > 0 ? `Queue: ${count} prompt(s)${paused ? " (paused)" : ""}` : "Queue"}
         onClick={() => setOpen(true)}
       />
       {count > 0 && (

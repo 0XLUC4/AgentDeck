@@ -131,7 +131,7 @@ pub fn rms(samples: &[f32]) -> f32 {
 }
 
 /// Linear-interpolation resampler.
-// shortcut: no anti-alias low-pass before downsampling; fine for speech STT, upgrade if quality suffers.
+// Note: no anti-alias low-pass before downsampling; fine for speech STT, upgrade if quality suffers.
 pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || from == 0 || input.is_empty() {
         return input.to_vec();

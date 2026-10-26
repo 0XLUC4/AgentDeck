@@ -27,14 +27,14 @@ import { ActivityToggle } from "./Activity";
 const appWindow = getCurrentWindow();
 const warn = (what: string) => (err: unknown) => console.warn(`${what} failed`, err);
 
-/** Runs a bulk action on the active session, asking first unless disabled in Réglages. */
+/** Runs a bulk action on the active session, asking first unless disabled in Settings. */
 function confirmBulk(question: (count: number) => string, action: () => Promise<unknown>) {
   const count = activeTab()?.paneIds.length ?? 0;
   if (count > 0 && (!useSettings.getState().confirmBulk || window.confirm(question(count)))) void action();
 }
 
-export const confirmStopAll = () => confirmBulk((n) => `Arrêter les ${n} agent(s) de cette session ?`, stopAll);
-export const confirmRestartAll = () => confirmBulk((n) => `Relancer les ${n} agent(s) de cette session ?`, restartAll);
+export const confirmStopAll = () => confirmBulk((n) => `Stop the ${n} agent(s) in this session?`, stopAll);
+export const confirmRestartAll = () => confirmBulk((n) => `Restart the ${n} agent(s) in this session?`, restartAll);
 
 /** Logo: three stacked cards, the front one in the accent color. */
 function AppMark() {
@@ -74,8 +74,8 @@ function WindowControls() {
     <div className="flex h-full shrink-0">
       <button
         type="button"
-        aria-label="Réduire"
-        title="Réduire"
+        aria-label="Minimize"
+        title="Minimize"
         className={`${base} hover:bg-hover hover:text-fg`}
         onClick={() => appWindow.minimize().catch(warn("minimize"))}
       >
@@ -83,8 +83,8 @@ function WindowControls() {
       </button>
       <button
         type="button"
-        aria-label={maximized ? "Restaurer la fenêtre" : "Agrandir la fenêtre"}
-        title={maximized ? "Restaurer" : "Agrandir"}
+        aria-label={maximized ? "Restore window" : "Maximize window"}
+        title={maximized ? "Restore" : "Maximize"}
         className={`${base} hover:bg-hover hover:text-fg`}
         onClick={() => appWindow.toggleMaximize().catch(warn("toggleMaximize"))}
       >
@@ -96,8 +96,8 @@ function WindowControls() {
       </button>
       <button
         type="button"
-        aria-label="Fermer AgentDeck"
-        title="Fermer"
+        aria-label="Close AgentDeck"
+        title="Close"
         className={`${base} hover:bg-close hover:text-fg`}
         onClick={() => appWindow.close().catch(warn("close"))}
       >
@@ -131,7 +131,7 @@ export function TitleBar({
     >
       <IconButton
         icon={PanelLeft}
-        label={sidebarOpen ? "Masquer les workspaces" : "Afficher les workspaces"}
+        label={sidebarOpen ? "Hide workspaces" : "Show workspaces"}
         aria-pressed={sidebarOpen}
         onClick={onToggleSidebar}
       />
@@ -140,11 +140,7 @@ export function TitleBar({
         <span data-tauri-drag-region className="font-semibold tracking-tight text-fg">
           AgentDeck
         </span>
-        <nav
-          data-tauri-drag-region
-          aria-label="Emplacement"
-          className="flex min-w-0 items-center gap-1 pl-2 text-muted"
-        >
+        <nav data-tauri-drag-region aria-label="Location" className="flex min-w-0 items-center gap-1 pl-2 text-muted">
           <ChevronRight size={14} className="pointer-events-none shrink-0 text-subtle" aria-hidden="true" />
           <span data-tauri-drag-region className="truncate">
             {workspaceName}
@@ -158,30 +154,30 @@ export function TitleBar({
 
       <div data-tauri-drag-region className="h-full min-w-6 flex-1" />
 
-      <div className="flex items-center gap-0.5 pr-2" role="toolbar" aria-label="Contrôles de la session">
+      <div className="flex items-center gap-0.5 pr-2" role="toolbar" aria-label="Session controls">
         <IconButton
           icon={Megaphone}
-          label="Diffuser un prompt"
-          hint="Diffuser un prompt à plusieurs agents (Ctrl+Maj+B)"
+          label="Broadcast a prompt"
+          hint="Broadcast a prompt to several agents (Ctrl+Shift+B)"
           onClick={openBroadcast}
         />
         <IconButton
           icon={Pause}
-          label="Interrompre tout"
-          hint="Interrompre tout : envoie Échap (Ctrl+C pour un shell) à chaque agent de la session. Les agents restent ouverts."
+          label="Interrupt all"
+          hint="Interrupt all: sends Esc (Ctrl+C for a shell) to every agent in the session. Agents stay open."
           onClick={interruptAll}
         />
         <IconButton
           icon={RotateCcw}
-          label="Tout relancer"
-          hint="Relancer tous les agents de la session"
+          label="Restart all"
+          hint="Restart every agent in the session"
           onClick={confirmRestartAll}
         />
         <IconButton
           icon={SquareStop}
           tone="danger"
-          label="Tout arrêter"
-          hint="Arrêter tous les processus de la session"
+          label="Stop all"
+          hint="Stop every process in the session"
           onClick={confirmStopAll}
         />
       </div>
@@ -192,7 +188,7 @@ export function TitleBar({
         <HistoryButton />
         <JournalButton />
         <ActivityToggle open={activityOpen} onToggle={onToggleActivity} />
-        <IconButton icon={Settings} label="Réglages" hint="Réglages (Ctrl+,)" onClick={onOpenSettings} />
+        <IconButton icon={Settings} label="Settings" hint="Settings (Ctrl+,)" onClick={onOpenSettings} />
       </div>
       <span className="h-5 w-px bg-line" aria-hidden="true" />
       <WindowControls />

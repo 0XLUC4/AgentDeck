@@ -52,7 +52,7 @@ export function replayGate(write: (data: string) => void) {
     },
     replay(text: string) {
       if (!pending) return;
-      // shortcut: overlap is detected by suffix match, so a repeated chunk (spinner frame) may be dropped once.
+      // Note: overlap is detected by suffix match, so a repeated chunk (spinner frame) may be dropped once.
       let skip = pending.length;
       while (skip > 0 && !text.endsWith(pending.slice(0, skip).join(""))) skip--;
       if (text) write(text);

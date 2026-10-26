@@ -16,7 +16,7 @@ export function Modal({
 }: {
   title: string;
   onClose: () => void;
-  /** Extra header buttons, left of "Fermer". */
+  /** Extra header buttons, left of "Close". */
   actions?: ReactNode;
   className?: string;
   children: ReactNode;
@@ -38,7 +38,7 @@ export function Modal({
             {title}
           </h2>
           {actions}
-          <IconButton icon={X} label="Fermer" onClick={onClose} />
+          <IconButton icon={X} label="Close" onClick={onClose} />
         </div>
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
       </div>

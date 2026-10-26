@@ -39,7 +39,7 @@ interface Props {
 
 /** Closes the pane, asking first if the agent is still working. */
 export function confirmClose(pane: Pane) {
-  if (pane.status !== "working" || window.confirm(`${AGENTS[pane.agent].name} travaille encore. Fermer quand même ?`)) {
+  if (pane.status !== "working" || window.confirm(`${AGENTS[pane.agent].name} is still working. Close anyway?`)) {
     void closePane(pane.id);
   }
 }
@@ -47,7 +47,7 @@ export function confirmClose(pane: Pane) {
 function Elapsed({ since }: { since: number }) {
   const now = useNow();
   return (
-    <span className="shrink-0 font-mono text-xs tabular-nums text-muted" title="Temps écoulé sur la tâche">
+    <span className="shrink-0 font-mono text-xs tabular-nums text-muted" title="Time spent on the task">
       {formatElapsed(now - since)}
     </span>
   );
@@ -62,7 +62,7 @@ function TitleField({ pane, onDone }: { pane: Pane; onDone: () => void }) {
       // biome-ignore lint/a11y/noAutofocus: the user just asked to rename this pane
       autoFocus
       defaultValue={pane.title}
-      aria-label="Titre de la tâche"
+      aria-label="Task title"
       className="h-6 w-40 min-w-0 rounded-md border border-line-strong bg-base px-1.5 text-fg outline-none focus:border-accent"
       onPointerDown={stop}
       onMouseDown={stop}
@@ -118,7 +118,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
           {pane.completedCount > 0 && (
             <span
               className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-subtle"
-              title={`${pane.completedCount} tâche(s) terminée(s)`}
+              title={`${pane.completedCount} task(s) done`}
             >
               <CheckCheck size={12} strokeWidth={1.5} aria-hidden="true" />
               {pane.completedCount}
@@ -131,53 +131,53 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               active ? "opacity-100" : "opacity-0"
             }`}
             role="toolbar"
-            aria-label={`Actions ${agent.name}`}
+            aria-label={`${agent.name} actions`}
           >
-            <IconButton icon={Pencil} size="sm" label="Renommer" onClick={() => setRenaming(true)} />
+            <IconButton icon={Pencil} size="sm" label="Rename" onClick={() => setRenaming(true)} />
             <IconButton
               icon={GitBranch}
               size="sm"
               label="Git"
-              hint="Git : modifications, commit, merge, points de restauration"
+              hint="Git: changes, commit, merge, restore points"
               aria-pressed={gitOpen}
               onClick={() => setGitOpen(true)}
             />
             <IconButton
               icon={Pause}
               size="sm"
-              label="Interrompre"
-              hint="Interrompre la tâche en cours (Échap, ou Ctrl+C pour un shell). L'agent reste ouvert."
+              label="Interrupt"
+              hint="Interrupt the current task (Esc, or Ctrl+C for a shell). The agent stays open."
               onClick={() => interruptPane(pane.id)}
               disabled={pane.exited}
             />
-            <IconButton icon={RotateCcw} size="sm" label="Relancer" onClick={() => void restartPane(pane.id)} />
+            <IconButton icon={RotateCcw} size="sm" label="Restart" onClick={() => void restartPane(pane.id)} />
             <IconButton
               icon={ZoomOut}
               size="sm"
-              label="Dézoomer"
-              hint="Dézoomer (Ctrl+-)"
+              label="Zoom out"
+              hint="Zoom out (Ctrl+-)"
               onClick={() => deck.zoom(pane.id, -1)}
               disabled={pane.fontSize <= FONT_SIZE.min}
             />
             <IconButton
               icon={ZoomIn}
               size="sm"
-              label="Zoomer"
-              hint="Zoomer (Ctrl+=, Ctrl+0 pour réinitialiser)"
+              label="Zoom in"
+              hint="Zoom in (Ctrl+=, Ctrl+0 to reset)"
               onClick={() => deck.zoom(pane.id, 1)}
               disabled={pane.fontSize >= FONT_SIZE.max}
             />
             <IconButton
               icon={detached ? SquareArrowDownLeft : ExternalLink}
               size="sm"
-              label={detached ? "Rattacher" : "Détacher dans une fenêtre"}
+              label={detached ? "Reattach" : "Detach to a window"}
               onClick={() => toggleDetached(pane.id)}
             />
             <IconButton
               icon={maximized ? Minimize2 : Maximize2}
               size="sm"
-              label={maximized ? "Restaurer" : "Agrandir"}
-              hint={maximized ? "Restaurer (Échap)" : "Agrandir (double-clic sur l'en-tête)"}
+              label={maximized ? "Restore" : "Maximize"}
+              hint={maximized ? "Restore (Esc)" : "Maximize (double-click the header)"}
               aria-pressed={maximized}
               onClick={onToggleMaximize}
             />
@@ -188,7 +188,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
         icon={X}
         size="sm"
         tone="danger"
-        label="Fermer"
+        label="Close"
         className={compact ? "ml-auto" : ""}
         onClick={() => confirmClose(pane)}
       />

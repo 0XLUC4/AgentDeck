@@ -90,7 +90,7 @@ impl Permissions {
         };
         let truncated = truncate(&detail, MAX_DETAIL);
         let detail = if truncated.len() < detail.len() {
-            format!("{truncated}\n… (tronqué, voir le terminal)")
+            format!("{truncated}\n... (truncated, see the terminal)")
         } else {
             truncated
         };
@@ -120,12 +120,12 @@ impl Permissions {
     /// Unblocks the held hook. `decision`: "allow" | "allow_always" | "deny" | "ask" (back to the terminal).
     pub fn answer(&self, id: &str, decision: &str, message: Option<&str>) -> Result<(), String> {
         if !matches!(decision, "allow" | "allow_always" | "deny" | "ask") {
-            return Err(format!("décision inconnue : {decision}"));
+            return Err(format!("unknown decision: {decision}"));
         }
         let pending = self
             .lock()
             .remove(id)
-            .ok_or("Demande expirée ou déjà traitée")?;
+            .ok_or("Request expired or already handled")?;
         let body = decision_body(decision, message, &pending.always);
         // The holding thread may have just timed out: nothing left to answer.
         let _ = pending.tx.send(body);
@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(req.agent, "claude");
         let long = "x".repeat(MAX_DETAIL + 10);
         let (req, _rx) = p.register("p1", &request(&long));
-        assert!(req.detail.ends_with("(tronqué, voir le terminal)"));
+        assert!(req.detail.ends_with("(truncated, see the terminal)"));
         let (req, _rx) = p.register("p1", &json!({"tool_name": "Edit", "tool_input": {"a": 1}}));
         assert!(req.detail.contains("\"a\": 1"));
         assert!(req.suggestions.is_empty());
@@ -318,10 +318,10 @@ mod tests {
     #[test]
     fn decision_json_matches_docs() {
         assert_eq!(
-            decision_body("deny", Some("  pas ça "), &[]),
+            decision_body("deny", Some("  not that "), &[]),
             Some(
                 json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
-                "decision": {"behavior": "deny", "message": "pas ça"}}})
+                "decision": {"behavior": "deny", "message": "not that"}}})
             )
         );
         assert_eq!(

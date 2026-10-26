@@ -26,19 +26,19 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
       data-pane-id={pane.id}
       onFocusCapture={() => focusPane(pane.id)}
       onMouseDown={() => focusPane(pane.id)}
-      aria-label={`${AGENTS[pane.agent].name} : ${pane.title}`}
+      aria-label={`${AGENTS[pane.agent].name}: ${pane.title}`}
     >
       {detached ? (
         // The detached window owns the terminal; ours is unmounted and replays the buffer on reattach.
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted">
-          Détaché dans une fenêtre
+          Detached in a window
           <button
             type="button"
             onClick={() => void reattachPane(pane.id)}
             className="inline-flex items-center gap-1.5 rounded-md border border-line-strong px-2.5 py-1 font-medium text-fg transition-colors hover:bg-hover"
           >
             <SquareArrowDownLeft size={14} strokeWidth={1.5} aria-hidden="true" />
-            Rattacher
+            Reattach
           </button>
         </div>
       ) : (
@@ -50,14 +50,14 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
           className="flex shrink-0 items-center gap-3 border-t border-line bg-panel px-3 py-1.5 text-xs text-muted"
         >
           <span className="size-1.5 rounded-full bg-subtle" aria-hidden="true" />
-          Processus terminé. Appuyez sur R dans le terminal pour relancer.
+          Process exited. Press R in the terminal to restart.
           <button
             type="button"
             onClick={() => void restartPane(pane.id)}
             className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-line-strong px-2 py-0.5 font-medium text-fg transition-colors hover:bg-hover"
           >
             <RotateCcw size={13} strokeWidth={1.5} aria-hidden="true" />
-            Relancer
+            Restart
           </button>
         </div>
       )}

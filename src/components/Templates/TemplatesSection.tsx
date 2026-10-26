@@ -1,4 +1,4 @@
-// Réglages > Modèles: rename or delete saved session templates (builtins are read-only).
+// Settings > Templates: rename or delete saved session templates (builtins are read-only).
 import { Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { AGENTS } from "../../lib/agents";
@@ -25,7 +25,7 @@ function TemplateRow({ t, save }: { t: SessionTemplate; save: Save }) {
           // biome-ignore lint/a11y/noAutofocus: the user just asked to rename
           autoFocus
           defaultValue={t.name}
-          aria-label="Nom du modèle"
+          aria-label="Template name"
           className={`${field} flex-1`}
           onBlur={(e) => {
             const name = e.target.value.trim();
@@ -35,7 +35,7 @@ function TemplateRow({ t, save }: { t: SessionTemplate; save: Save }) {
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur();
             if (e.key === "Escape") {
-              e.stopPropagation(); // keep Réglages open
+              e.stopPropagation(); // keep Settings open
               setRenaming(false);
             }
           }}
@@ -50,16 +50,16 @@ function TemplateRow({ t, save }: { t: SessionTemplate; save: Save }) {
         <span className="sr-only">{t.panes.map((p) => AGENTS[p.agent].name).join(", ")}</span>
       </span>
       {t.builtin ? (
-        <span className="w-[3.25rem] shrink-0 text-right text-xs text-subtle">intégré</span>
+        <span className="w-[3.25rem] shrink-0 text-right text-xs text-subtle">built-in</span>
       ) : (
         <span className="flex shrink-0">
-          <IconButton icon={Pencil} size="sm" label={`Renommer ${t.name}`} onClick={() => setRenaming(true)} />
+          <IconButton icon={Pencil} size="sm" label={`Rename ${t.name}`} onClick={() => setRenaming(true)} />
           <IconButton
             icon={Trash2}
             size="sm"
             tone="danger"
-            label={`Supprimer ${t.name}`}
-            onClick={() => window.confirm(`Supprimer le modèle « ${t.name} » ?`) && save(deleteTemplate(t.id))}
+            label={`Delete ${t.name}`}
+            onClick={() => window.confirm(`Delete template "${t.name}"?`) && save(deleteTemplate(t.id))}
           />
         </span>
       )}
@@ -70,10 +70,9 @@ function TemplateRow({ t, save }: { t: SessionTemplate; save: Save }) {
 export function TemplatesSection({ save }: { save: Save }) {
   const list = useTemplates((s) => s.list);
   return (
-    <Section title="Modèles de session">
+    <Section title="Session templates">
       <p className="pb-2 text-xs text-subtle">
-        Enregistrez une session depuis « Nouvelle session depuis un modèle » (barre latérale). Les dossiers sont
-        mémorisés relativement au workspace.
+        Save a session from "New session from template" (sidebar). Folders are stored relative to the workspace.
       </p>
       {[...BUILTIN_TEMPLATES, ...list].map((t) => (
         <TemplateRow key={t.id} t={t} save={save} />

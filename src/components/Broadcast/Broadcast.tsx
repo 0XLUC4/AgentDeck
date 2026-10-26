@@ -1,4 +1,4 @@
-// "Diffuser un prompt": one prompt sent to several running agents of the current workspace.
+// "Broadcast prompt": one prompt sent to several running agents of the current workspace.
 import { Check, CircleAlert, Send, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
@@ -84,11 +84,11 @@ function Composer({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between pt-4 pr-3 pl-5">
           <div>
             <h2 id="broadcast-title" className="text-[15px] font-medium">
-              Diffuser un prompt
+              Broadcast prompt
             </h2>
-            <p className="text-xs text-subtle">Agents en cours dans {workspace.name}</p>
+            <p className="text-xs text-subtle">Running agents in {workspace.name}</p>
           </div>
-          <IconButton icon={X} label="Fermer" hint="Fermer (Échap)" onClick={onClose} />
+          <IconButton icon={X} label="Close" hint="Close (Esc)" onClick={onClose} />
         </div>
 
         <div className="flex flex-col gap-4 p-5">
@@ -100,22 +100,22 @@ function Composer({ onClose }: { onClose: () => void }) {
               if (e.key === "Enter" && e.ctrlKey) void submit();
             }}
             rows={5}
-            placeholder="Prompt envoyé à chaque agent sélectionné…"
+            placeholder="Prompt sent to every selected agent…"
             aria-label="Prompt"
             className="min-h-24 resize-y rounded-md border border-line bg-base px-3 py-2 text-fg outline-none transition-colors duration-150 placeholder:text-subtle hover:border-line-strong focus:border-accent"
           />
 
           <fieldset className="flex flex-wrap items-center gap-1.5">
-            <legend className="sr-only">Sélection rapide</legend>
+            <legend className="sr-only">Quick select</legend>
             <button
               type="button"
               className={chip}
               onClick={() => setSelected(new Set(targets.map(({ pane }) => pane.id)))}
             >
-              Tous
+              All
             </button>
             <button type="button" className={chip} onClick={() => setSelected(new Set(sessionIds()))}>
-              Session courante
+              Current session
             </button>
             {kinds.map((kind) => (
               <button key={kind} type="button" className={chip} onClick={() => selectKind(kind)}>
@@ -124,12 +124,12 @@ function Composer({ onClose }: { onClose: () => void }) {
               </button>
             ))}
             <button type="button" className={`${chip} ml-auto`} onClick={() => setSelected(new Set())}>
-              Aucun
+              None
             </button>
           </fieldset>
 
           {targets.length === 0 ? (
-            <p className="py-4 text-center text-muted">Aucun agent en cours dans ce workspace.</p>
+            <p className="py-4 text-center text-muted">No running agents in this workspace.</p>
           ) : (
             <ul className="scroll-thin flex max-h-64 flex-col overflow-y-auto rounded-md border border-line">
               {targets.map(({ pane, tab }) => {
@@ -147,14 +147,14 @@ function Composer({ onClose }: { onClose: () => void }) {
                       <span className="truncate text-fg">{pane.title || AGENTS[pane.agent].name}</span>
                       <span className="truncate text-xs text-subtle">{tab.name}</span>
                       <span className="ml-auto flex shrink-0 items-center gap-2 text-xs">
-                        {pane.status === "waiting" && <span className="text-wait">attend une réponse</span>}
+                        {pane.status === "waiting" && <span className="text-wait">waiting for a reply</span>}
                         <span title={STATUS[pane.status].label} className="inline-flex">
                           <StatusDot status={pane.status} />
                         </span>
                         {result?.ok && (
                           <span className="inline-flex items-center gap-1 text-ok">
                             <Check size={12} strokeWidth={1.5} aria-hidden="true" />
-                            Envoyé
+                            Sent
                           </span>
                         )}
                         {result && !result.ok && (
@@ -174,20 +174,20 @@ function Composer({ onClose }: { onClose: () => void }) {
           {waiting > 0 && (
             <p className="flex items-center gap-2 text-xs text-wait">
               <CircleAlert size={13} strokeWidth={1.5} aria-hidden="true" />
-              {waiting} agent(s) attendent une réponse : le prompt leur arrivera comme réponse à leur question.
+              {waiting} agent(s) waiting for a reply: the prompt will arrive as their answer.
             </p>
           )}
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t border-line px-5 py-3">
-          <span className="mr-auto text-xs text-subtle">Ctrl+Entrée pour envoyer</span>
+          <span className="mr-auto text-xs text-subtle">Ctrl+Enter to send</span>
           <button
             type="submit"
             disabled={!text.trim() || chosen.length === 0 || sending}
             className="inline-flex h-8 items-center gap-2 rounded-md bg-accent px-3 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-40"
           >
             <Send size={14} strokeWidth={1.5} aria-hidden="true" />
-            Envoyer à {chosen.length}
+            Send to {chosen.length}
           </button>
         </div>
       </form>
