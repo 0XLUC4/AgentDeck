@@ -1,26 +1,26 @@
 @import "tailwindcss";
 
 /*
- * Warm graphite neutrals (hue 70, tiny chroma) + one ivory accent.
+ * Pure neutral greys + one light-grey accent.
  * Color is reserved for agent identity and status; chrome stays quiet.
  */
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
 
-  --color-gutter: oklch(0.13 0.004 70);
-  --color-base: oklch(0.165 0.005 70);
-  --color-panel: oklch(0.195 0.006 70);
-  --color-raised: oklch(0.235 0.007 70);
-  --color-hover: oklch(0.27 0.008 70);
-  --color-line: oklch(0.28 0.007 70);
-  --color-line-strong: oklch(0.36 0.008 70);
-  --color-fg: oklch(0.93 0.008 80);
-  --color-muted: oklch(0.76 0.008 75);
-  --color-subtle: oklch(0.6 0.008 75);
-  --color-accent: oklch(0.93 0.03 85);
-  --color-accent-hover: oklch(0.98 0.02 85);
-  --color-on-accent: oklch(0.2 0.01 70);
+  --color-gutter: oklch(0.13 0 0);
+  --color-base: oklch(0.165 0 0);
+  --color-panel: oklch(0.195 0 0);
+  --color-raised: oklch(0.235 0 0);
+  --color-hover: oklch(0.27 0 0);
+  --color-line: oklch(0.28 0 0);
+  --color-line-strong: oklch(0.36 0 0);
+  --color-fg: oklch(0.93 0 0);
+  --color-muted: oklch(0.76 0 0);
+  --color-subtle: oklch(0.6 0 0);
+  --color-accent: oklch(0.93 0 0);
+  --color-accent-hover: oklch(0.98 0 0);
+  --color-on-accent: oklch(0.2 0 0);
 
   --color-ok: oklch(0.76 0.15 150);
   --color-busy: oklch(0.74 0.13 245);
@@ -30,9 +30,9 @@
 
   /* Agent brand colors (simple-icons hex, lifted where too dark for this background). */
   --color-agent-claude: #d97757;
-  --color-agent-codex: oklch(0.86 0.01 80);
+  --color-agent-codex: oklch(0.86 0 0);
   --color-agent-gemini: #8e75b2;
-  --color-agent-shell: oklch(0.76 0.008 75);
+  --color-agent-shell: oklch(0.76 0 0);
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
 }
@@ -61,7 +61,7 @@ body {
 }
 
 ::selection {
-  background: oklch(0.4 0.02 80);
+  background: oklch(0.4 0 0);
 }
 
 /* Waiting for the user: the status dot pulses (the only looping animation in the app). */
