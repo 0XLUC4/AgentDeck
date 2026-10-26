@@ -57,6 +57,8 @@ export interface SpawnOptions {
   title?: string;
   /** Extra env for the process; the backend only accepts AGENTDECK_MCP_SECRET (orchestrators). */
   env?: Record<string, string>;
+  /** Pre-accept the agent's folder trust prompt for the pane's folder (settings.trustAgentFolders). */
+  trust?: boolean;
 }
 
 /** A project folder currently open in an app (VS Code, Cursor, Explorer...). From `list_open_projects`. */

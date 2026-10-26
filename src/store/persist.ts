@@ -1,5 +1,6 @@
 // Saves workspaces, open tabs (layout + pane specs) and archived sessions to store.json; restores them on startup.
 import { load, type Store } from "@tauri-apps/plugin-store";
+import { killPane, listPanes } from "../lib/ipc";
 import {
   DEFAULT_WORKSPACE_NAME,
   deck,
@@ -83,15 +84,28 @@ export function hydrate(saved: Saved): SavedSession[] {
   return sessions;
 }
 
-/** Loads the saved state (respawning each pane fresh), then autosaves on every change. */
+/**
+ * After a webview-only reload the backend still runs the old panes: restored panes still alive are
+ * adopted (not respawned), live panes no open session restores are orphans to kill.
+ */
+export function planRestore(sessions: SavedSession[], alive: string[]): { adopt: Set<string>; orphans: string[] } {
+  const restored = new Set(sessions.flatMap((s) => s.panes.map((p) => p.id)));
+  return {
+    adopt: new Set(alive.filter((id) => restored.has(id))),
+    orphans: alive.filter((id) => !restored.has(id)),
+  };
+}
+
+/** Loads the saved state (adopting live panes, spawning the others), then autosaves on every change. */
 export async function restoreAndAutosave(): Promise<void> {
   try {
     store = await load("store.json", { autoSave: 500 });
     const saved = migrate(await store.get(KEY));
-    if (saved) {
-      for (const tab of hydrate(saved)) {
-        for (const pane of tab.panes) void createPane(pane, tab.id);
-      }
+    const sessions = saved ? hydrate(saved) : [];
+    const { adopt, orphans } = planRestore(sessions, await listPanes().catch(() => []));
+    for (const id of orphans) killPane(id).catch((err) => console.warn("kill_pane failed", err));
+    for (const tab of sessions) {
+      for (const pane of tab.panes) void createPane(pane, tab.id, adopt.has(pane.id));
     }
   } catch (err) {
     deck.toast(`Could not restore the session: ${err instanceof Error ? err.message : String(err)}`);

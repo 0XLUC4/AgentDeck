@@ -31,6 +31,10 @@ interface Runtime {
   onExit: (() => void) | null;
   /** When the current process was spawned (ms); pane usage counts from here. */
   startedAt?: number;
+  /** Adopted after a webview reload: the next size report forces the TUI to repaint. */
+  redraw?: boolean;
+  /** The terminal has reported its size at least once. */
+  sized?: boolean;
 }
 
 const runtimes = new Map<string, Runtime>();
@@ -56,8 +60,11 @@ function once(inflight: Map<string, Promise<void>>, id: string, job: () => Promi
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** Creates the pane in the store, subscribes to its output, then spawns the process. */
-export async function createPane(spec: PaneSpec, tabId: string): Promise<void> {
+/**
+ * Creates the pane in the store, subscribes to its output, then spawns the process.
+ * `adopt`: the process is still alive in the backend (webview reload), only reattach to it.
+ */
+export async function createPane(spec: PaneSpec, tabId: string, adopt = false): Promise<void> {
   deck.addPane(newPane(spec), tabId);
   const rt: Runtime = {
     buffer: new RingBuffer(),
@@ -90,8 +97,28 @@ export async function createPane(spec: PaneSpec, tabId: string): Promise<void> {
     for (const unlisten of rt.unlisten) unlisten();
     return;
   }
-  await spawn(spec.id);
+  if (adopt) adoptPane(spec.id);
+  else await spawn(spec.id);
 }
+
+/** Reattaches to a live process: no spawn; the screen is repainted on the first size report. */
+function adoptPane(id: string): void {
+  const rt = runtimes.get(id);
+  if (!rt) return;
+  rt.startedAt = Date.now();
+  if (rt.sized) nudgeSize(id, rt);
+  else rt.redraw = true;
+  deck.updatePane(id, (p) => ({ ...p, exited: false, statusSince: Date.now() }));
+}
+
+/** TUIs repaint on resize: nudge the width so even an unchanged size redraws the adopted screen. */
+function nudgeSize(id: string, rt: Runtime): void {
+  resizePane(id, Math.max(rt.cols - 1, 1), rt.rows)
+    .then(() => resizePane(id, rt.cols, rt.rows))
+    .catch(() => undefined);
+}
+
+const ALREADY_RUNNING = "pane id already in use";
 
 async function spawn(id: string): Promise<void> {
   const pane = useDeck.getState().panes[id];
@@ -113,11 +140,14 @@ async function spawn(id: string): Promise<void> {
       rows,
       title: pane.title,
       env: mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : undefined,
+      trust: useSettings.getState().trustAgentFolders,
     });
     // The terminal may have been fitted while spawning.
     if (rt.cols !== cols || rt.rows !== rows) await resizePane(id, rt.cols, rt.rows);
   } catch (err) {
-    failPane(id, err);
+    // Race with a webview reload: the process is already running under this id.
+    if (errorMessage(err) === ALREADY_RUNNING) adoptPane(id);
+    else failPane(id, err);
   }
 }
 
@@ -236,7 +266,16 @@ export function sendInput(id: string, data: string): void {
 
 export function reportSize(id: string, cols: number, rows: number): void {
   const rt = runtimes.get(id);
-  if (!rt || (rt.cols === cols && rt.rows === rows)) return;
+  if (!rt) return;
+  rt.sized = true;
+  if (rt.redraw) {
+    rt.redraw = false;
+    rt.cols = cols;
+    rt.rows = rows;
+    nudgeSize(id, rt);
+    return;
+  }
+  if (rt.cols === cols && rt.rows === rows) return;
   rt.cols = cols;
   rt.rows = rows;
   resizePane(id, cols, rows).catch(() => undefined); // fails harmlessly before spawn completes

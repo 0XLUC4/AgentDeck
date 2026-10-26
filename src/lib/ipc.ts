@@ -33,6 +33,8 @@ export const writeToPane = (paneId: string, data: string) => invoke<void>("write
 export const resizePane = (paneId: string, cols: number, rows: number) =>
   invoke<void>("resize_pane", { paneId, cols, rows });
 export const killPane = (paneId: string) => invoke<void>("kill_pane", { paneId });
+/** Ids of panes still running in the backend (they survive a webview reload). */
+export const listPanes = () => invoke<string[]>("list_panes");
 export const setActivePane = (paneId: string | null) => invoke<void>("set_active_pane", { paneId });
 export const detectAgents = () => invoke<AgentInfo[]>("detect_agents");
 export const uninstallHooks = (cwd: string) => invoke<void>("uninstall_hooks", { cwd });

@@ -21,7 +21,7 @@ vi.mock("../lib/ipc", () => ({
 }));
 vi.mock("../lib/notify", () => ({ notify: vi.fn() }));
 
-const { closePane, createPane, focusPane, restartPane } = await import("./runtime");
+const { closePane, createPane, focusPane, reportSize, restartPane } = await import("./runtime");
 const { deck, useDeck } = await import("./deck");
 const deckSetDone = (id: string) => deck.setStatus(id, "done", null);
 
@@ -88,5 +88,24 @@ describe("runtime", () => {
     await creating;
     expect(ipc.spawnPane).not.toHaveBeenCalled();
     expect(exitHandlers.has("p3")).toBe(false);
+  });
+
+  it("adopts a live pane without spawning and repaints it on the first size report", async () => {
+    await createPane(spec("p4"), "t1", true);
+    expect(ipc.spawnPane).not.toHaveBeenCalled();
+    reportSize("p4", 100, 30);
+    await vi.waitFor(() => expect(ipc.resizePane).toHaveBeenCalledTimes(2));
+    expect(ipc.resizePane.mock.calls).toEqual([
+      ["p4", 99, 30],
+      ["p4", 100, 30],
+    ]);
+  });
+
+  it("treats 'pane id already in use' as adopt, not as an error", async () => {
+    ipc.spawnPane.mockRejectedValueOnce("pane id already in use");
+    await createPane(spec("p5"), "t1");
+    const pane = useDeck.getState().panes.p5;
+    expect(pane.status).not.toBe("error");
+    expect(pane.exited).toBe(false);
   });
 });

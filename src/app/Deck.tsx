@@ -9,7 +9,9 @@ import "dockview-react/dist/styles/dockview.css";
 import { useEffect, useState } from "react";
 import { EmptyPaneHeader, PaneHeader } from "../components/TerminalPane/PaneHeader";
 import { PanePanel } from "../components/TerminalPane/PanePanel";
+import { gridLayout } from "../lib/gridLayout";
 import { deck, type Tab, useDeck } from "../store/deck";
+import { useSettings } from "../store/settings";
 
 const components = { pane: PanePanel };
 
@@ -31,6 +33,22 @@ export function toggleMaximizePane(tabId: string, paneId: string): void {
   if (!panel) return;
   if (panel.api.isMaximized()) panel.api.exitMaximized();
   else panel.api.maximize();
+}
+
+/** Re-lays the session's panes on a grid (store order), keeping the panels mounted, then saves the layout. */
+export function arrangePanesInGrid(tabId: string): void {
+  const api = apis.get(tabId);
+  const tab = useDeck.getState().tabs.find((t) => t.id === tabId);
+  if (!api || !tab) return;
+  if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
+  const { panels } = api.toJSON();
+  const ids = tab.paneIds.filter((id) => panels[id]);
+  if (ids.length === 0) return;
+  const activeId = api.activePanel?.id;
+  // A hidden container can report 0: sizes are only proportions, so any non-zero size works.
+  api.fromJSON(gridLayout(ids, panels, api.width || 1200, api.height || 800), { reuseExistingPanels: true });
+  if (activeId) api.getPanel(activeId)?.api.setActive();
+  deck.setTabLayout(tabId, api.toJSON());
 }
 
 const theme: DockviewTheme = {
@@ -75,11 +93,22 @@ function PaneTab({ api, containerApi }: IDockviewPanelHeaderProps) {
 export function Deck({ tab }: { tab: Tab }) {
   const [api, setApi] = useState<DockviewApi | null>(null);
 
+  // Registered before the pane sync below, which may re-grid through `apis`.
+  useEffect(() => {
+    if (!api) return;
+    apis.set(tab.id, api);
+    return () => {
+      apis.delete(tab.id);
+    };
+  }, [api, tab.id]);
+
   useEffect(() => {
     if (!api) return;
     const { panes } = useDeck.getState();
+    let changed = false;
     for (const id of tab.paneIds) {
       if (!api.getPanel(id)) {
+        changed = true;
         // New panes go side by side (not as tabs of the same group).
         const last = api.panels[api.panels.length - 1];
         api.addPanel({
@@ -92,17 +121,14 @@ export function Deck({ tab }: { tab: Tab }) {
       }
     }
     for (const panel of api.panels) {
-      if (!tab.paneIds.includes(panel.id)) panel.api.close();
+      if (!tab.paneIds.includes(panel.id)) {
+        changed = true;
+        panel.api.close();
+      }
     }
-  }, [api, tab.paneIds]);
-
-  useEffect(() => {
-    if (!api) return;
-    apis.set(tab.id, api);
-    return () => {
-      apis.delete(tab.id);
-    };
-  }, [api, tab.id]);
+    // A restored layout that already matches the panes is kept as is.
+    if (changed && useSettings.getState().autoGrid) arrangePanesInGrid(tab.id);
+  }, [api, tab.paneIds, tab.id]);
 
   useEffect(() => {
     if (!api) return;

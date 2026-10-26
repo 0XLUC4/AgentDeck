@@ -35,8 +35,12 @@ export interface Settings {
   activityOpen: boolean;
   /** Closing the main window hides it in the system tray instead of quitting. */
   closeToTray: boolean;
+  /** Re-arranges a session's panes in a grid whenever one is added or removed. */
+  autoGrid: boolean;
   notify: NotifySettings;
   agents: Record<AgentKind, AgentDefaults>;
+  /** Pre-accept each agent's "trust this folder" prompt for folders opened in AgentDeck. */
+  trustAgentFolders: boolean;
   speech: SpeechSettings;
 }
 
@@ -49,8 +53,10 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarOpen: true,
   activityOpen: false,
   closeToTray: false,
+  autoGrid: true,
   notify: { enabled: true, sound: true, done: true, waiting: true, error: false, onlyUnseen: true },
   speech: { enabled: false, voice: "", rate: 1 },
+  trustAgentFolders: true,
   agents: Object.fromEntries(AGENT_KINDS.map((k) => [k, { args: "", worktree: false }])) as Record<
     AgentKind,
     AgentDefaults
@@ -75,6 +81,8 @@ export function mergeSettings(raw: unknown): Settings {
     sidebarOpen: bool(raw.sidebarOpen, d.sidebarOpen),
     activityOpen: bool(raw.activityOpen, d.activityOpen),
     closeToTray: bool(raw.closeToTray, d.closeToTray),
+    autoGrid: bool(raw.autoGrid, d.autoGrid),
+    trustAgentFolders: bool(raw.trustAgentFolders, d.trustAgentFolders),
     notify: {
       enabled: bool(n.enabled, d.notify.enabled),
       sound: bool(n.sound, d.notify.sound),
