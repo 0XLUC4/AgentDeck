@@ -16,6 +16,7 @@ pub enum AgentKind {
     Claude,
     Codex,
     Gemini,
+    Grok,
     Shell,
 }
 
@@ -26,6 +27,7 @@ impl AgentKind {
             Self::Claude => Some("claude"),
             Self::Codex => Some("codex"),
             Self::Gemini => Some("gemini"),
+            Self::Grok => Some("grok"),
             Self::Shell => None,
         }
     }
@@ -35,6 +37,7 @@ impl AgentKind {
             Self::Claude => Some("https://code.claude.com/docs/en/setup"),
             Self::Codex => Some("https://github.com/openai/codex#quickstart"),
             Self::Gemini => Some("https://github.com/google-gemini/gemini-cli#-installation"),
+            Self::Grok => Some("https://docs.x.ai/build/overview"),
             Self::Shell => None,
         }
     }
@@ -56,6 +59,7 @@ pub fn detect_agents() -> Vec<AgentInfo> {
         AgentKind::Claude,
         AgentKind::Codex,
         AgentKind::Gemini,
+        AgentKind::Grok,
         AgentKind::Shell,
     ]
     .into_iter()
@@ -88,7 +92,15 @@ fn resolve_binary(bin: &str) -> Option<PathBuf> {
     } else {
         vec![String::new()]
     };
-    find_in_path(bin, &path, &exts)
+    // Grok's installer adds ~/.grok/bin to the user PATH, which an already-running app doesn't see yet.
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
+    let fallback = home.map(|h| {
+        std::path::PathBuf::from(h)
+            .join(".grok")
+            .join("bin")
+            .into_os_string()
+    });
+    find_in_path(bin, &path, &exts).or_else(|| find_in_path(bin, &fallback?, &exts))
 }
 
 /// First `dir/bin+ext` that is a file, dirs in PATH order then exts in order.

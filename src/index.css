@@ -32,6 +32,7 @@
   --color-agent-claude: #d97757;
   --color-agent-codex: oklch(0.86 0 0);
   --color-agent-gemini: #8e75b2;
+  --color-agent-grok: oklch(0.9 0 0);
   --color-agent-shell: oklch(0.76 0 0);
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);

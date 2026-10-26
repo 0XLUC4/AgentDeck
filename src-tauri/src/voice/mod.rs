@@ -18,8 +18,8 @@ use crate::AppState;
 use audio::Capture;
 
 // TODO(settings): make shortcut + mode configurable via tauri-plugin-store.
-/// Ctrl+Space conflicts with IME switching on Windows.
-const SHORTCUT: &str = "ctrl+shift+space";
+/// User's choice. Note: may clash with IME switching on some Windows keyboard setups.
+const SHORTCUT: &str = "ctrl+space";
 /// true: hold to talk. false: press to start, press again to stop.
 const PUSH_TO_TALK: bool = true;
 /// Append `\r` after the transcript. Off: the user validates in the terminal.

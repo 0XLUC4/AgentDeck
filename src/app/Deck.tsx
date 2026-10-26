@@ -13,6 +13,18 @@ import { deck, type Tab, useDeck } from "../store/deck";
 
 const components = { pane: PanePanel };
 
+/** Dockview api of each mounted session tab, so other parts of the UI can reveal a pane. */
+const apis = new Map<string, DockviewApi>();
+
+/** Makes a pane visible in its session: leaves another pane's maximized state, selects it if stacked. */
+export function revealPane(tabId: string, paneId: string): void {
+  const api = apis.get(tabId);
+  const panel = api?.getPanel(paneId);
+  if (!api || !panel) return;
+  if (api.hasMaximizedGroup() && !panel.api.isMaximized()) api.exitMaximizedGroup();
+  panel.api.setActive();
+}
+
 const theme: DockviewTheme = {
   ...themeDark,
   name: "agentdeck",
@@ -75,6 +87,14 @@ export function Deck({ tab }: { tab: Tab }) {
       if (!tab.paneIds.includes(panel.id)) panel.api.close();
     }
   }, [api, tab.paneIds]);
+
+  useEffect(() => {
+    if (!api) return;
+    apis.set(tab.id, api);
+    return () => {
+      apis.delete(tab.id);
+    };
+  }, [api, tab.id]);
 
   useEffect(() => {
     if (!api) return;

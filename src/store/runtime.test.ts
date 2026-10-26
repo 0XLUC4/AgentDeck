@@ -22,7 +22,8 @@ vi.mock("../lib/ipc", () => ({
 vi.mock("../lib/notify", () => ({ notify: vi.fn() }));
 
 const { closePane, createPane, focusPane, restartPane } = await import("./runtime");
-const { useDeck } = await import("./deck");
+const { deck, useDeck } = await import("./deck");
+const deckSetDone = (id: string) => deck.setStatus(id, "done", null);
 
 const spec = (id: string) => ({
   id,
@@ -71,6 +72,14 @@ describe("runtime", () => {
     await closePane("p2");
     expect(ipc.setActivePane).toHaveBeenLastCalledWith(null);
     expect(useDeck.getState().activePaneId).toBeNull();
+  });
+
+  it("acknowledges a finished pane when it gets focus", async () => {
+    await createPane(spec("p4"), "t1");
+    useDeck.setState({ activePaneId: "p4" });
+    deckSetDone("p4");
+    focusPane("p4"); // already active: still counts as seen
+    expect(useDeck.getState().panes.p4.status).toBe("idle");
   });
 
   it("does not spawn or keep listeners for a pane closed while subscribing", async () => {
