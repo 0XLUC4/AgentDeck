@@ -55,9 +55,19 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["English", "French"],
+        "languages": [
+          "English",
+          "French"
+        ],
         "displayLanguageSelector": true,
-        "startMenuFolder": "AgentDeck"
+        "startMenuFolder": "AgentDeck",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/nsis-header.bmp",
+        "sidebarImage": "installer/nsis-sidebar.bmp"
+      },
+      "wix": {
+        "bannerPath": "installer/wix-banner.bmp",
+        "dialogImagePath": "installer/wix-dialog.bmp"
       }
     },
     "icon": [
@@ -71,8 +81,12 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxRUJBQjlCQTcwRjAxRjAKUldUd0FRK25tNnZyMGVQN0ppbDhaZCt4TG5SVGwvZHMyWUdRVmZOdnQ3bWZtUnBRMHFPdGNKMjgK",
-      "endpoints": ["https://github.com/0XLUC4/AgentDeck/releases/latest/download/latest.json"],
-      "windows": { "installMode": "passive" }
+      "endpoints": [
+        "https://github.com/0XLUC4/AgentDeck/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
