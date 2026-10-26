@@ -155,6 +155,9 @@ export function Deck({ tab }: { tab: Tab }) {
       theme={theme}
       components={components}
       defaultTabComponent={PaneTab}
+      // Pointer drag instead of native HTML5 drag: in the webview, HTML5 drag on the header grabbed text
+      // and swallowed clicks on the header buttons.
+      dndStrategy="pointer"
       singleTabMode="fullwidth"
       disableFloatingGroups
       defaultRenderer="always"
