@@ -119,6 +119,11 @@ body {
   border-bottom: 1px solid var(--color-line);
 }
 
+/* We have our own empty state. Dockview's watermark can linger over a rebuilt grid and swallow every click. */
+.dockview-theme-agentdeck .dv-watermark-container {
+  display: none;
+}
+
 .dockview-theme-agentdeck .dv-tab {
   padding: 0;
 }
