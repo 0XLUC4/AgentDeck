@@ -6,8 +6,8 @@
 
 mod audio;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -47,18 +47,20 @@ pub fn init(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(pill) = app.get_webview_window("voice") {
         pill.set_focusable(false)?; // never steal focus from the terminal
     }
-    let registered = app.global_shortcut().on_shortcut(SHORTCUT, |app, _, event| {
-        let result = match (event.state(), PUSH_TO_TALK) {
-            (ShortcutState::Pressed, true) => start(app),
-            (ShortcutState::Released, true) => stop(app),
-            (ShortcutState::Pressed, false) if is_recording(app) => stop(app),
-            (ShortcutState::Pressed, false) => start(app),
-            (ShortcutState::Released, false) => Ok(()),
-        };
-        if let Err(e) = result {
-            fail(app, &e);
-        }
-    });
+    let registered = app
+        .global_shortcut()
+        .on_shortcut(SHORTCUT, |app, _, event| {
+            let result = match (event.state(), PUSH_TO_TALK) {
+                (ShortcutState::Pressed, true) => start(app),
+                (ShortcutState::Released, true) => stop(app),
+                (ShortcutState::Pressed, false) if is_recording(app) => stop(app),
+                (ShortcutState::Pressed, false) => start(app),
+                (ShortcutState::Released, false) => Ok(()),
+            };
+            if let Err(e) = result {
+                fail(app, &e);
+            }
+        });
     // Another app may own the shortcut: keep the app usable, voice_start still works.
     if let Err(e) = registered {
         eprintln!("voice: cannot register shortcut {SHORTCUT}: {e}");
@@ -90,7 +92,10 @@ pub fn voice_send(state: State<'_, AppState>, text: String, submit: bool) -> Res
 }
 
 fn is_recording(app: &AppHandle) -> bool {
-    app.state::<Voice>().capture.lock().is_ok_and(|c| c.is_some())
+    app.state::<Voice>()
+        .capture
+        .lock()
+        .is_ok_and(|c| c.is_some())
 }
 
 fn start(app: &AppHandle) -> Result<(), String> {
@@ -111,8 +116,15 @@ fn start(app: &AppHandle) -> Result<(), String> {
 }
 
 fn stop(app: &AppHandle) -> Result<(), String> {
-    let capture = app.state::<Voice>().capture.lock().map_err(|e| e.to_string())?.take();
-    let Some(capture) = capture else { return Ok(()) };
+    let capture = app
+        .state::<Voice>()
+        .capture
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take();
+    let Some(capture) = capture else {
+        return Ok(());
+    };
     let (samples, rate) = capture.stop()?;
     if (samples.len() as f32) < rate as f32 * MIN_CLIP_SECS {
         set_state(app, "idle");
@@ -137,7 +149,11 @@ fn transcribe_and_type(app: &AppHandle, samples: &[f32], rate: u32) -> Result<()
     let _ = app.emit("voice-transcript", text);
     // TODO(team-voice): route "Codex, ..." / "Claude, ..." to the matching pane once
     // pane metadata is available backend-side.
-    voice_send(app.state::<AppState>(), text.to_string(), SUBMIT_ON_TRANSCRIPT)
+    voice_send(
+        app.state::<AppState>(),
+        text.to_string(),
+        SUBMIT_ON_TRANSCRIPT,
+    )
 }
 
 /// POSTs a WAV to an OpenAI-compatible `/audio/transcriptions` endpoint.
@@ -148,7 +164,9 @@ fn transcribe(wav: Vec<u8>) -> Result<String, String> {
         text: String,
     }
     let url = std::env::var("AGENTDECK_STT_URL").ok();
-    let key = std::env::var("AGENTDECK_STT_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")).ok();
+    let key = std::env::var("AGENTDECK_STT_KEY")
+        .or_else(|_| std::env::var("OPENAI_API_KEY"))
+        .ok();
     if url.is_none() && key.is_none() {
         return Err("OPENAI_API_KEY is not set".into());
     }
@@ -157,7 +175,9 @@ fn transcribe(wav: Vec<u8>) -> Result<String, String> {
         .file_name("audio.wav")
         .mime_str("audio/wav")
         .map_err(|e| e.to_string())?;
-    let form = reqwest::blocking::multipart::Form::new().text("model", model).part("file", file);
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("model", model)
+        .part("file", file);
     let mut request = reqwest::blocking::Client::new()
         .post(url.as_deref().unwrap_or(DEFAULT_STT_URL))
         .timeout(Duration::from_secs(60))
@@ -165,10 +185,17 @@ fn transcribe(wav: Vec<u8>) -> Result<String, String> {
     if let Some(key) = key {
         request = request.bearer_auth(key);
     }
-    let response = request.send().map_err(|e| format!("transcription request failed: {e}"))?;
+    let response = request
+        .send()
+        .map_err(|e| format!("transcription request failed: {e}"))?;
     let status = response.status();
     if !status.is_success() {
-        let body: String = response.text().unwrap_or_default().chars().take(200).collect();
+        let body: String = response
+            .text()
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect();
         return Err(format!("transcription failed ({status}): {body}"));
     }
     response
@@ -190,7 +217,11 @@ fn fail(app: &AppHandle, message: &str) {
 /// Emits `voice-state`; idle/error schedule a delayed hide unless newer activity happens.
 fn set_state(app: &AppHandle, state: &'static str) {
     let _ = app.emit("voice-state", state);
-    let generation = app.state::<Voice>().generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let generation = app
+        .state::<Voice>()
+        .generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
     let delay = match state {
         "idle" => HIDE_DELAY,
         "error" => ERROR_HIDE_DELAY,
@@ -210,7 +241,9 @@ fn set_state(app: &AppHandle, state: &'static str) {
 
 /// Shows the pill bottom-center of the monitor under the cursor, without focusing it.
 fn show_pill(app: &AppHandle) {
-    let Some(pill) = app.get_webview_window("voice") else { return };
+    let Some(pill) = app.get_webview_window("voice") else {
+        return;
+    };
     let placed = (|| -> tauri::Result<()> {
         let cursor = app.cursor_position()?;
         let monitor = match app.monitor_from_point(cursor.x, cursor.y)? {

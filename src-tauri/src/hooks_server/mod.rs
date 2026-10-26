@@ -51,7 +51,8 @@ pub struct AgentStatusEvent {
 pub fn start(app: AppHandle) -> HookServer {
     let token = uuid::Uuid::new_v4().to_string();
     // shortcut: a second AgentDeck instance falls back to a random port and rewrites the Claude settings.
-    let server = Server::http(("127.0.0.1", PREFERRED_PORT)).or_else(|_| Server::http("127.0.0.1:0"));
+    let server =
+        Server::http(("127.0.0.1", PREFERRED_PORT)).or_else(|_| Server::http("127.0.0.1:0"));
     let server = match server {
         Ok(s) => s,
         Err(e) => {
@@ -63,22 +64,29 @@ pub fn start(app: AppHandle) -> HookServer {
     let expected = token.clone();
     std::thread::spawn(move || {
         for mut req in server.incoming_requests() {
-            let code = match handle(&mut req, &expected) {
-                Ok(Some(event)) => {
-                    let _ = app.emit("agent-status", event);
-                    204
-                }
-                Ok(None) => 204,
-                Err(code) => code,
-            };
-            let _ = req.respond(Response::empty(code));
+            // One thread per request: a slow body must not stall other panes' updates.
+            let (app, expected) = (app.clone(), expected.clone());
+            std::thread::spawn(move || {
+                let code = match handle(&mut req, &expected) {
+                    Ok(Some(event)) => {
+                        let _ = app.emit("agent-status", event);
+                        204
+                    }
+                    Ok(None) => 204,
+                    Err(code) => code,
+                };
+                let _ = req.respond(Response::empty(code));
+            });
         }
     });
     HookServer { port, token }
 }
 
 fn header<'a>(req: &'a Request, name: &'static str) -> Option<&'a str> {
-    req.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str())
+    req.headers()
+        .iter()
+        .find(|h| h.field.equiv(name))
+        .map(|h| h.value.as_str())
 }
 
 /// Validates and parses one request; `Err` is the HTTP status to answer.
@@ -97,35 +105,59 @@ fn handle(req: &mut Request, token: &str) -> Result<Option<AgentStatusEvent>, u1
         return Err(413);
     }
     // shortcut: no percent-decoding; pane ids are UUIDs.
-    let query_pane = query.split('&').find_map(|kv| kv.strip_prefix("pane=")).map(str::to_owned);
+    let query_pane = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("pane="))
+        .map(str::to_owned);
     let header_pane = header(req, PANE_HEADER).map(str::to_owned);
 
     let mut body = Vec::new();
-    req.as_reader().take(MAX_BODY + 1).read_to_end(&mut body).map_err(|_| 400u16)?;
+    req.as_reader()
+        .take(MAX_BODY + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| 400u16)?;
     if body.len() as u64 > MAX_BODY {
         return Err(413);
     }
     let json: Value = serde_json::from_slice(&body).map_err(|_| 400u16)?;
 
-    let pane_id = [query_pane, header_pane, json["paneId"].as_str().map(str::to_owned)]
-        .into_iter()
-        .flatten()
-        .find(|p| !p.is_empty())
-        .ok_or(400u16)?;
-    Ok(map_event(&json).map(|(status, last_action, event)| AgentStatusEvent { pane_id, status, last_action, event }))
+    let pane_id = [
+        query_pane,
+        header_pane,
+        json["paneId"].as_str().map(str::to_owned),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|p| !p.is_empty())
+    .ok_or(400u16)?;
+    Ok(
+        map_event(&json).map(|(status, last_action, event)| AgentStatusEvent {
+            pane_id,
+            status,
+            last_action,
+            event,
+        }),
+    )
 }
 
 /// Constant-time comparison (length leak is fine: tokens are fixed-length UUIDs).
 fn token_ok(given: &str, expected: &str) -> bool {
     given.len() == expected.len()
-        && given.bytes().zip(expected.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+        && given
+            .bytes()
+            .zip(expected.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
 }
 
 /// Maps a Claude Code hook payload or a Codex `notify` payload to a pane status.
 /// `None` means "no status change" (unknown or irrelevant event).
 pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
     let str_field = |k: &str| body[k].as_str().map(str::to_owned);
-    if let Some(kind) = body["type"].as_str().filter(|_| body.get("hook_event_name").is_none()) {
+    if let Some(kind) = body["type"]
+        .as_str()
+        .filter(|_| body.get("hook_event_name").is_none())
+    {
         // Codex notify.
         let status = match kind {
             "agent-turn-complete" => PaneStatus::Done,
@@ -138,7 +170,9 @@ pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
     let (status, action) = match event.as_str() {
         "SessionStart" => (PaneStatus::Idle, None),
         "UserPromptSubmit" => (PaneStatus::Working, None),
-        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => (PaneStatus::Working, describe_tool(body)),
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+            (PaneStatus::Working, describe_tool(body))
+        }
         "Notification" => match body["notification_type"].as_str() {
             None | Some("permission_prompt" | "elicitation_dialog" | "agent_needs_input") => {
                 (PaneStatus::Waiting, str_field("message"))
@@ -156,19 +190,38 @@ pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
 fn describe_tool(body: &Value) -> Option<String> {
     let tool = body["tool_name"].as_str()?;
     let input = &body["tool_input"];
-    let detail = ["command", "file_path", "notebook_path", "pattern", "url", "query"]
-        .iter()
-        .find_map(|k| input[*k].as_str());
-    let Some(detail) = detail else { return Some(tool.to_owned()) };
+    let detail = [
+        "command",
+        "file_path",
+        "notebook_path",
+        "pattern",
+        "url",
+        "query",
+    ]
+    .iter()
+    .find_map(|k| input[*k].as_str());
+    let Some(detail) = detail else {
+        return Some(tool.to_owned());
+    };
     let detail = body["cwd"]
         .as_str()
         .and_then(|cwd| detail.strip_prefix(cwd))
         .map_or(detail, |rel| rel.trim_start_matches(['/', '\\']));
-    let mut short: String = detail.lines().next().unwrap_or("").chars().take(60).collect();
+    let mut short: String = detail
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(60)
+        .collect();
     if short.len() < detail.len() {
         short.push('…');
     }
-    Some(if tool == "Bash" { format!("Bash: {short}") } else { format!("{tool} {short}") })
+    Some(if tool == "Bash" {
+        format!("Bash: {short}")
+    } else {
+        format!("{tool} {short}")
+    })
 }
 
 #[cfg(test)]
@@ -182,28 +235,50 @@ mod tests {
 
     #[test]
     fn maps_claude_events() {
-        assert_eq!(status(json!({"hook_event_name": "SessionStart"})), Some((PaneStatus::Idle, None)));
-        assert_eq!(status(json!({"hook_event_name": "UserPromptSubmit"})), Some((PaneStatus::Working, None)));
         assert_eq!(
-            status(json!({"hook_event_name": "PreToolUse", "cwd": "/repo", "tool_name": "Edit",
-                "tool_input": {"file_path": "/repo/src/STYLE.md"}})),
+            status(json!({"hook_event_name": "SessionStart"})),
+            Some((PaneStatus::Idle, None))
+        );
+        assert_eq!(
+            status(json!({"hook_event_name": "UserPromptSubmit"})),
+            Some((PaneStatus::Working, None))
+        );
+        assert_eq!(
+            status(
+                json!({"hook_event_name": "PreToolUse", "cwd": "/repo", "tool_name": "Edit",
+                "tool_input": {"file_path": "/repo/src/STYLE.md"}})
+            ),
             Some((PaneStatus::Working, Some("Edit src/STYLE.md".into())))
         );
         let long = "x".repeat(100);
         let (_, action) = status(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash",
-            "tool_input": {"command": long}})).unwrap();
+            "tool_input": {"command": long}}))
+        .unwrap();
         assert_eq!(action.unwrap(), format!("Bash: {}…", "x".repeat(60)));
         assert_eq!(
-            status(json!({"hook_event_name": "PostToolUse", "tool_name": "TodoWrite", "tool_input": {}})),
+            status(
+                json!({"hook_event_name": "PostToolUse", "tool_name": "TodoWrite", "tool_input": {}})
+            ),
             Some((PaneStatus::Working, Some("TodoWrite".into())))
         );
         assert_eq!(
-            status(json!({"hook_event_name": "Notification", "notification_type": "permission_prompt",
-                "message": "Claude needs your permission"})),
-            Some((PaneStatus::Waiting, Some("Claude needs your permission".into())))
+            status(
+                json!({"hook_event_name": "Notification", "notification_type": "permission_prompt",
+                "message": "Claude needs your permission"})
+            ),
+            Some((
+                PaneStatus::Waiting,
+                Some("Claude needs your permission".into())
+            ))
         );
-        assert_eq!(status(json!({"hook_event_name": "Notification", "notification_type": "idle_prompt"})), None);
-        assert_eq!(status(json!({"hook_event_name": "Stop"})), Some((PaneStatus::Done, None)));
+        assert_eq!(
+            status(json!({"hook_event_name": "Notification", "notification_type": "idle_prompt"})),
+            None
+        );
+        assert_eq!(
+            status(json!({"hook_event_name": "Stop"})),
+            Some((PaneStatus::Done, None))
+        );
         assert_eq!(
             status(json!({"hook_event_name": "StopFailure", "error_type": "rate_limit"})),
             Some((PaneStatus::Error, Some("rate_limit".into())))
@@ -232,8 +307,16 @@ mod tests {
         };
         assert_eq!(send("", "{}").unwrap_err(), 401);
         assert_eq!(send("X-AgentDeck-Token: bad\r\n", "{}").unwrap_err(), 401);
-        assert_eq!(send("X-AgentDeck-Token: tok\r\n", "not json").unwrap_err(), 400);
-        let ev = send("X-AgentDeck-Token: tok\r\n", r#"{"hook_event_name":"Stop"}"#).unwrap().unwrap();
+        assert_eq!(
+            send("X-AgentDeck-Token: tok\r\n", "not json").unwrap_err(),
+            400
+        );
+        let ev = send(
+            "X-AgentDeck-Token: tok\r\n",
+            r#"{"hook_event_name":"Stop"}"#,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!((ev.pane_id.as_str(), ev.status), ("p1", PaneStatus::Done));
     }
 

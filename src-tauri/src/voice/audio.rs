@@ -91,7 +91,9 @@ fn open_stream(buffer: Shared) -> Result<(cpal::Stream, u32), String> {
         other => return Err(format!("unsupported sample format {other}")),
     }
     .map_err(|e| format!("microphone stream: {e}"))?;
-    stream.play().map_err(|e| format!("microphone start: {e}"))?;
+    stream
+        .play()
+        .map_err(|e| format!("microphone start: {e}"))?;
     Ok((stream, config.sample_rate))
 }
 
