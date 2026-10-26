@@ -20,14 +20,24 @@ export interface NotifySettings {
   onlyUnseen: boolean;
 }
 
+/** Spoken summary when a task finishes (Web Speech API). `voice` is a voiceURI, "" = first voice of the language. */
+export interface SpeechSettings {
+  enabled: boolean;
+  voice: string;
+  rate: number;
+}
+
 export interface Settings {
   fontSize: number;
   fontFamily: string;
   confirmBulk: boolean;
   sidebarOpen: boolean;
   activityOpen: boolean;
+  /** Closing the main window hides it in the system tray instead of quitting. */
+  closeToTray: boolean;
   notify: NotifySettings;
   agents: Record<AgentKind, AgentDefaults>;
+  speech: SpeechSettings;
 }
 
 export const DEFAULT_FONT_FAMILY = "Cascadia Code, Consolas, monospace";
@@ -38,7 +48,9 @@ export const DEFAULT_SETTINGS: Settings = {
   confirmBulk: true,
   sidebarOpen: true,
   activityOpen: false,
+  closeToTray: false,
   notify: { enabled: true, sound: true, done: true, waiting: true, error: false, onlyUnseen: true },
+  speech: { enabled: false, voice: "", rate: 1 },
   agents: Object.fromEntries(AGENT_KINDS.map((k) => [k, { args: "", worktree: false }])) as Record<
     AgentKind,
     AgentDefaults
@@ -54,6 +66,7 @@ export function mergeSettings(raw: unknown): Settings {
   if (!isObject(raw)) return structuredClone(d);
   const n = isObject(raw.notify) ? raw.notify : {};
   const agents = isObject(raw.agents) ? raw.agents : {};
+  const sp = isObject(raw.speech) ? raw.speech : {};
   const fontFamily = typeof raw.fontFamily === "string" ? raw.fontFamily.trim() : "";
   return {
     fontSize: typeof raw.fontSize === "number" ? clampFontSize(raw.fontSize) : d.fontSize,
@@ -61,6 +74,7 @@ export function mergeSettings(raw: unknown): Settings {
     confirmBulk: bool(raw.confirmBulk, d.confirmBulk),
     sidebarOpen: bool(raw.sidebarOpen, d.sidebarOpen),
     activityOpen: bool(raw.activityOpen, d.activityOpen),
+    closeToTray: bool(raw.closeToTray, d.closeToTray),
     notify: {
       enabled: bool(n.enabled, d.notify.enabled),
       sound: bool(n.sound, d.notify.sound),
@@ -68,6 +82,11 @@ export function mergeSettings(raw: unknown): Settings {
       waiting: bool(n.waiting, d.notify.waiting),
       error: bool(n.error, d.notify.error),
       onlyUnseen: bool(n.onlyUnseen, d.notify.onlyUnseen),
+    },
+    speech: {
+      enabled: bool(sp.enabled, d.speech.enabled),
+      voice: typeof sp.voice === "string" ? sp.voice : d.speech.voice,
+      rate: typeof sp.rate === "number" && sp.rate >= 0.5 && sp.rate <= 2 ? sp.rate : d.speech.rate,
     },
     agents: Object.fromEntries(
       AGENT_KINDS.map((k) => {

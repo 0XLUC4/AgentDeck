@@ -4,12 +4,15 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+pub mod permissions;
+
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 use tiny_http::{Request, Response, Server};
 
 use crate::AppState;
+use permissions::{PENDING, PERMISSION_HOLD, wait_decision};
 
 /// Header carrying the per-run secret; also how our Claude hook entries are recognized.
 pub const TOKEN_HEADER: &str = "X-AgentDeck-Token";
@@ -75,24 +78,49 @@ pub fn start(app: AppHandle) -> HookServer {
     let expected = token.clone();
     std::thread::spawn(move || {
         for mut req in server.incoming_requests() {
-            // One thread per request: a slow body must not stall other panes' updates.
+            // One thread per request: a slow body (or a held permission request) must not stall other panes.
             let (app, expected) = (app.clone(), expected.clone());
             std::thread::spawn(move || {
-                let code = match handle(&mut req, &expected) {
-                    Ok(Some(event)) => {
-                        if pane_exists(&app, &event.pane_id) {
-                            let _ = app.emit("agent-status", event);
-                        }
-                        204
-                    }
-                    Ok(None) => 204,
-                    Err(code) => code,
+                let reply = match handle(&mut req, &expected) {
+                    Ok(hook) => process(&app, &hook),
+                    Err(code) => Response::empty(code).boxed(),
                 };
-                let _ = req.respond(Response::empty(code));
+                let _ = req.respond(reply);
             });
         }
     });
     HookServer { port, token }
+}
+
+/// Emits the status event; a Claude PermissionRequest is held until answered (see `Permissions`).
+fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
+    let no_decision = || Response::empty(204).boxed();
+    if !pane_exists(app, &hook.pane_id) {
+        return no_decision();
+    }
+    PENDING.cancel_stale(&hook.pane_id, &hook.json);
+    if let Some(event) = status_event(hook) {
+        let _ = app.emit("agent-status", event);
+    }
+    if hook.json["hook_event_name"] != "PermissionRequest" {
+        return no_decision();
+    }
+    let (request, rx) = PENDING.register(&hook.pane_id, &hook.json);
+    let id = request.request_id.clone();
+    let _ = app.emit("agent-permission", request);
+    let decision = wait_decision(&rx, PERMISSION_HOLD, || pane_exists(app, &hook.pane_id));
+    PENDING.remove(&id);
+    let _ = app.emit("agent-permission-resolved", json!({ "requestId": id }));
+    match decision {
+        Some(body) => {
+            let ct = tiny_http::Header::from_bytes("Content-Type", "application/json")
+                .expect("static header");
+            Response::from_string(body.to_string())
+                .with_header(ct)
+                .boxed()
+        }
+        None => no_decision(),
+    }
 }
 
 /// Events for unknown panes (stale or forged ids) are dropped.
@@ -108,8 +136,28 @@ fn header<'a>(req: &'a Request, name: &'static str) -> Option<&'a str> {
         .map(|h| h.value.as_str())
 }
 
+/// An authenticated hook payload and the pane it belongs to.
+#[derive(Debug)]
+struct Hook {
+    pane_id: String,
+    json: Value,
+}
+
+fn status_event(hook: &Hook) -> Option<AgentStatusEvent> {
+    let (status, last_action, event) = map_event(&hook.json)?;
+    let (prompt, summary) = details(&hook.json);
+    Some(AgentStatusEvent {
+        pane_id: hook.pane_id.clone(),
+        status,
+        last_action,
+        event,
+        prompt,
+        summary,
+    })
+}
+
 /// Validates and parses one request; `Err` is the HTTP status to answer.
-fn handle(req: &mut Request, token: &str) -> Result<Option<AgentStatusEvent>, u16> {
+fn handle(req: &mut Request, token: &str) -> Result<Hook, u16> {
     let (path, query) = req.url().split_once('?').unwrap_or((req.url(), ""));
     if path != "/hook" {
         return Err(404);
@@ -149,17 +197,7 @@ fn handle(req: &mut Request, token: &str) -> Result<Option<AgentStatusEvent>, u1
     .flatten()
     .find(|p| !p.is_empty())
     .ok_or(400u16)?;
-    Ok(map_event(&json).map(|(status, last_action, event)| {
-        let (prompt, summary) = details(&json);
-        AgentStatusEvent {
-            pane_id,
-            status,
-            last_action,
-            event,
-            prompt,
-            summary,
-        }
-    }))
+    Ok(Hook { pane_id, json })
 }
 
 /// Constant-time comparison (length leak is fine: tokens are fixed-length UUIDs).
@@ -201,8 +239,12 @@ pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
             }
             _ => return None, // idle_prompt etc. must not override "done"
         },
+        "PermissionRequest" => (PaneStatus::Waiting, describe_tool(body)),
         "Stop" => (PaneStatus::Done, None),
-        "StopFailure" => (PaneStatus::Error, str_field("error").or_else(|| str_field("error_type"))),
+        "StopFailure" => (
+            PaneStatus::Error,
+            str_field("error").or_else(|| str_field("error_type")),
+        ),
         _ => return None,
     };
     Some((status, action, event))
@@ -237,7 +279,12 @@ fn details(body: &Value) -> (Option<String>, Option<String>) {
 
 /// Truncates to MAX_TEXT bytes on a char boundary.
 fn cap(text: &str) -> String {
-    let mut end = text.len().min(MAX_TEXT);
+    truncate(text, MAX_TEXT)
+}
+
+/// Truncates to `max` bytes on a char boundary.
+fn truncate(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -384,6 +431,13 @@ mod tests {
             status(json!({"hook_event_name": "StopFailure", "error": "rate_limit"})),
             Some((PaneStatus::Error, Some("rate_limit".into())))
         );
+        assert_eq!(
+            status(
+                json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash",
+                "tool_input": {"command": "rm -rf build"}})
+            ),
+            Some((PaneStatus::Waiting, Some("Bash: rm -rf build".into())))
+        );
         assert_eq!(status(json!({"hook_event_name": "PreCompact"})), None);
         assert_eq!(status(json!({})), None);
     }
@@ -412,12 +466,12 @@ mod tests {
             send("X-AgentDeck-Token: tok\r\n", "not json").unwrap_err(),
             400
         );
-        let ev = send(
+        let hook = send(
             "X-AgentDeck-Token: tok\r\n",
             r#"{"hook_event_name":"Stop"}"#,
         )
-        .unwrap()
         .unwrap();
+        let ev = status_event(&hook).unwrap();
         assert_eq!((ev.pane_id.as_str(), ev.status), ("p1", PaneStatus::Done));
     }
 

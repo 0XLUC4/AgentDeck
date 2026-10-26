@@ -25,6 +25,14 @@ export function revealPane(tabId: string, paneId: string): void {
   panel.api.setActive();
 }
 
+/** Maximizes a pane in its session, or restores it if already maximized. */
+export function toggleMaximizePane(tabId: string, paneId: string): void {
+  const panel = apis.get(tabId)?.getPanel(paneId);
+  if (!panel) return;
+  if (panel.api.isMaximized()) panel.api.exitMaximized();
+  else panel.api.maximize();
+}
+
 const theme: DockviewTheme = {
   ...themeDark,
   name: "agentdeck",

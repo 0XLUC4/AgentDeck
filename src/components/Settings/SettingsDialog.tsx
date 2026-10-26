@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FolderOpen,
   Info,
+  LayoutTemplate,
   type LucideIcon,
   Mic,
   SlidersHorizontal,
@@ -18,20 +19,25 @@ import { AGENT_KINDS, AGENTS } from "../../lib/agents";
 import { FONT_SIZE } from "../../store/deck";
 import { DEFAULT_FONT_FAMILY, type Settings, updateSettings, useSettings } from "../../store/settings";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
+import { HistorySettings } from "../History/HistorySettings";
 import { IconButton } from "../IconButton/IconButton";
+import { TemplatesSection } from "../Templates/TemplatesSection";
+import { AutostartRow, UpdateRow } from "./AppControls";
 import { button, ErrorText, errorMessage, field, Row, Section, Toggle } from "./controls";
+import { SpeechRows } from "./SpeechRows";
 import { VoiceSection } from "./VoiceSection";
 
 /** Runs a save and reports it in the dialog header ("Enregistré" or the error). */
 export type Save = (task: Promise<unknown>) => void;
 
-type SectionId = "general" | "notifications" | "voice" | "agents" | "about";
+type SectionId = "general" | "notifications" | "voice" | "agents" | "templates" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "Général", icon: SlidersHorizontal },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "voice", label: "Voix", icon: Mic },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "templates", label: "Modèles", icon: LayoutTemplate },
   { id: "about", label: "À propos", icon: Info },
 ];
 
@@ -70,6 +76,19 @@ function General({ s, save }: { s: Settings; save: Save }) {
           id="set-activity"
           checked={s.activityOpen}
           onChange={(v) => save(updateSettings({ activityOpen: v }))}
+        />
+      </Row>
+      <AutostartRow save={save} />
+      <HistorySettings save={save} />
+      <Row
+        label="Fermer dans la barre système"
+        hint="Fermer la fenêtre la masque ; « Quitter » depuis l'icône arrête tout"
+        htmlFor="set-close-tray"
+      >
+        <Toggle
+          id="set-close-tray"
+          checked={s.closeToTray}
+          onChange={(v) => save(updateSettings({ closeToTray: v }))}
         />
       </Row>
     </Section>
@@ -118,6 +137,7 @@ function Notifications({ s, save }: { s: Settings; save: Save }) {
       >
         <Toggle id="set-unseen" checked={s.notify.onlyUnseen} onChange={(v) => set({ onlyUnseen: v })} />
       </Row>
+      <SpeechRows s={s} save={save} />
     </Section>
   );
 }
@@ -181,6 +201,7 @@ function About() {
       <Row label="Version">
         <span className="font-mono text-xs text-muted">{version ?? "…"}</span>
       </Row>
+      <UpdateRow />
       <Row label="Dossier des données" hint={dataDir ?? "…"}>
         <button
           type="button"
@@ -282,6 +303,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {section === "notifications" && <Notifications s={settings} save={save} />}
             {section === "voice" && <VoiceSection save={save} />}
             {section === "agents" && <Agents s={settings} save={save} />}
+            {section === "templates" && <TemplatesSection save={save} />}
             {section === "about" && <About />}
           </div>
         </div>

@@ -3,11 +3,23 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentInfo,
+  AgentKind,
   AgentStatusEvent,
   FolderInfo,
+  GitCheckpoint,
+  GitCommitInfo,
+  GitComparison,
+  GitStatus,
+  HistoryHit,
+  HistoryWindow,
   ModelStatus,
   OpenProject,
+  PaneUsage,
+  PermissionDecision,
+  PermissionRequest,
   SpawnOptions,
+  UsageRange,
+  UsageSummary,
   VoiceConfig,
   VoiceDownload,
   VoiceState,
@@ -24,6 +36,8 @@ export const detectAgents = () => invoke<AgentInfo[]>("detect_agents");
 export const uninstallHooks = (cwd: string) => invoke<void>("uninstall_hooks", { cwd });
 export const listOpenProjects = () => invoke<OpenProject[]>("list_open_projects");
 export const inspectFolder = (path: string) => invoke<FolderInfo>("inspect_folder", { path });
+export const setTrayStatus = (waiting: number) => invoke<void>("set_tray_status", { waiting });
+export const setCloseToTray = (enabled: boolean) => invoke<void>("set_close_to_tray", { enabled });
 
 export const voiceStart = () => invoke<void>("voice_start");
 export const voiceStop = () => invoke<void>("voice_stop");
@@ -51,3 +65,47 @@ export const onVoiceTranscript = (cb: (text: string) => void) =>
 export const onVoiceError = (cb: (message: string) => void) => listen<string>("voice-error", (e) => cb(e.payload));
 export const onVoiceDownload = (cb: (progress: VoiceDownload) => void) =>
   listen<VoiceDownload>("voice-download", (e) => cb(e.payload));
+
+// Git panel (src-tauri/src/git). `cwd` is the pane's directory as returned by gitPaneDir.
+export const gitPaneDir = (cwd: string, paneId: string, worktree: boolean) =>
+  invoke<string>("git_pane_dir", { cwd, paneId, worktree });
+export const gitStatus = (cwd: string) => invoke<GitStatus>("git_status", { cwd });
+export const gitDiff = (cwd: string, path: string) => invoke<string>("git_diff", { cwd, path });
+export const gitDiffTrees = (cwd: string, from: string, to: string, path: string) =>
+  invoke<string>("git_diff_trees", { cwd, from, to, path });
+export const gitCommit = (cwd: string, message: string) => invoke<string>("git_commit", { cwd, message });
+export const gitMergeWorktree = (cwd: string) => invoke<string>("git_merge_worktree", { cwd });
+export const gitRemoveWorktree = (cwd: string) => invoke<void>("git_remove_worktree", { cwd });
+export const gitCheckpoint = (cwd: string, paneId: string) => invoke<string | null>("git_checkpoint", { cwd, paneId });
+export const gitListCheckpoints = (cwd: string, paneId: string) =>
+  invoke<GitCheckpoint[]>("git_list_checkpoints", { cwd, paneId });
+/** Returns the sha of the safety checkpoint taken just before restoring. */
+export const gitRestoreCheckpoint = (cwd: string, paneId: string, sha: string) =>
+  invoke<string | null>("git_restore_checkpoint", { cwd, paneId, sha });
+export const gitCompare = (cwd: string, otherCwd: string) => invoke<GitComparison>("git_compare", { cwd, otherCwd });
+
+export const answerPermission = (requestId: string, decision: PermissionDecision, message?: string) =>
+  invoke<void>("answer_permission", { requestId, decision, message: message ?? null });
+export const onAgentPermission = (cb: (req: PermissionRequest) => void): Promise<UnlistenFn> =>
+  listen<PermissionRequest>("agent-permission", (e) => cb(e.payload));
+export const onAgentPermissionResolved = (cb: (requestId: string) => void): Promise<UnlistenFn> =>
+  listen<{ requestId: string }>("agent-permission-resolved", (e) => cb(e.payload.requestId));
+
+export const usageSummary = (range: UsageRange) => invoke<UsageSummary>("usage_summary", { range });
+export const paneUsage = (paneId: string, cwd: string, startedAt: number, agent: AgentKind) =>
+  invoke<PaneUsage>("pane_usage", { paneId, cwd, startedAt, agent });
+
+export const historySearch = (query: string, limit: number) => invoke<HistoryHit[]>("history_search", { query, limit });
+export const historyRead = (runId: string, aroundLine: number) =>
+  invoke<HistoryWindow>("history_read", { runId, aroundLine });
+export const historyGetEnabled = () => invoke<boolean>("history_get_enabled");
+export const historySetEnabled = (enabled: boolean) => invoke<void>("history_set_enabled", { enabled });
+export const historyClear = () => invoke<void>("history_clear");
+
+/** `entry` is a JournalEntry (src/components/Journal/journal.ts), appended to today's file. */
+export const journalAppend = (entry: unknown) => invoke<void>("journal_append", { entry });
+export const journalRead = (date: string) => invoke<unknown[]>("journal_read", { date });
+export const journalGitCommits = (cwd: string) => invoke<GitCommitInfo[]>("journal_git_commits", { cwd });
+/** Opens a native save dialog, then writes. Resolves to the saved path, or null if cancelled. */
+export const writeTextFile = (defaultName: string, contents: string) =>
+  invoke<string | null>("write_text_file", { defaultName, contents });

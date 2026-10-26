@@ -69,6 +69,7 @@ pub fn spawn_pane(
     worktree: bool,
     cols: u16,
     rows: u16,
+    title: Option<String>,
 ) -> Result<(), String> {
     validate_spawn_input(&pane_id, &args)?;
     if state
@@ -122,7 +123,10 @@ pub fn spawn_pane(
         },
     );
     watch_exit(app.clone(), pane_id.clone(), run);
-    stream_output(app, pane_id, run, reader);
+    let agent_name = serde_json::to_value(agent).ok();
+    let agent_name = agent_name.as_ref().and_then(|v| v.as_str()).unwrap_or("");
+    let recorder = crate::history::Recorder::start(&pane_id, agent_name, &cwd, title);
+    stream_output(app, pane_id, run, reader, recorder);
     Ok(())
 }
 
@@ -203,7 +207,13 @@ fn watch_exit(app: AppHandle, pane_id: String, run: u64) {
 
 /// Reader thread -> batching thread -> `pane-output:{id}` events, then `pane-exit:{id}`.
 /// `pane-exit` is emitted only here, once, after all pending output is flushed.
-fn stream_output(app: AppHandle, pane_id: String, run: u64, mut reader: Box<dyn Read + Send>) {
+fn stream_output(
+    app: AppHandle,
+    pane_id: String,
+    run: u64,
+    mut reader: Box<dyn Read + Send>,
+    mut recorder: Option<crate::history::Recorder>,
+) {
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(QUEUE_CHUNKS);
 
     std::thread::spawn(move || {
@@ -240,11 +250,20 @@ fn stream_output(app: AppHandle, pane_id: String, run: u64, mut reader: Box<dyn 
             if !pending.is_empty() && (closed || last_flush.elapsed() >= FLUSH_INTERVAL) {
                 let text = take_valid_utf8(&mut pending, MAX_EMIT_BYTES, closed);
                 if !text.is_empty() {
+                    if let Some(rec) = recorder.as_mut() {
+                        rec.write(&text); // buffered; errors stop the recording only
+                    }
                     let _ = app.emit(&output_event, text);
                 }
                 last_flush = Instant::now();
             }
+            if let Some(rec) = recorder.as_mut() {
+                rec.flush_if_due(); // idle panes still reach the disk
+            }
             if closed && pending.is_empty() {
+                if let Some(rec) = recorder.take() {
+                    rec.finish();
+                }
                 if is_current_run(&app, &pane_id, run) {
                     let _ = app.emit(&format!("pane-exit:{pane_id}"), ());
                 }

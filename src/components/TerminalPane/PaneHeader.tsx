@@ -1,5 +1,6 @@
 import {
   CheckCheck,
+  GitBranch,
   Maximize2,
   Minimize2,
   Pause,
@@ -17,8 +18,11 @@ import type { Pane } from "../../store/deck";
 import { deck, FONT_SIZE } from "../../store/deck";
 import { closePane, focusPane, interruptPane, restartPane } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
+import { GitPanel } from "../Git/GitPanel";
 import { IconButton } from "../IconButton/IconButton";
+import { QueueButton } from "../Queue/QueueButton";
 import { StatusBadge } from "../StatusBadge/StatusBadge";
+import { UsageChip } from "../Usage/UsageChip";
 
 interface Props {
   pane: Pane;
@@ -74,6 +78,7 @@ function TitleField({ pane, onDone }: { pane: Pane; onDone: () => void }) {
 /** Pane header, rendered as the dockview tab: drag it to move the pane, double-click to maximize. */
 export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize }: Props) {
   const [renaming, setRenaming] = useState(false);
+  const [gitOpen, setGitOpen] = useState(false);
   const agent = AGENTS[pane.agent];
 
   return (
@@ -102,6 +107,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
           <span className="min-w-0 flex-1 truncate text-xs text-subtle" title={pane.lastAction ?? undefined}>
             {pane.lastAction}
           </span>
+          <UsageChip pane={pane} />
           {pane.taskStartedAt !== null && <Elapsed since={pane.taskStartedAt} />}
           {pane.completedCount > 0 && (
             <span
@@ -112,6 +118,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               {pane.completedCount}
             </span>
           )}
+          <QueueButton pane={pane} active={active} />
           {/* Actions stay out of the way until the pane is hovered, focused or active. */}
           <div
             className={`flex shrink-0 items-center transition-opacity duration-150 group-hover/pane:opacity-100 focus-within:opacity-100 ${
@@ -121,6 +128,14 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
             aria-label={`Actions ${agent.name}`}
           >
             <IconButton icon={Pencil} size="sm" label="Renommer" onClick={() => setRenaming(true)} />
+            <IconButton
+              icon={GitBranch}
+              size="sm"
+              label="Git"
+              hint="Git : modifications, commit, merge, points de restauration"
+              aria-pressed={gitOpen}
+              onClick={() => setGitOpen(true)}
+            />
             <IconButton
               icon={Pause}
               size="sm"
@@ -165,6 +180,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
         className={compact ? "ml-auto" : ""}
         onClick={() => confirmClose(pane)}
       />
+      {gitOpen && <GitPanel pane={pane} onClose={() => setGitOpen(false)} />}
     </header>
   );
 }
