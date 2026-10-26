@@ -38,7 +38,7 @@ startQueueRunner();
 startTaskSpeech();
 listenPermissions().catch((err) => console.warn("agent-permission listener failed", err));
 listenOrchestrator().catch((err) => console.warn("orchestrator listener failed", err));
-void checkForUpdateSilently();
+checkForUpdateSilently();
 startDetachHost();
 
 function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
