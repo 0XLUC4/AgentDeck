@@ -1,6 +1,6 @@
 // Mirrors Rust types in src-tauri/src/{agents,hooks_server}. Keep in sync.
 
-export type AgentKind = "claude" | "codex" | "gemini" | "shell";
+export type AgentKind = "claude" | "codex" | "gemini" | "grok" | "shell";
 
 export interface AgentInfo {
   kind: AgentKind;

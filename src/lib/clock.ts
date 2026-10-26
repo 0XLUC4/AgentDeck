@@ -29,3 +29,11 @@ export function formatElapsed(ms: number): string {
   const ss = String(total % 60).padStart(2, "0");
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
+
+/** Coarse duration for lists: "<1 min", "12 min", "2 h 05". */
+export function formatSince(ms: number): string {
+  const minutes = Math.floor(Math.max(0, ms) / 60000);
+  if (minutes < 1) return "<1 min";
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")}`;
+}

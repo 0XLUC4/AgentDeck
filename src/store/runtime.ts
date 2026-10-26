@@ -67,7 +67,7 @@ export async function createPane(spec: PaneSpec, tabId: string): Promise<void> {
         for (const fn of rt.listeners) fn(data);
       }),
       onPaneExit(spec.id, () => {
-        deck.updatePane(spec.id, (p) => ({ ...p, exited: true }));
+        deck.updatePane(spec.id, (p) => ({ ...p, exited: true, statusSince: Date.now() }));
         rt.onExit?.();
       }),
     ]);
@@ -107,7 +107,13 @@ async function spawn(id: string): Promise<void> {
 
 function failPane(id: string, err: unknown): void {
   const pane = useDeck.getState().panes[id];
-  deck.updatePane(id, (p) => ({ ...p, status: "error", exited: true, lastAction: errorMessage(err) }));
+  deck.updatePane(id, (p) => ({
+    ...p,
+    status: "error",
+    exited: true,
+    lastAction: errorMessage(err),
+    statusSince: Date.now(),
+  }));
   deck.toast(`Échec du lancement de ${pane ? AGENTS[pane.agent].name : "l'agent"} : ${errorMessage(err)}`);
 }
 
@@ -141,6 +147,7 @@ async function doRestart(id: string): Promise<void> {
     status: "idle",
     lastAction: null,
     taskStartedAt: null,
+    statusSince: Date.now(),
     exited: false,
     hooked: false,
     generation: p.generation + 1,
@@ -216,6 +223,7 @@ export function reportSize(id: string, cols: number, rows: number): void {
 }
 
 export function focusPane(id: string): void {
+  deck.acknowledge(id); // looking at a finished pane counts as having seen it
   if (useDeck.getState().activePaneId === id) return;
   useDeck.setState({ activePaneId: id });
   backendActivePane = id;

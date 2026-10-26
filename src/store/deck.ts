@@ -21,6 +21,8 @@ export interface Pane extends PaneSpec {
   status: PaneStatus;
   lastAction: string | null;
   taskStartedAt: number | null;
+  /** When `status` (or `exited`) last changed; drives "time in status" in the activity panel. Not persisted. */
+  statusSince: number;
   exited: boolean;
   /** True once a hooks event arrived; otherwise status is derived from output. */
   hooked: boolean;
@@ -79,6 +81,7 @@ export function applyStatus(pane: Pane, status: PaneStatus, lastAction: string |
     ...pane,
     status,
     lastAction: lastAction ?? pane.lastAction,
+    statusSince: status === pane.status ? pane.statusSince : now,
     taskStartedAt: keepsTimer ? (pane.taskStartedAt ?? now) : null,
     completedCount: pane.completedCount + (status === "done" && pane.status !== "done" ? 1 : 0),
   };
@@ -92,6 +95,34 @@ export function sessionStatus(paneIds: string[], panes: Record<string, Pane>): P
   return URGENCY.find((s) => statuses.has(s)) ?? null;
 }
 
+/** Activity panel grouping: a stopped process shows as "exited" unless it failed. */
+export type ActivityKey = PaneStatus | "exited";
+export const ACTIVITY_ORDER: ActivityKey[] = ["waiting", "error", "done", "working", "idle", "exited"];
+export const activityKey = (pane: Pane): ActivityKey =>
+  pane.exited && pane.status !== "error" ? "exited" : pane.status;
+
+export interface ActivityItem {
+  pane: Pane;
+  tab: Tab;
+  workspace: Workspace;
+}
+
+/** Every live pane of every workspace, grouped by ACTIVITY_ORDER (empty groups dropped), longest in status first. */
+export function activityGroups(
+  tabs: Tab[],
+  workspaces: Workspace[],
+  panes: Record<string, Pane>,
+): { key: ActivityKey; items: ActivityItem[] }[] {
+  const items = tabs.flatMap((tab) => {
+    const workspace = workspaces.find((w) => w.id === tab.workspaceId);
+    return workspace ? tab.paneIds.flatMap((id) => (panes[id] ? [{ pane: panes[id], tab, workspace }] : [])) : [];
+  });
+  return ACTIVITY_ORDER.map((key) => ({
+    key,
+    items: items.filter((i) => activityKey(i.pane) === key).sort((a, b) => a.pane.statusSince - b.pane.statusSince),
+  })).filter((g) => g.items.length > 0);
+}
+
 export const clampFontSize = (size: number) =>
   Number.isFinite(size) ? Math.min(FONT_SIZE.max, Math.max(FONT_SIZE.min, Math.round(size))) : FONT_SIZE.default;
 
@@ -101,6 +132,7 @@ export const newPane = (spec: PaneSpec): Pane => ({
   status: "idle",
   lastAction: null,
   taskStartedAt: null,
+  statusSince: Date.now(),
   exited: false,
   hooked: false,
   generation: 0,
@@ -216,6 +248,10 @@ export const deck = {
   },
   setStatus(id: string, status: PaneStatus, lastAction: string | null, now = Date.now()) {
     updatePane(id, (p) => applyStatus(p, status, lastAction, now));
+  },
+  /** "Seen": a finished pane goes back to idle so the activity list only shows what still needs attention. */
+  acknowledge(id: string, now = Date.now()) {
+    if (get().panes[id]?.status === "done") deck.setStatus(id, "idle", null, now);
   },
   rename(id: string, title: string) {
     updatePane(id, (p) => ({ ...p, title }));

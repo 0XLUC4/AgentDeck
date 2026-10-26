@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { IconButton } from "../components/IconButton/IconButton";
 import { activeTab, activeWorkspace, useDeck } from "../store/deck";
 import { interruptAll, restartAll, stopAll } from "../store/runtime";
+import { ActivityToggle } from "./Activity";
 
 const appWindow = getCurrentWindow();
 const warn = (what: string) => (err: unknown) => console.warn(`${what} failed`, err);
@@ -90,7 +91,17 @@ function WindowControls() {
 }
 
 /** Custom window title bar: identity, where you are, global session controls, window buttons. */
-export function TitleBar({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean; onToggleSidebar: () => void }) {
+export function TitleBar({
+  sidebarOpen,
+  onToggleSidebar,
+  activityOpen,
+  onToggleActivity,
+}: {
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
+  activityOpen: boolean;
+  onToggleActivity: () => void;
+}) {
   const workspaceName = useDeck((s) => activeWorkspace(s).name);
   const sessionName = useDeck((s) => s.tabs.find((t) => t.id === s.activeTabId)?.name ?? "");
 
@@ -148,6 +159,10 @@ export function TitleBar({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolea
           hint="Arrêter tous les processus de la session"
           onClick={confirmStopAll}
         />
+      </div>
+      <span className="h-5 w-px bg-line" aria-hidden="true" />
+      <div className="px-2">
+        <ActivityToggle open={activityOpen} onToggle={onToggleActivity} />
       </div>
       <span className="h-5 w-px bg-line" aria-hidden="true" />
       <WindowControls />

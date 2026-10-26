@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { interruptKey } from "../lib/agents";
 import {
   activeWorkspace,
+  activityGroups,
   applyStatus,
   clampFontSize,
   deck,
@@ -236,5 +237,47 @@ describe("helpers", () => {
     expect(sessionStatus(["a", "b", "c"], panes)).toBe("waiting");
     expect(sessionStatus(["a", "c"], panes)).toBe("working");
     expect(sessionStatus([], panes)).toBeNull();
+  });
+});
+
+describe("activity", () => {
+  const W2 = { id: "w2", name: "API", path: "/api" };
+  const tabs = [
+    { id: "t1", name: "S1", workspaceId: "w1", paneIds: ["a", "b"], layout: null },
+    { id: "t2", name: "S2", workspaceId: "w2", paneIds: ["c", "d", "e", "gone"], layout: null },
+  ];
+  const panes = {
+    a: pane({ id: "a", status: "working", statusSince: 1 }),
+    b: pane({ id: "b", status: "waiting", statusSince: 9 }),
+    c: pane({ id: "c", status: "waiting", statusSince: 3 }),
+    d: pane({ id: "d", status: "done", exited: true, statusSince: 4 }),
+    e: pane({ id: "e", status: "error", exited: true, statusSince: 5 }),
+  };
+
+  it("groups panes of all workspaces by urgency, longest in status first", () => {
+    const groups = activityGroups(tabs, [W1, W2], panes);
+    expect(groups.map((g) => [g.key, g.items.map((i) => i.pane.id)])).toEqual([
+      ["waiting", ["c", "b"]],
+      ["error", ["e"]],
+      ["working", ["a"]],
+      ["exited", ["d"]],
+    ]);
+    expect(groups[0].items[0]).toMatchObject({ tab: { id: "t2" }, workspace: { name: "API" } });
+  });
+
+  it("tracks when the status changed", () => {
+    const working = applyStatus(pane({ statusSince: 0 }), "working", null, 10);
+    expect(working.statusSince).toBe(10);
+    expect(applyStatus(working, "working", "Edit", 20).statusSince).toBe(10);
+  });
+
+  it("acknowledges only finished panes", () => {
+    useDeck.setState({ panes: {}, tabs: [{ id: "t1", name: "S", workspaceId: "w1", paneIds: [], layout: null }] });
+    deck.addPane(pane({ status: "done", lastAction: "fini" }), "t1");
+    deck.acknowledge("p1", 50);
+    expect(useDeck.getState().panes.p1).toMatchObject({ status: "idle", lastAction: "fini", statusSince: 50 });
+    deck.setStatus("p1", "waiting", null, 60);
+    deck.acknowledge("p1", 70);
+    expect(useDeck.getState().panes.p1.status).toBe("waiting");
   });
 });
