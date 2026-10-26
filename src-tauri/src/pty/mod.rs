@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agents::{self, AgentKind};
 use crate::AppState;
@@ -15,10 +16,14 @@ use crate::AppState;
 /// Output is flushed to the webview at most every 16 ms (~60 fps).
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 
+/// Distinguishes successive processes spawned under the same pane id (restart).
+static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
+
 pub struct Pane {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    run: u64,
 }
 
 #[derive(Default)]
@@ -77,12 +82,13 @@ pub fn spawn_pane(
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
-    stream_output(app, pane_id.clone(), reader);
-
+    let run = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
+    // Insert before streaming so the exit handler always finds this run.
     state.panes.0.lock().map_err(|e| e.to_string())?.insert(
         pane_id.clone(),
-        Pane { master: pair.master, writer, child },
+        Pane { master: pair.master, writer, child, run },
     );
+    stream_output(app, pane_id, run, reader);
     Ok(())
 }
 
@@ -118,7 +124,7 @@ pub fn set_active_pane(state: State<'_, AppState>, pane_id: Option<String>) -> R
 }
 
 /// Reader thread -> batching thread -> `pane-output:{id}` events, then `pane-exit:{id}`.
-fn stream_output(app: AppHandle, pane_id: String, mut reader: Box<dyn Read + Send>) {
+fn stream_output(app: AppHandle, pane_id: String, run: u64, mut reader: Box<dyn Read + Send>) {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
     std::thread::spawn(move || {
@@ -156,11 +162,28 @@ fn stream_output(app: AppHandle, pane_id: String, mut reader: Box<dyn Read + Sen
                 last_flush = Instant::now();
             }
             if closed {
-                let _ = app.emit(&format!("pane-exit:{pane_id}"), ());
+                if is_current_run(&app, &pane_id, run) {
+                    let _ = app.emit(&format!("pane-exit:{pane_id}"), ());
+                }
                 break;
             }
         }
     });
+}
+
+/// On exit: frees the pane slot if `run` still owns it (so the id can be respawned).
+/// Returns false when a newer run already reuses the id: its exit must not be reported.
+fn is_current_run(app: &AppHandle, pane_id: &str, run: u64) -> bool {
+    let state = app.state::<AppState>();
+    let Ok(mut panes) = state.panes.0.lock() else { return true };
+    match panes.get(pane_id) {
+        Some(pane) if pane.run == run => {
+            panes.remove(pane_id);
+            true
+        }
+        Some(_) => false,
+        None => true, // killed via kill_pane
+    }
 }
 
 /// Drains the longest valid UTF-8 prefix, keeping an incomplete trailing

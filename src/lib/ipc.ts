@@ -28,5 +28,4 @@ export const onVoiceState = (cb: (state: VoiceState) => void) =>
   listen<VoiceState>("voice-state", (e) => cb(e.payload));
 export const onVoiceTranscript = (cb: (text: string) => void) =>
   listen<string>("voice-transcript", (e) => cb(e.payload));
-export const onVoiceError = (cb: (message: string) => void) =>
-  listen<string>("voice-error", (e) => cb(e.payload));
+export const onVoiceError = (cb: (message: string) => void) => listen<string>("voice-error", (e) => cb(e.payload));
