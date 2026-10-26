@@ -139,7 +139,7 @@ pub fn command_for(kind: AgentKind, args: &[String]) -> CommandBuilder {
 }
 
 /// Runs git with `safe.directory` set for `repo` (D: is exFAT: no ownership info).
-fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     let safe = format!(
         "safe.directory={}",
         repo.to_string_lossy().replace('\\', "/")
@@ -163,7 +163,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// Nearest ancestor of `cwd` containing `.git` (dir, or file for worktrees/submodules).
-fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
         .find(|d| d.join(".git").exists())
         .map(Path::to_path_buf)

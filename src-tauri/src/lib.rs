@@ -2,6 +2,7 @@ mod agents;
 mod hooks_server;
 mod pty;
 mod voice;
+mod workspace;
 
 use std::sync::Mutex;
 
@@ -44,6 +45,8 @@ pub fn run() {
             voice::voice_start,
             voice::voice_stop,
             voice::voice_send,
+            workspace::list_open_projects,
+            workspace::inspect_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
