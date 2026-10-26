@@ -10,6 +10,7 @@ export const resizePane = (paneId: string, cols: number, rows: number) =>
 export const killPane = (paneId: string) => invoke<void>("kill_pane", { paneId });
 export const setActivePane = (paneId: string | null) => invoke<void>("set_active_pane", { paneId });
 export const detectAgents = () => invoke<AgentInfo[]>("detect_agents");
+export const uninstallHooks = (cwd: string) => invoke<void>("uninstall_hooks", { cwd });
 
 export const voiceStart = () => invoke<void>("voice_start");
 export const voiceStop = () => invoke<void>("voice_stop");
@@ -27,3 +28,5 @@ export const onVoiceState = (cb: (state: VoiceState) => void) =>
   listen<VoiceState>("voice-state", (e) => cb(e.payload));
 export const onVoiceTranscript = (cb: (text: string) => void) =>
   listen<string>("voice-transcript", (e) => cb(e.payload));
+export const onVoiceError = (cb: (message: string) => void) =>
+  listen<string>("voice-error", (e) => cb(e.payload));
