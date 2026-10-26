@@ -20,7 +20,8 @@
         "minHeight": 500,
         "decorations": false,
         "resizable": true,
-        "shadow": true
+        "shadow": true,
+        "dragDropEnabled": false
       },
       {
         "label": "voice",
