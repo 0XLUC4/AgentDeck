@@ -6,7 +6,7 @@ use std::process::Command;
 
 use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::hooks_server::{HookServer, TOKEN_HEADER};
 
@@ -52,18 +52,27 @@ pub struct AgentInfo {
 /// Reports which agent CLIs are available on PATH.
 #[tauri::command]
 pub fn detect_agents() -> Vec<AgentInfo> {
-    [AgentKind::Claude, AgentKind::Codex, AgentKind::Gemini, AgentKind::Shell]
-        .into_iter()
-        .map(|kind| {
-            let path = kind.binary().and_then(resolve_binary);
-            AgentInfo {
-                kind,
-                installed: kind == AgentKind::Shell || path.is_some(),
-                install_url: if path.is_none() { kind.install_url() } else { None },
-                path: path.map(|p| p.to_string_lossy().into_owned()),
-            }
-        })
-        .collect()
+    [
+        AgentKind::Claude,
+        AgentKind::Codex,
+        AgentKind::Gemini,
+        AgentKind::Shell,
+    ]
+    .into_iter()
+    .map(|kind| {
+        let path = kind.binary().and_then(resolve_binary);
+        AgentInfo {
+            kind,
+            installed: kind == AgentKind::Shell || path.is_some(),
+            install_url: if path.is_none() {
+                kind.install_url()
+            } else {
+                None
+            },
+            path: path.map(|p| p.to_string_lossy().into_owned()),
+        }
+    })
+    .collect()
 }
 
 /// Looks `bin` up on the real PATH (honoring PATHEXT on Windows).
@@ -121,7 +130,9 @@ pub fn command_for(kind: AgentKind, args: &[String]) -> CommandBuilder {
         }
         (Some(bin), false) => CommandBuilder::new(bin),
         (None, true) => CommandBuilder::new("powershell.exe"),
-        (None, false) => CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())),
+        (None, false) => {
+            CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()))
+        }
     };
     cmd.args(args);
     cmd
@@ -129,7 +140,10 @@ pub fn command_for(kind: AgentKind, args: &[String]) -> CommandBuilder {
 
 /// Runs git with `safe.directory` set for `repo` (D: is exFAT: no ownership info).
 fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let safe = format!("safe.directory={}", repo.to_string_lossy().replace('\\', "/"));
+    let safe = format!(
+        "safe.directory={}",
+        repo.to_string_lossy().replace('\\', "/")
+    );
     let mut cmd = Command::new("git");
     cmd.arg("-c").arg(safe).arg("-C").arg(repo).args(args);
     #[cfg(windows)]
@@ -139,31 +153,53 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     }
     let out = cmd.output().map_err(|e| format!("cannot run git: {e}"))?;
     if !out.status.success() {
-        return Err(format!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Nearest ancestor of `cwd` containing `.git` (dir, or file for worktrees/submodules).
 fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
-    cwd.ancestors().find(|d| d.join(".git").exists()).map(Path::to_path_buf)
+    cwd.ancestors()
+        .find(|d| d.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 /// Creates (or reuses) the dedicated git worktree for the pane and returns its path.
 pub fn create_worktree(cwd: &str, pane_id: &str) -> Result<String, String> {
     let short: String = pane_id.chars().take(8).collect();
-    if short.is_empty() || !short.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') || short.starts_with('-') {
+    if short.is_empty()
+        || !short.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        || short.starts_with('-')
+    {
         return Err("invalid pane id for worktree name".into());
     }
-    let root = find_repo_root(Path::new(cwd)).ok_or_else(|| format!("not a git repository: {cwd}"))?;
-    let name = root.file_name().ok_or("repository has no folder name")?.to_string_lossy();
+    let root =
+        find_repo_root(Path::new(cwd)).ok_or_else(|| format!("not a git repository: {cwd}"))?;
+    let name = root
+        .file_name()
+        .ok_or("repository has no folder name")?
+        .to_string_lossy();
     let parent = root.parent().ok_or("repository has no parent folder")?;
     let target = parent.join(format!("{name}-agentdeck-{short}"));
     let target_str = target.to_string_lossy().into_owned();
     if target.is_dir() {
         return Ok(target_str); // restart / restored session: reuse this pane's worktree
     }
-    git(&root, &["worktree", "add", &target_str, "-b", &format!("agentdeck/{short}")])?;
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            &target_str,
+            "-b",
+            &format!("agentdeck/{short}"),
+        ],
+    )?;
     Ok(target_str)
 }
 
@@ -201,8 +237,15 @@ pub fn uninstall_hooks(cwd: String) -> Result<(), String> {
     update_claude_settings(&cwd, strip_claude_hooks)
 }
 
-const CLAUDE_EVENTS: [&str; 7] =
-    ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure"];
+const CLAUDE_EVENTS: [&str; 7] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Notification",
+    "Stop",
+    "StopFailure",
+];
 
 /// Read-modify-write of settings.local.json; refuses to touch a file it cannot parse.
 fn update_claude_settings(cwd: &str, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
@@ -213,9 +256,8 @@ fn update_claude_settings(cwd: &str, edit: impl FnOnce(&mut Value)) -> Result<()
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
     let mut settings: Value = match &original {
-        Some(text) if !text.trim().is_empty() => {
-            serde_json::from_str(text).map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?
-        }
+        Some(text) if !text.trim().is_empty() => serde_json::from_str(text)
+            .map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?,
         _ => json!({}),
     };
     if !settings.is_object() {
@@ -239,7 +281,9 @@ fn is_ours(group: &Value) -> bool {
 }
 
 fn strip_claude_hooks(settings: &mut Value) {
-    let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else { return };
+    let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return;
+    };
     for groups in hooks.values_mut() {
         if let Some(arr) = groups.as_array_mut() {
             arr.retain(|g| !is_ours(g));
@@ -247,7 +291,10 @@ fn strip_claude_hooks(settings: &mut Value) {
     }
     hooks.retain(|_, groups| groups.as_array().is_none_or(|a| !a.is_empty()));
     if hooks.is_empty() {
-        settings.as_object_mut().expect("checked object").remove("hooks");
+        settings
+            .as_object_mut()
+            .expect("checked object")
+            .remove("hooks");
     }
 }
 
@@ -268,7 +315,11 @@ fn merge_claude_hooks(settings: &mut Value, url: &str) {
         *hooks = json!({});
     }
     for event in CLAUDE_EVENTS {
-        let groups = hooks.as_object_mut().expect("object").entry(event).or_insert_with(|| json!([]));
+        let groups = hooks
+            .as_object_mut()
+            .expect("object")
+            .entry(event)
+            .or_insert_with(|| json!([]));
         if let Some(arr) = groups.as_array_mut() {
             arr.push(ours.clone());
         }
@@ -298,7 +349,10 @@ mod tests {
         // New port replaces, never duplicates.
         merge_claude_hooks(&mut s, "http://127.0.0.1:2/hook");
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 2);
-        assert_eq!(s["hooks"]["Stop"][1]["hooks"][0]["url"], "http://127.0.0.1:2/hook?agent=claude");
+        assert_eq!(
+            s["hooks"]["Stop"][1]["hooks"][0]["url"],
+            "http://127.0.0.1:2/hook?agent=claude"
+        );
 
         strip_claude_hooks(&mut s);
         assert_eq!(s["hooks"], json!({ "Stop": [{ "hooks": [user] }] }));
@@ -318,7 +372,11 @@ mod tests {
         let file = dir.join(".claude").join("settings.local.json");
         let cwd = dir.to_string_lossy().into_owned();
         update_claude_settings(&cwd, |s| merge_claude_hooks(s, "http://127.0.0.1:1/hook")).unwrap();
-        assert!(std::fs::read_to_string(&file).unwrap().contains("X-AgentDeck-Token"));
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .contains("X-AgentDeck-Token")
+        );
         uninstall_hooks(cwd.clone()).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), "{}");
 
@@ -336,22 +394,34 @@ mod tests {
         std::fs::write(dir.join("claude.cmd"), "").unwrap();
         let path = std::env::join_paths([Path::new("/nonexistent"), &dir]).unwrap();
         let exts = vec![".EXE".to_string(), ".CMD".to_string()];
-        assert_eq!(find_in_path("claude", &path, &exts), Some(dir.join("claude.cmd")));
+        assert_eq!(
+            find_in_path("claude", &path, &exts),
+            Some(dir.join("claude.cmd"))
+        );
         assert_eq!(find_in_path("codex", &path, &exts), None);
-        assert_eq!(find_in_path("claude", &path, &[String::new()]), Some(dir.join("claude")));
+        assert_eq!(
+            find_in_path("claude", &path, &[String::new()]),
+            Some(dir.join("claude"))
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn codex_notify_arg_is_shell_safe_toml() {
-        let hooks = HookServer { port: 47800, token: "tok".into() };
+        let hooks = HookServer {
+            port: 47800,
+            token: "tok".into(),
+        };
         let args = hook_args(AgentKind::Codex, "abc-123", &hooks);
         assert_eq!(args[0], "-c");
         assert!(!args[1].contains([' ', '&', '"', '%', '^', '|', '<', '>']));
         let doc: toml_edit::DocumentMut = args[1].parse().unwrap();
         let notify = doc["notify"].as_array().unwrap();
         assert_eq!(notify.get(0).unwrap().as_str(), Some("curl"));
-        assert_eq!(notify.iter().last().unwrap().as_str(), Some("--data-binary"));
+        assert_eq!(
+            notify.iter().last().unwrap().as_str(),
+            Some("--data-binary")
+        );
         assert!(hook_args(AgentKind::Claude, "x", &hooks).is_empty());
     }
 
@@ -376,7 +446,21 @@ mod tests {
         if git(&repo, &["init", "-q"]).is_err() {
             return; // git not installed
         }
-        git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        )
+        .unwrap();
         let path = create_worktree(&repo.join("sub").to_string_lossy(), "abcdef12-3456").unwrap();
         assert_eq!(Path::new(&path), base.join("proj-agentdeck-abcdef12"));
         assert!(Path::new(&path).join(".git").exists());

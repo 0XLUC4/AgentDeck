@@ -2,16 +2,16 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::agents::{self, AgentKind};
 use crate::AppState;
+use crate::agents::{self, AgentKind};
 
 /// Output is flushed to the webview at most every 16 ms (~60 fps).
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
@@ -54,7 +54,14 @@ pub fn spawn_pane(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    if state.panes.0.lock().map_err(|e| e.to_string())?.contains_key(&pane_id) {
+    validate_spawn_input(&pane_id, &args)?;
+    if state
+        .panes
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .contains_key(&pane_id)
+    {
         return Err("pane id already in use".into());
     }
     let cwd = if worktree {
@@ -65,7 +72,12 @@ pub fn spawn_pane(
     agents::prepare_hooks(agent, &cwd, &state.hooks)?;
 
     let pair = native_pty_system()
-        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| e.to_string())?;
 
     let args = [agents::hook_args(agent, &pane_id, &state.hooks), args].concat();
@@ -86,29 +98,53 @@ pub fn spawn_pane(
     // Insert before streaming so the exit handler always finds this run.
     state.panes.0.lock().map_err(|e| e.to_string())?.insert(
         pane_id.clone(),
-        Pane { master: pair.master, writer, child, run },
+        Pane {
+            master: pair.master,
+            writer,
+            child,
+            run,
+        },
     );
     stream_output(app, pane_id, run, reader);
     Ok(())
 }
 
 #[tauri::command]
-pub fn write_to_pane(state: State<'_, AppState>, pane_id: String, data: String) -> Result<(), String> {
+pub fn write_to_pane(
+    state: State<'_, AppState>,
+    pane_id: String,
+    data: String,
+) -> Result<(), String> {
     state.panes.write(&pane_id, data.as_bytes())
 }
 
 #[tauri::command]
-pub fn resize_pane(state: State<'_, AppState>, pane_id: String, cols: u16, rows: u16) -> Result<(), String> {
+pub fn resize_pane(
+    state: State<'_, AppState>,
+    pane_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
     let panes = state.panes.0.lock().map_err(|e| e.to_string())?;
     let pane = panes.get(&pane_id).ok_or("pane not found")?;
     pane.master
-        .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn kill_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), String> {
-    let pane = state.panes.0.lock().map_err(|e| e.to_string())?.remove(&pane_id);
+    let pane = state
+        .panes
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&pane_id);
     if let Some(mut pane) = pane {
         // Already-exited children return an error here; that's fine.
         let _ = pane.child.kill();
@@ -171,11 +207,32 @@ fn stream_output(app: AppHandle, pane_id: String, run: u64, mut reader: Box<dyn 
     });
 }
 
+/// Pane ids end up in hook URLs and args, and agents run through `cmd.exe /c`
+/// on Windows, which re-parses shell metacharacters: reject both up front.
+fn validate_spawn_input(pane_id: &str, args: &[String]) -> Result<(), String> {
+    let id_ok = (1..=64).contains(&pane_id.len())
+        && pane_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if !id_ok {
+        return Err("invalid pane id".into());
+    }
+    let unsafe_arg = |a: &String| {
+        a.contains(['&', '|', '<', '>', '^', '%', '"']) || a.contains(char::is_control)
+    };
+    if cfg!(windows) && args.iter().any(unsafe_arg) {
+        return Err("arguments may not contain & | < > ^ % \" or control characters".into());
+    }
+    Ok(())
+}
+
 /// On exit: frees the pane slot if `run` still owns it (so the id can be respawned).
 /// Returns false when a newer run already reuses the id: its exit must not be reported.
 fn is_current_run(app: &AppHandle, pane_id: &str, run: u64) -> bool {
     let state = app.state::<AppState>();
-    let Ok(mut panes) = state.panes.0.lock() else { return true };
+    let Ok(mut panes) = state.panes.0.lock() else {
+        return true;
+    };
     match panes.get(pane_id) {
         Some(pane) if pane.run == run => {
             panes.remove(pane_id);
@@ -204,6 +261,17 @@ fn take_valid_utf8(pending: &mut Vec<u8>, flush_all: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::take_valid_utf8;
+
+    #[test]
+    fn rejects_bad_pane_ids_and_shell_metacharacters() {
+        use super::validate_spawn_input as v;
+        assert!(v("3f2b-aa", &["--model".into(), "opus".into()]).is_ok());
+        assert!(v("a&calc", &[]).is_err());
+        assert!(v("", &[]).is_err());
+        if cfg!(windows) {
+            assert!(v("ok", &["x & calc".into()]).is_err());
+        }
+    }
 
     #[test]
     fn keeps_truncated_multibyte_tail() {
