@@ -1,27 +1,52 @@
 import {
   type DockviewApi,
-  DockviewDefaultTab,
   DockviewReact,
+  type DockviewTheme,
   type IDockviewPanelHeaderProps,
   themeDark,
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { useEffect, useState } from "react";
-import { confirmClose } from "../components/TerminalPane/PaneHeader";
+import { EmptyPaneHeader, PaneHeader } from "../components/TerminalPane/PaneHeader";
 import { PanePanel } from "../components/TerminalPane/PanePanel";
 import { deck, type Tab, useDeck } from "../store/deck";
 
 const components = { pane: PanePanel };
 
-// Dockview's tab close goes through the store so the process is killed too.
-function PaneTab(props: IDockviewPanelHeaderProps) {
+const theme: DockviewTheme = {
+  ...themeDark,
+  name: "agentdeck",
+  className: `${themeDark.className} dockview-theme-agentdeck`,
+  gap: 6,
+};
+
+/** Our pane header doubles as the dockview tab, so there is one row of chrome per pane and it stays draggable. */
+function PaneTab({ api, containerApi }: IDockviewPanelHeaderProps) {
+  const pane = useDeck((s) => s.panes[api.id]);
+  const active = useDeck((s) => s.activePaneId === api.id);
+  const [maximized, setMaximized] = useState(false);
+  const [stacked, setStacked] = useState(false);
+
+  useEffect(() => {
+    const update = () => {
+      setMaximized(api.isMaximized());
+      setStacked(api.group.panels.length > 1);
+    };
+    update();
+    const subs = [containerApi.onDidMaximizedGroupChange(update), containerApi.onDidLayoutChange(update)];
+    return () => {
+      for (const sub of subs) sub.dispose();
+    };
+  }, [api, containerApi]);
+
+  if (!pane) return <EmptyPaneHeader />;
   return (
-    <DockviewDefaultTab
-      {...props}
-      closeActionOverride={() => {
-        const pane = useDeck.getState().panes[props.api.id];
-        if (pane) confirmClose(pane);
-      }}
+    <PaneHeader
+      pane={pane}
+      active={active}
+      maximized={maximized}
+      compact={stacked}
+      onToggleMaximize={() => (api.isMaximized() ? api.exitMaximized() : api.maximize())}
     />
   );
 }
@@ -73,9 +98,10 @@ export function Deck({ tab }: { tab: Tab }) {
   return (
     <DockviewReact
       className="h-full"
-      theme={themeDark}
+      theme={theme}
       components={components}
       defaultTabComponent={PaneTab}
+      singleTabMode="fullwidth"
       disableFloatingGroups
       defaultRenderer="always"
       onReady={(e) => {

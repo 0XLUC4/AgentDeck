@@ -1,11 +1,14 @@
+import { Plus, X } from "lucide-react";
 import { useState } from "react";
-import { activeTab, deck, useDeck } from "../store/deck";
-import { archiveSession, interruptAll, restartAll, stopAll } from "../store/runtime";
-import { SessionsMenu } from "./SessionsMenu";
+import { IconButton } from "../components/IconButton/IconButton";
+import { StatusDot } from "../components/StatusBadge/StatusBadge";
+import { activeWorkspace, deck, sessionStatus, type Tab, useDeck } from "../store/deck";
+import { archiveSession } from "../store/runtime";
 
 const isWorking = (paneIds: string[]) => paneIds.some((id) => useDeck.getState().panes[id]?.status === "working");
 
-function closeTab(tabId: string) {
+/** Closes a session tab into the archive, asking first if agents are still working. */
+export function closeSession(tabId: string) {
   const tab = useDeck.getState().tabs.find((t) => t.id === tabId);
   if (!tab) return;
   if (
@@ -16,108 +19,85 @@ function closeTab(tabId: string) {
   archiveSession(tabId);
 }
 
-function confirmStopAll() {
-  const count = activeTab()?.paneIds.length ?? 0;
-  if (count > 0 && window.confirm(`Arrêter les ${count} agent(s) de cette session ?`)) void stopAll();
-}
-
-const ctrl = "shrink-0 rounded-md px-2 py-1 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100";
-
-/** Top bar: session tabs (double-click/F2 to rename, × to archive), sessions menu, global controls. */
-export function TabBar({ onAddAgent }: { onAddAgent: () => void }) {
-  const tabs = useDeck((s) => s.tabs);
-  const activeTabId = useDeck((s) => s.activeTabId);
-  const [editing, setEditing] = useState<string | null>(null);
-
+function SessionTab({ tab, active, onRename }: { tab: Tab; active: boolean; onRename: () => void }) {
+  const status = useDeck((s) => sessionStatus(tab.paneIds, s.panes));
   return (
-    <nav
-      className="flex h-10 shrink-0 items-center gap-1 border-b border-zinc-800 bg-zinc-900 px-2"
-      aria-label="Sessions"
+    <div
+      className={`group relative flex h-8 shrink-0 items-center rounded-md pr-0.5 transition-colors duration-150 ${
+        active ? "bg-raised text-fg" : "text-muted hover:bg-hover hover:text-fg"
+      }`}
     >
-      <div role="tablist" className="flex min-w-0 items-center gap-1 overflow-x-auto">
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className={`flex items-center rounded-md text-sm ${tab.id === activeTabId ? "bg-zinc-700" : "hover:bg-zinc-800"}`}
-          >
-            {editing === tab.id ? (
-              <input
-                // biome-ignore lint/a11y/noAutofocus: the user just asked to rename this tab
-                autoFocus
-                defaultValue={tab.name}
-                aria-label="Nom de la session"
-                className="w-28 rounded bg-zinc-950 px-2 py-1"
-                onBlur={(e) => {
-                  deck.renameTab(tab.id, e.target.value.trim() || tab.name);
-                  setEditing(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") e.currentTarget.blur();
-                  if (e.key === "Escape") setEditing(null);
-                }}
-              />
-            ) : (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab.id === activeTabId}
-                title="Double-clic pour renommer"
-                className="px-3 py-1"
-                onClick={() => useDeck.setState({ activeTabId: tab.id })}
-                onDoubleClick={() => setEditing(tab.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "F2") setEditing(tab.id);
-                }}
-              >
-                {tab.name}
-              </button>
-            )}
-            <button
-              type="button"
-              aria-label={`Fermer et archiver la session ${tab.name}`}
-              title="Fermer (la session reste dans le menu Sessions)"
-              className="px-1.5 text-zinc-400 hover:text-zinc-100"
-              onClick={() => closeTab(tab.id)}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
       <button
         type="button"
-        aria-label="Nouvelle session"
-        title="Nouvelle session"
-        className={ctrl}
-        onClick={() => deck.addTab()}
+        role="tab"
+        aria-selected={active}
+        title="Double-clic ou F2 pour renommer"
+        className="flex h-full items-center gap-2 pr-1 pl-3"
+        onClick={() => useDeck.setState({ activeTabId: tab.id })}
+        onDoubleClick={onRename}
+        onKeyDown={(e) => {
+          if (e.key === "F2") onRename();
+        }}
       >
-        +
+        {status && <StatusDot status={status} />}
+        <span className="max-w-48 truncate">{tab.name}</span>
       </button>
-      <SessionsMenu />
+      <IconButton
+        icon={X}
+        size="sm"
+        label={`Fermer et archiver ${tab.name}`}
+        hint="Fermer (la session reste dans la barre latérale, rouvrable)"
+        className={active ? "" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"}
+        onClick={() => closeSession(tab.id)}
+      />
+    </div>
+  );
+}
 
-      <div className="ml-auto flex items-center gap-1">
-        <button
-          type="button"
-          className={ctrl}
-          onClick={interruptAll}
-          title="Envoie Échap (Ctrl+C pour un shell) à chaque agent de la session : arrête la tâche en cours, l'agent reste ouvert. Ne fige pas le processus."
-        >
-          ⏸ Interrompre tout
-        </button>
-        <button type="button" className={ctrl} onClick={confirmStopAll} title="Tue tous les processus de la session">
-          ⏹ Tout arrêter
-        </button>
-        <button type="button" className={ctrl} onClick={() => void restartAll()} title="Relance tous les agents">
-          ↻ Tout relancer
-        </button>
-        <button
-          type="button"
-          onClick={onAddAgent}
-          className="shrink-0 rounded-md bg-blue-600 px-3 py-1 text-sm font-medium hover:bg-blue-500"
-        >
-          + Ajouter un agent
-        </button>
+/** Open sessions of the current workspace, plus "new session" and the primary "add agent" action. */
+export function TabBar({ onAddAgent }: { onAddAgent: () => void }) {
+  const workspaceId = useDeck((s) => activeWorkspace(s).id);
+  const allTabs = useDeck((s) => s.tabs);
+  const activeTabId = useDeck((s) => s.activeTabId);
+  const [editing, setEditing] = useState<string | null>(null);
+  const tabs = allTabs.filter((t) => t.workspaceId === workspaceId);
+
+  return (
+    <nav className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-2" aria-label="Sessions">
+      <div role="tablist" className="scroll-thin flex min-w-0 items-center gap-1 overflow-x-auto">
+        {tabs.map((tab) =>
+          editing === tab.id ? (
+            <input
+              key={tab.id}
+              // biome-ignore lint/a11y/noAutofocus: the user just asked to rename this tab
+              autoFocus
+              defaultValue={tab.name}
+              aria-label="Nom de la session"
+              className="h-8 w-40 shrink-0 rounded-md border border-line-strong bg-base px-2.5 text-fg outline-none focus:border-accent"
+              onBlur={(e) => {
+                deck.renameTab(tab.id, e.target.value.trim() || tab.name);
+                setEditing(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") setEditing(null);
+              }}
+            />
+          ) : (
+            <SessionTab key={tab.id} tab={tab} active={tab.id === activeTabId} onRename={() => setEditing(tab.id)} />
+          ),
+        )}
       </div>
+      <IconButton icon={Plus} label="Nouvelle session" onClick={() => deck.addTab()} />
+
+      <button
+        type="button"
+        onClick={onAddAgent}
+        className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover"
+      >
+        <Plus size={15} strokeWidth={1.5} aria-hidden="true" />
+        Ajouter un agent
+      </button>
     </nav>
   );
 }

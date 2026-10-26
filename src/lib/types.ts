@@ -31,3 +31,21 @@ export interface SpawnOptions {
   cols: number;
   rows: number;
 }
+
+/** A project folder currently open in an app (VS Code, Cursor, Explorer...). From `list_open_projects`. */
+export interface OpenProject {
+  app: string;
+  name: string;
+  path: string;
+  isGit: boolean;
+}
+
+/** From `inspect_folder`. */
+export interface FolderInfo {
+  path: string;
+  name: string;
+  exists: boolean;
+  isGit: boolean;
+  branch: string | null;
+  remote: string | null;
+}
