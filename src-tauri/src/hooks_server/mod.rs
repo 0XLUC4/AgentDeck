@@ -5,8 +5,10 @@ use std::io::Read;
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tiny_http::{Request, Response, Server};
+
+use crate::AppState;
 
 /// Header carrying the per-run secret; also how our Claude hook entries are recognized.
 pub const TOKEN_HEADER: &str = "X-AgentDeck-Token";
@@ -69,7 +71,9 @@ pub fn start(app: AppHandle) -> HookServer {
             std::thread::spawn(move || {
                 let code = match handle(&mut req, &expected) {
                     Ok(Some(event)) => {
-                        let _ = app.emit("agent-status", event);
+                        if pane_exists(&app, &event.pane_id) {
+                            let _ = app.emit("agent-status", event);
+                        }
                         204
                     }
                     Ok(None) => 204,
@@ -80,6 +84,12 @@ pub fn start(app: AppHandle) -> HookServer {
         }
     });
     HookServer { port, token }
+}
+
+/// Events for unknown panes (stale or forged ids) are dropped.
+fn pane_exists(app: &AppHandle, pane_id: &str) -> bool {
+    app.try_state::<AppState>()
+        .is_some_and(|s| s.panes.0.lock().is_ok_and(|p| p.contains_key(pane_id)))
 }
 
 fn header<'a>(req: &'a Request, name: &'static str) -> Option<&'a str> {

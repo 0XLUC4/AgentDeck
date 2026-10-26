@@ -7,7 +7,7 @@
 mod audio;
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -25,6 +25,8 @@ const PUSH_TO_TALK: bool = true;
 /// Append `\r` after the transcript. Off: the user validates in the terminal.
 const SUBMIT_ON_TRANSCRIPT: bool = false;
 const MIN_CLIP_SECS: f32 = 0.3;
+/// Auto-stop (and transcribe) if the key-up is lost.
+const MAX_RECORDING: Duration = Duration::from_secs(60);
 const HIDE_DELAY: Duration = Duration::from_millis(1500);
 const ERROR_HIDE_DELAY: Duration = Duration::from_secs(4);
 /// Distance between the pill and the bottom of the screen, in logical px.
@@ -36,9 +38,14 @@ const DEFAULT_STT_MODEL: &str = "whisper-1";
 /// Voice state managed by Tauri.
 #[derive(Default)]
 struct Voice {
-    capture: Mutex<Option<Capture>>,
+    /// Running capture, tagged with its recording session id.
+    capture: Mutex<Option<(u64, Capture)>>,
     /// Bumped on every state change so a pending hide is cancelled by newer activity.
     generation: AtomicU64,
+    /// Bumped per recording so the max-duration timer only stops its own recording.
+    session: AtomicU64,
+    /// A transcription is in flight: new recordings are ignored until it settles.
+    transcribing: AtomicBool,
 }
 
 /// Registers the global shortcut and voice state. Called from `setup`.
@@ -52,8 +59,8 @@ pub fn init(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .on_shortcut(SHORTCUT, |app, _, event| {
             let result = match (event.state(), PUSH_TO_TALK) {
                 (ShortcutState::Pressed, true) => start(app),
-                (ShortcutState::Released, true) => stop(app),
-                (ShortcutState::Pressed, false) if is_recording(app) => stop(app),
+                (ShortcutState::Released, true) => stop(app, None),
+                (ShortcutState::Pressed, false) if is_recording(app) => stop(app, None),
                 (ShortcutState::Pressed, false) => start(app),
                 (ShortcutState::Released, false) => Ok(()),
             };
@@ -75,7 +82,7 @@ pub fn voice_start(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn voice_stop(app: AppHandle) -> Result<(), String> {
-    stop(&app).inspect_err(|e| fail(&app, e))
+    stop(&app, None).inspect_err(|e| fail(&app, e))
 }
 
 /// Types `text` into the active pane, followed by `\r` when `submit`.
@@ -101,40 +108,66 @@ fn is_recording(app: &AppHandle) -> bool {
 fn start(app: &AppHandle) -> Result<(), String> {
     let voice = app.state::<Voice>();
     let mut slot = voice.capture.lock().map_err(|e| e.to_string())?;
-    if slot.is_some() {
-        return Ok(()); // key repeat or double start
+    // Key repeat, double start, or a transcription still in flight.
+    if slot.is_some() || voice.transcribing.load(Ordering::SeqCst) {
+        return Ok(());
     }
     let emitter = app.clone();
-    *slot = Some(Capture::start(move |rms| {
+    let capture = Capture::start(move |rms| {
         // Speech RMS is ~0.01..0.2: sqrt spreads it over the visible 0..1 range.
         let _ = emitter.emit("voice-level", (rms * 10.0).sqrt().min(1.0));
-    })?);
+    })?;
+    let session = voice.session.fetch_add(1, Ordering::SeqCst) + 1;
+    *slot = Some((session, capture));
     drop(slot);
     set_state(app, "listening");
     show_pill(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(MAX_RECORDING);
+        if let Err(e) = stop(&app, Some(session)) {
+            fail(&app, &e);
+        }
+    });
     Ok(())
 }
 
-fn stop(app: &AppHandle) -> Result<(), String> {
-    let capture = app
-        .state::<Voice>()
-        .capture
-        .lock()
-        .map_err(|e| e.to_string())?
-        .take();
-    let Some(capture) = capture else {
-        return Ok(());
+/// Stops the running capture (only if it is `session`, when given) and transcribes it.
+fn stop(app: &AppHandle, session: Option<u64>) -> Result<(), String> {
+    let voice = app.state::<Voice>();
+    let capture = {
+        let mut slot = voice.capture.lock().map_err(|e| e.to_string())?;
+        match slot.take() {
+            Some((id, capture)) if session.is_none_or(|s| s == id) => {
+                // Set under the slot lock so no new recording can start in between.
+                voice.transcribing.store(true, Ordering::SeqCst);
+                capture
+            }
+            other => {
+                *slot = other;
+                return Ok(());
+            }
+        }
     };
-    let (samples, rate) = capture.stop()?;
+    let (samples, rate) = capture
+        .stop()
+        .inspect_err(|_| voice.transcribing.store(false, Ordering::SeqCst))?;
     if (samples.len() as f32) < rate as f32 * MIN_CLIP_SECS {
         set_state(app, "idle");
+        voice.transcribing.store(false, Ordering::SeqCst);
         return Ok(());
     }
     set_state(app, "transcribing");
     let app = app.clone();
-    std::thread::spawn(move || match transcribe_and_type(&app, &samples, rate) {
-        Ok(()) => set_state(&app, "idle"),
-        Err(e) => fail(&app, &e),
+    std::thread::spawn(move || {
+        match transcribe_and_type(&app, &samples, rate) {
+            Ok(()) => set_state(&app, "idle"),
+            Err(e) => fail(&app, &e),
+        }
+        // Cleared after the final state so it can't overwrite a newer "listening".
+        app.state::<Voice>()
+            .transcribing
+            .store(false, Ordering::SeqCst);
     });
     Ok(())
 }
@@ -164,6 +197,9 @@ fn transcribe(wav: Vec<u8>) -> Result<String, String> {
         text: String,
     }
     let url = std::env::var("AGENTDECK_STT_URL").ok();
+    if let Some(url) = &url {
+        check_stt_url(url)?;
+    }
     let key = std::env::var("AGENTDECK_STT_KEY")
         .or_else(|_| std::env::var("OPENAI_API_KEY"))
         .ok();
@@ -204,11 +240,21 @@ fn transcribe(wav: Vec<u8>) -> Result<String, String> {
         .map_err(|e| format!("bad transcription response: {e}"))
 }
 
+/// Audio and the API key must not travel in clear: https only, except loopback.
+fn check_stt_url(url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid AGENTDECK_STT_URL: {e}"))?;
+    let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if loopback => Ok(()),
+        _ => Err("AGENTDECK_STT_URL must use https (http only for localhost)".into()),
+    }
+}
+
+/// Reports an error. Never touches the capture slot: every failing path has
+/// already consumed its own capture, and a newer recording must survive.
 fn fail(app: &AppHandle, message: &str) {
     eprintln!("voice: {message}");
-    if let Ok(mut slot) = app.state::<Voice>().capture.lock() {
-        slot.take(); // dropping the capture's sender ends its thread
-    }
     let _ = app.emit("voice-error", message);
     set_state(app, "error");
     show_pill(app);
@@ -266,5 +312,22 @@ fn show_pill(app: &AppHandle) {
     }
     if let Err(e) = pill.show() {
         eprintln!("voice: show pill: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_stt_url;
+
+    #[test]
+    fn stt_url_requires_https_unless_loopback() {
+        assert!(check_stt_url("https://api.openai.com/v1/audio/transcriptions").is_ok());
+        assert!(check_stt_url("http://localhost:8080/v1/audio/transcriptions").is_ok());
+        assert!(check_stt_url("http://127.0.0.1:9000/x").is_ok());
+        assert!(check_stt_url("http://[::1]:9000/x").is_ok());
+        assert!(check_stt_url("http://example.com/x").is_err());
+        assert!(check_stt_url("http://localhost.evil.com/x").is_err());
+        assert!(check_stt_url("ftp://localhost/x").is_err());
+        assert!(check_stt_url("not a url").is_err());
     }
 }
