@@ -63,6 +63,7 @@ pub fn spawn_pane(
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| e.to_string())?;
 
+    let args = [agents::hook_args(agent, &pane_id, &state.hooks), args].concat();
     let mut cmd: CommandBuilder = agents::command_for(agent, &args);
     cmd.cwd(&cwd);
     cmd.env("AGENTDECK_PANE_ID", &pane_id);

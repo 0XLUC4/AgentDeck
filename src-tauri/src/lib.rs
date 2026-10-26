@@ -40,6 +40,7 @@ pub fn run() {
             pty::kill_pane,
             pty::set_active_pane,
             agents::detect_agents,
+            agents::uninstall_hooks,
             voice::voice_start,
             voice::voice_stop,
             voice::voice_send,
