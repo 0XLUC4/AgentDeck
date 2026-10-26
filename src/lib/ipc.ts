@@ -12,6 +12,8 @@ import type {
   GitStatus,
   HistoryHit,
   HistoryWindow,
+  McpActivity,
+  McpRequest,
   ModelStatus,
   OpenProject,
   PaneUsage,
@@ -90,6 +92,17 @@ export const onAgentPermission = (cb: (req: PermissionRequest) => void): Promise
   listen<PermissionRequest>("agent-permission", (e) => cb(e.payload));
 export const onAgentPermissionResolved = (cb: (requestId: string) => void): Promise<UnlistenFn> =>
   listen<{ requestId: string }>("agent-permission-resolved", (e) => cb(e.payload.requestId));
+
+// Orchestrator MCP bridge (src-tauri/src/mcp). `mcpRegister` returns the Claude args to prepend and the
+// per-spawn secret to pass as env to spawn_pane only (never store it).
+export const mcpRegister = (paneId: string) => invoke<{ args: string[]; secret: string }>("mcp_register", { paneId });
+export const mcpRespond = (requestId: string, result: unknown, error: string | null) =>
+  invoke<void>("mcp_respond", { requestId, result, error });
+export const mcpSetPaused = (paused: boolean) => invoke<void>("mcp_set_paused", { paused });
+export const onMcpRequest = (cb: (req: McpRequest) => void): Promise<UnlistenFn> =>
+  listen<McpRequest>("mcp-request", (e) => cb(e.payload));
+export const onMcpActivity = (cb: (e: McpActivity) => void): Promise<UnlistenFn> =>
+  listen<McpActivity>("mcp-activity", (e) => cb(e.payload));
 
 export const usageSummary = (range: UsageRange) => invoke<UsageSummary>("usage_summary", { range });
 export const paneUsage = (paneId: string, cwd: string, startedAt: number, agent: AgentKind) =>

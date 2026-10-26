@@ -2,7 +2,7 @@
 //! `app_data_dir/history/<paneId>/<runStart>[.<part>].log` (5 MB per part, kept 30 days),
 //! with `<runStart>.json` metadata. Plus a global substring search over it.
 
-mod ansi;
+pub(crate) mod ansi;
 pub mod journal;
 
 use std::fs::{self, File};

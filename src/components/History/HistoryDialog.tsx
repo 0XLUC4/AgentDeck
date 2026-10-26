@@ -1,6 +1,7 @@
 import { ArrowLeft, ChevronDown, ChevronUp, History, Search, TriangleAlert } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AGENTS } from "../../lib/agents";
+import { closeDialog, openDialog, useDialogs } from "../../lib/dialogs";
 import { historyRead, historySearch } from "../../lib/ipc";
 import type { HistoryHit, HistoryRunMeta, HistoryWindow } from "../../lib/types";
 import { folderName } from "../../store/deck";
@@ -245,14 +246,14 @@ export function HistoryDialog({ onClose }: { onClose: () => void }) {
 
 /** Title bar button + Ctrl+Shift+F. */
 export function HistoryButton() {
-  const [open, setOpen] = useState(false);
+  const open = useDialogs((s) => s.open === "history");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyF")) return;
       e.preventDefault();
       e.stopPropagation(); // capture phase: the terminal never sees it
-      if (!e.repeat) setOpen(true);
+      if (!e.repeat) openDialog("history");
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -264,9 +265,9 @@ export function HistoryButton() {
         icon={History}
         label="Historique"
         hint="Rechercher dans l'historique (Ctrl+Maj+F)"
-        onClick={() => setOpen(true)}
+        onClick={() => openDialog("history")}
       />
-      {open && <HistoryDialog onClose={() => setOpen(false)} />}
+      {open && <HistoryDialog onClose={closeDialog} />}
     </>
   );
 }

@@ -15,6 +15,8 @@ export interface PaneSpec {
   worktree: boolean;
   completedCount: number;
   fontSize: number;
+  /** "Chef d'orchestre": a Claude pane wired to AgentDeck's MCP server (src/lib/orchestrator.ts). */
+  orchestrator?: boolean;
 }
 
 export interface Pane extends PaneSpec {
@@ -138,7 +140,7 @@ export const newPane = (spec: PaneSpec): Pane => ({
   generation: 0,
 });
 
-export const toSpec = ({ id, agent, title, cwd, args, worktree, completedCount, fontSize }: Pane): PaneSpec => ({
+export const toSpec = ({
   id,
   agent,
   title,
@@ -147,6 +149,17 @@ export const toSpec = ({ id, agent, title, cwd, args, worktree, completedCount, 
   worktree,
   completedCount,
   fontSize,
+  orchestrator,
+}: Pane): PaneSpec => ({
+  id,
+  agent,
+  title,
+  cwd,
+  args,
+  worktree,
+  completedCount,
+  fontSize,
+  ...(orchestrator ? { orchestrator } : {}),
 });
 
 export const newTab = (name: string, workspaceId: string, layout: SerializedDockview | null = null): Tab => ({

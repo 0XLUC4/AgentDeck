@@ -1,8 +1,11 @@
 import {
   Activity,
   Archive,
+  Crown,
+  ExternalLink,
   Folder,
   FolderPlus,
+  Gauge,
   History,
   Layers,
   LayoutGrid,
@@ -10,6 +13,7 @@ import {
   type LucideIcon,
   Maximize2,
   Megaphone,
+  NotebookText,
   PanelLeft,
   Pause,
   Plus,
@@ -26,10 +30,13 @@ import { toggleMaximizePane } from "../../app/Deck";
 import { confirmRestartAll, confirmStopAll } from "../../app/TitleBar";
 import { AGENTS } from "../../lib/agents";
 import { checkpointPane } from "../../lib/checkpoints";
+import { openDialog } from "../../lib/dialogs";
+import { createOrchestrator, setOrchestratorPaused, useOrchestrator } from "../../lib/orchestrator";
 import { activityKey, deck, useDeck } from "../../store/deck";
 import { interruptAll, reopenSession } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
 import { openBroadcast } from "../Broadcast/Broadcast";
+import { detachPane } from "../Detached/host";
 import { STATUS, StatusDot } from "../StatusBadge/StatusBadge";
 import { openTemplatePicker } from "../Templates/TemplatePicker";
 import { currentPane, jumpToPane } from "../Wall/jump";
@@ -92,6 +99,17 @@ function actionItems(cb: PaletteCallbacks): Item[] {
       "Créer un point de restauration (pane actif)",
       History,
       () => onCurrentPane((_, id) => void checkpointPane(id)),
+    ],
+    ["detach", "Détacher le pane actif", ExternalLink, () => onCurrentPane((_, id) => void detachPane(id))],
+    ["usage", "Consommation", Gauge, () => openDialog("usage")],
+    ["history", "Historique", History, () => openDialog("history"), "Ctrl+Maj+F"],
+    ["journal", "Journal du jour", NotebookText, () => openDialog("journal")],
+    ["orchestrator", "Nouveau chef d'orchestre", Crown, createOrchestrator],
+    [
+      "orchestrator-pause",
+      "Pause/reprise du chef d'orchestre",
+      Pause,
+      () => void setOrchestratorPaused(!useOrchestrator.getState().paused),
     ],
   ];
   return actions.map(([id, label, Icon, run, shortcut]) => ({

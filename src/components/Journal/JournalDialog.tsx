@@ -1,6 +1,7 @@
 import { ClipboardCopy, Download, GitCommitHorizontal, NotebookText } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AGENTS } from "../../lib/agents";
+import { closeDialog, openDialog, useDialogs } from "../../lib/dialogs";
 import { journalGitCommits, journalRead, usageSummary, writeTextFile } from "../../lib/ipc";
 import type { UsageSummary } from "../../lib/types";
 import { deck, useDeck } from "../../store/deck";
@@ -163,11 +164,11 @@ export function JournalDialog({ onClose }: { onClose: () => void }) {
 
 /** Title bar button + dialog. */
 export function JournalButton() {
-  const [open, setOpen] = useState(false);
+  const open = useDialogs((s) => s.open === "journal");
   return (
     <>
-      <IconButton icon={NotebookText} label="Journal du jour" onClick={() => setOpen(true)} />
-      {open && <JournalDialog onClose={() => setOpen(false)} />}
+      <IconButton icon={NotebookText} label="Journal du jour" onClick={() => openDialog("journal")} />
+      {open && <JournalDialog onClose={closeDialog} />}
     </>
   );
 }
