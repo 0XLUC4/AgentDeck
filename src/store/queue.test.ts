@@ -76,7 +76,10 @@ describe("queue runner", () => {
     deck.setStatus("p", "done", null);
     expect(ipc.writeToPane).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(ADVANCE_DELAY_MS);
-    expect(ipc.writeToPane).toHaveBeenCalledWith("p", "first\r");
+    expect(ipc.writeToPane).toHaveBeenCalledWith("p", "first");
+    // Enter goes in its own write, so agent TUIs don't take it as part of a paste.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(ipc.writeToPane).toHaveBeenLastCalledWith("p", "\r");
     expect(useQueues.getState().p.items.map((i) => i.text)).toEqual(["multi\nline"]);
 
     // Paused: nothing is sent.
@@ -84,13 +87,15 @@ describe("queue runner", () => {
     deck.setStatus("p", "working", null);
     deck.setStatus("p", "done", null);
     await vi.advanceTimersByTimeAsync(ADVANCE_DELAY_MS);
-    expect(ipc.writeToPane).toHaveBeenCalledTimes(1);
+    expect(ipc.writeToPane).toHaveBeenCalledTimes(2);
 
     queues.setPaused("p", false);
     deck.setStatus("p", "working", null);
     deck.setStatus("p", "done", null);
     await vi.advanceTimersByTimeAsync(ADVANCE_DELAY_MS);
-    expect(ipc.writeToPane).toHaveBeenLastCalledWith("p", "\x1b[200~multi\nline\x1b[201~\r");
+    expect(ipc.writeToPane).toHaveBeenLastCalledWith("p", "\x1b[200~multi\nline\x1b[201~");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(ipc.writeToPane).toHaveBeenLastCalledWith("p", "\r");
 
     deck.removePane("p");
     expect(useQueues.getState().p).toBeUndefined();

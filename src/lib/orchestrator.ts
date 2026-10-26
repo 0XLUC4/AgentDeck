@@ -1,12 +1,12 @@
 // Orchestrator: a Claude Code pane driving the other agents of its workspace through AgentDeck's MCP server
 // (src-tauri/src/mcp). The backend validates arguments; this side checks scope and acts on panes and stores.
 import { create } from "zustand";
-import { promptPayload } from "../components/Broadcast/send";
+import { sendPrompt } from "../components/Broadcast/send";
 import { activeTab, activeWorkspace, activityKey, deck, type Pane, type Tab, useDeck } from "../store/deck";
 import { createPane, interruptPane, paneOutput } from "../store/runtime";
 import { useSettings } from "../store/settings";
 import { useTasks } from "../store/tasks";
-import { mcpRespond, mcpSetPaused, onMcpActivity, onMcpRequest, writeToPane } from "./ipc";
+import { mcpRespond, mcpSetPaused, onMcpActivity, onMcpRequest } from "./ipc";
 import type { AgentKind, McpActivity, McpRequest } from "./types";
 
 export const ORCHESTRATOR_TITLE = "Orchestrator";
@@ -186,9 +186,7 @@ export async function handleMcpRequest(req: Pick<McpRequest, "orchestratorId" | 
     case "send_prompt": {
       const pane = target(scope, str(args.paneId));
       assertCanType(pane);
-      const payload = promptPayload(str(args.text));
-      // promptPayload always ends with the submitting \r.
-      await writeToPane(pane.id, args.submit === false ? payload.slice(0, -1) : payload);
+      await sendPrompt(pane.id, str(args.text), args.submit !== false);
       return { ok: true };
     }
     case "get_status": {

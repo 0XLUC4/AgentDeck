@@ -1,10 +1,19 @@
 // Writing a prompt into an agent's terminal and submitting it.
 import { writeToPane } from "../../lib/ipc";
 
-/** Bytes that make the agent receive `text` as one prompt and submit it. Multiline text goes as a bracketed paste. */
-export function promptPayload(text: string): string {
+/** Agent TUIs read text + Enter arriving in one write as a paste and insert a newline instead of submitting. */
+const SUBMIT_DELAY_MS = 120;
+
+/** Text as the agent should receive it: multiline text goes as one bracketed paste. */
+export function promptText(text: string): string {
   const body = text.replace(/\r\n?/g, "\n");
-  return body.includes("\n") ? `\x1b[200~${body}\x1b[201~\r` : `${body}\r`;
+  return body.includes("\n") ? `\x1b[200~${body}\x1b[201~` : body;
 }
 
-export const sendPrompt = (paneId: string, text: string) => writeToPane(paneId, promptPayload(text));
+/** Types the prompt, then presses Enter in a separate write when `submit`. */
+export async function sendPrompt(paneId: string, text: string, submit = true): Promise<void> {
+  await writeToPane(paneId, promptText(text));
+  if (!submit) return;
+  await new Promise((resolve) => setTimeout(resolve, SUBMIT_DELAY_MS));
+  await writeToPane(paneId, "\r");
+}

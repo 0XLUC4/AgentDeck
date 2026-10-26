@@ -91,13 +91,13 @@ describe("runtime", () => {
   });
 
   it("adopts a live pane without spawning and repaints it on the first size report", async () => {
-    await createPane(spec("p4"), "t1", true);
+    await createPane(spec("p9"), "t1", true);
     expect(ipc.spawnPane).not.toHaveBeenCalled();
-    reportSize("p4", 100, 30);
+    reportSize("p9", 100, 30);
     await vi.waitFor(() => expect(ipc.resizePane).toHaveBeenCalledTimes(2));
     expect(ipc.resizePane.mock.calls).toEqual([
-      ["p4", 99, 30],
-      ["p4", 100, 30],
+      ["p9", 99, 30],
+      ["p9", 100, 30],
     ]);
   });
 
