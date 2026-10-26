@@ -149,7 +149,7 @@ fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors().find(|d| d.join(".git").exists()).map(Path::to_path_buf)
 }
 
-/// Creates a dedicated git worktree for the pane and returns its path.
+/// Creates (or reuses) the dedicated git worktree for the pane and returns its path.
 pub fn create_worktree(cwd: &str, pane_id: &str) -> Result<String, String> {
     let short: String = pane_id.chars().take(8).collect();
     if short.is_empty() || !short.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') || short.starts_with('-') {
@@ -160,6 +160,9 @@ pub fn create_worktree(cwd: &str, pane_id: &str) -> Result<String, String> {
     let parent = root.parent().ok_or("repository has no parent folder")?;
     let target = parent.join(format!("{name}-agentdeck-{short}"));
     let target_str = target.to_string_lossy().into_owned();
+    if target.is_dir() {
+        return Ok(target_str); // restart / restored session: reuse this pane's worktree
+    }
     git(&root, &["worktree", "add", &target_str, "-b", &format!("agentdeck/{short}")])?;
     Ok(target_str)
 }
