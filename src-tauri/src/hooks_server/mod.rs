@@ -1,7 +1,8 @@
 //! Local HTTP server (127.0.0.1 only, secret token) receiving agent hook events
 //! and re-emitting them to the UI as `agent-status`.
 
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -16,6 +17,10 @@ const PANE_HEADER: &str = "X-AgentDeck-Pane";
 /// Preferred port keeps `.claude/settings.local.json` stable across app runs.
 const PREFERRED_PORT: u16 = 47800;
 const MAX_BODY: u64 = 1024 * 1024;
+/// Cap on prompt/summary sent to the UI (bytes).
+const MAX_TEXT: usize = 8 * 1024;
+/// Only the end of a transcript is read when looking for the last assistant message.
+const TRANSCRIPT_TAIL: u64 = 256 * 1024;
 
 pub struct HookServer {
     pub port: u16,
@@ -47,6 +52,10 @@ pub struct AgentStatusEvent {
     pub last_action: Option<String>,
     /// Raw hook name, e.g. "PreToolUse".
     pub event: String,
+    /// User request that started the turn (Claude UserPromptSubmit, Codex input-messages).
+    pub prompt: Option<String>,
+    /// Agent's final message of the turn (Claude Stop, Codex agent-turn-complete).
+    pub summary: Option<String>,
 }
 
 /// Starts the hook server on a background thread.
@@ -140,14 +149,17 @@ fn handle(req: &mut Request, token: &str) -> Result<Option<AgentStatusEvent>, u1
     .flatten()
     .find(|p| !p.is_empty())
     .ok_or(400u16)?;
-    Ok(
-        map_event(&json).map(|(status, last_action, event)| AgentStatusEvent {
+    Ok(map_event(&json).map(|(status, last_action, event)| {
+        let (prompt, summary) = details(&json);
+        AgentStatusEvent {
             pane_id,
             status,
             last_action,
             event,
-        }),
-    )
+            prompt,
+            summary,
+        }
+    }))
 }
 
 /// Constant-time comparison (length leak is fine: tokens are fixed-length UUIDs).
@@ -190,10 +202,89 @@ pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
             _ => return None, // idle_prompt etc. must not override "done"
         },
         "Stop" => (PaneStatus::Done, None),
-        "StopFailure" => (PaneStatus::Error, str_field("error_type")),
+        "StopFailure" => (PaneStatus::Error, str_field("error").or_else(|| str_field("error_type"))),
         _ => return None,
     };
     Some((status, action, event))
+}
+
+/// (prompt, summary) carried by a payload, capped to MAX_TEXT. Never fails.
+fn details(body: &Value) -> (Option<String>, Option<String>) {
+    let text = |k: &str| body[k].as_str().filter(|s| !s.trim().is_empty()).map(cap);
+    match body["hook_event_name"].as_str() {
+        Some("UserPromptSubmit") => (text("prompt"), None),
+        Some("Stop") => (
+            None,
+            text("last_assistant_message").or_else(|| {
+                // Older Claude Code versions lack last_assistant_message.
+                let root = home_dir()?.join(".claude");
+                let path = guarded_transcript(body["transcript_path"].as_str()?, &root)?;
+                last_assistant_text(&read_tail(&path)?).map(|s| cap(&s))
+            }),
+        ),
+        None if body["type"] == "agent-turn-complete" => {
+            let inputs: Vec<&str> = body["input-messages"]
+                .as_array()
+                .map(|a| a.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let prompt = inputs.join("\n\n");
+            let prompt = (!prompt.trim().is_empty()).then(|| cap(&prompt));
+            (prompt, text("last-assistant-message"))
+        }
+        _ => (None, None),
+    }
+}
+
+/// Truncates to MAX_TEXT bytes on a char boundary.
+fn cap(text: &str) -> String {
+    let mut end = text.len().min(MAX_TEXT);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+}
+
+/// The hook body is untrusted: only a `.jsonl` file under `root` (after resolving links and `..`) is read.
+fn guarded_transcript(path: &str, root: &Path) -> Option<PathBuf> {
+    let path = std::fs::canonicalize(path).ok()?;
+    let root = std::fs::canonicalize(root).ok()?;
+    (path.starts_with(&root) && path.extension()? == "jsonl" && path.is_file()).then_some(path)
+}
+
+fn read_tail(path: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(TRANSCRIPT_TAIL)))
+        .ok()?;
+    let mut buf = Vec::new();
+    file.take(TRANSCRIPT_TAIL).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Text of the last assistant message in a Claude transcript (JSONL). A cut first line is skipped.
+fn last_assistant_text(jsonl: &str) -> Option<String> {
+    jsonl
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|v| v["type"] == "assistant")
+        .find_map(|v| {
+            let content = &v["message"]["content"];
+            let text = match content.as_array() {
+                Some(parts) => parts
+                    .iter()
+                    .filter(|p| p["type"] == "text")
+                    .filter_map(|p| p["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                None => content.as_str()?.to_owned(),
+            };
+            Some(text).filter(|t| !t.trim().is_empty())
+        })
 }
 
 /// "Bash: npm test", "Edit src/STYLE.md" (paths made relative to the session cwd).
@@ -290,7 +381,7 @@ mod tests {
             Some((PaneStatus::Done, None))
         );
         assert_eq!(
-            status(json!({"hook_event_name": "StopFailure", "error_type": "rate_limit"})),
+            status(json!({"hook_event_name": "StopFailure", "error": "rate_limit"})),
             Some((PaneStatus::Error, Some("rate_limit".into())))
         );
         assert_eq!(status(json!({"hook_event_name": "PreCompact"})), None);
@@ -328,6 +419,78 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!((ev.pane_id.as_str(), ev.status), ("p1", PaneStatus::Done));
+    }
+
+    #[test]
+    fn extracts_prompt_and_summary() {
+        assert_eq!(
+            details(&json!({"hook_event_name": "UserPromptSubmit", "prompt": "fix bug"})),
+            (Some("fix bug".into()), None)
+        );
+        assert_eq!(
+            details(&json!({"hook_event_name": "Stop", "last_assistant_message": "Done."})),
+            (None, Some("Done.".into()))
+        );
+        assert_eq!(
+            details(&json!({"hook_event_name": "PreToolUse", "prompt": "x"})),
+            (None, None)
+        );
+        assert_eq!(
+            details(
+                &json!({"type": "agent-turn-complete", "input-messages": ["a", "b"],
+                "last-assistant-message": "ok"})
+            ),
+            (Some("a\n\nb".into()), Some("ok".into()))
+        );
+        assert_eq!(
+            details(&json!({"type": "agent-turn-complete"})),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn cap_is_char_safe() {
+        let long = "é".repeat(MAX_TEXT); // 2 bytes each
+        assert_eq!(cap(&long).len(), MAX_TEXT);
+        assert_eq!(cap(&format!("a{long}")).len(), MAX_TEXT - 1);
+        assert_eq!(cap("abc"), "abc");
+    }
+
+    #[test]
+    fn parses_transcript_tail() {
+        let jsonl = [
+            r#"tial line {"#,
+            r#"{"type":"user","message":{"role":"user","content":"hi"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"First"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Line 1"},{"type":"tool_use","name":"Bash"},{"type":"text","text":"Line 2"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}"#,
+            r#"{"type":"system"}"#,
+        ]
+        .join("\n");
+        assert_eq!(last_assistant_text(&jsonl), Some("Line 1\nLine 2".into()));
+        assert_eq!(last_assistant_text("garbage"), None);
+    }
+
+    #[test]
+    fn transcript_path_guard() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-guard-{}", uuid::Uuid::new_v4()));
+        let root = dir.join(".claude");
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let ok = root.join("projects").join("t.jsonl");
+        let txt = root.join("projects").join("t.txt");
+        let outside = dir.join("t.jsonl");
+        for f in [&ok, &txt, &outside] {
+            std::fs::write(f, "{}").unwrap();
+        }
+        let s = |p: &Path| p.to_str().unwrap().to_owned();
+        assert!(guarded_transcript(&s(&ok), &root).is_some());
+        assert!(guarded_transcript(&s(&txt), &root).is_none());
+        assert!(guarded_transcript(&s(&outside), &root).is_none());
+        let escape = root.join("projects").join("..").join("..").join("t.jsonl");
+        assert!(guarded_transcript(&s(&escape), &root).is_none());
+        assert!(guarded_transcript(&s(&root.join("missing.jsonl")), &root).is_none());
+        assert_eq!(read_tail(&ok).as_deref(), Some("{}"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

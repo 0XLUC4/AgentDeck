@@ -1,4 +1,4 @@
-import { Activity, Check, X } from "lucide-react";
+import { Activity, Check, EyeOff, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AgentLogo } from "../components/AgentLogo/AgentLogo";
 import { IconButton } from "../components/IconButton/IconButton";
@@ -16,6 +16,7 @@ import {
 } from "../store/deck";
 import { focusPane } from "../store/runtime";
 import { revealPane } from "./Deck";
+import { TaskDetail } from "./TaskDetail";
 
 const GROUP_LABEL: Record<ActivityKey, string> = {
   waiting: "En attente",
@@ -44,7 +45,7 @@ function Since({ since }: { since: number }) {
   return <span className="shrink-0 text-xs tabular-nums text-subtle">{formatSince(now - since)}</span>;
 }
 
-function ActivityRow({ item, active }: { item: ActivityItem; active: boolean }) {
+function ActivityRow({ item, active, onDetail }: { item: ActivityItem; active: boolean; onDetail: () => void }) {
   const { pane, tab, workspace } = item;
   const key = activityKey(pane);
   const status = key === "exited" ? null : key;
@@ -83,14 +84,23 @@ function ActivityRow({ item, active }: { item: ActivityItem; active: boolean }) 
         )}
       </button>
       {key === "done" && (
-        <IconButton
-          icon={Check}
-          size="sm"
-          label={`Marquer ${paneName(pane)} comme vu`}
-          hint="Vu : repasse l'agent en inactif"
-          className="mt-1.5 mr-1.5"
-          onClick={() => deck.acknowledge(pane.id)}
-        />
+        <span className="mt-1.5 mr-1.5 flex flex-col items-center">
+          <IconButton
+            icon={Check}
+            size="sm"
+            label={`Voir ce que ${paneName(pane)} a terminé`}
+            hint="Voir ce qu'il a terminé"
+            onClick={onDetail}
+          />
+          <IconButton
+            icon={EyeOff}
+            size="sm"
+            label={`Ignorer ${paneName(pane)}`}
+            hint="Ignorer : repasse l'agent en inactif sans ouvrir le détail"
+            className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            onClick={() => deck.acknowledge(pane.id)}
+          />
+        </span>
       )}
     </li>
   );
@@ -103,6 +113,8 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
   const panes = useDeck((s) => s.panes);
   const activePaneId = useDeck((s) => s.activePaneId);
   const groups = useMemo(() => activityGroups(tabs, workspaces, panes), [tabs, workspaces, panes]);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detail = groups.flatMap((g) => g.items).find((i) => i.pane.id === detailId);
 
   return (
     <aside className="flex w-[260px] shrink-0 flex-col border-l border-line bg-panel" aria-label="Activité des agents">
@@ -110,21 +122,29 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
         <h2 className="text-xs font-medium text-subtle">Activité</h2>
         <IconButton icon={X} label="Masquer l'activité" hint="Masquer l'activité (Ctrl+Maj+A)" onClick={onClose} />
       </div>
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto border-t border-line">
-        {groups.length === 0 && <p className="px-3 py-4 text-xs text-subtle">Aucun agent lancé.</p>}
-        {groups.map((group) => (
-          <section key={group.key} aria-label={GROUP_LABEL[group.key]}>
-            <h3 className="flex items-center border-b border-line px-3 pt-3 pb-1 text-xs text-subtle">
-              {GROUP_LABEL[group.key]}
-              <span className="ml-auto tabular-nums">{group.items.length}</span>
-            </h3>
-            <ul>
-              {group.items.map((item) => (
-                <ActivityRow key={item.pane.id} item={item} active={item.pane.id === activePaneId} />
-              ))}
-            </ul>
-          </section>
-        ))}
+      <div className="relative flex min-h-0 flex-1 flex-col border-t border-line">
+        {detail && <TaskDetail item={detail} onJump={() => jumpTo(detail)} onClose={() => setDetailId(null)} />}
+        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+          {groups.length === 0 && <p className="px-3 py-4 text-xs text-subtle">Aucun agent lancé.</p>}
+          {groups.map((group) => (
+            <section key={group.key} aria-label={GROUP_LABEL[group.key]}>
+              <h3 className="flex items-center border-b border-line px-3 pt-3 pb-1 text-xs text-subtle">
+                {GROUP_LABEL[group.key]}
+                <span className="ml-auto tabular-nums">{group.items.length}</span>
+              </h3>
+              <ul>
+                {group.items.map((item) => (
+                  <ActivityRow
+                    key={item.pane.id}
+                    item={item}
+                    active={item.pane.id === activePaneId}
+                    onDetail={() => setDetailId(item.pane.id)}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
       </div>
     </aside>
   );

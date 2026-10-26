@@ -15,6 +15,7 @@ import { notify } from "../lib/notify";
 import { RingBuffer } from "../lib/ringBuffer";
 import { activeTab, deck, newPane, type PaneSpec, useDeck } from "./deck";
 import { useSettings } from "./settings";
+import { tasks } from "./tasks";
 
 /** Output within this window counts as "working" for panes without hooks. */
 const ACTIVITY_WINDOW_MS = 3000;
@@ -160,6 +161,7 @@ export async function closePane(id: string): Promise<void> {
   const rt = runtimes.get(id);
   runtimes.delete(id);
   deck.removePane(id);
+  tasks.remove(id);
   if (backendActivePane === id) {
     backendActivePane = null;
     setActivePane(null).catch((err) => console.warn("set_active_pane failed", err));
@@ -250,6 +252,7 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
     const prev = state.panes[e.paneId];
     if (!prev) return;
     deck.updatePane(e.paneId, (p) => ({ ...p, hooked: true }));
+    tasks.apply(e.paneId, e, prev.taskStartedAt ?? undefined);
     deck.setStatus(e.paneId, e.status, e.lastAction);
     const event = e.status as keyof typeof NOTIFY_TEXT;
     if (e.status === prev.status || !(event in NOTIFY_TEXT)) return;
