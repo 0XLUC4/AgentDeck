@@ -1,23 +1,23 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronRight, Copy, Minus, PanelLeft, Pause, RotateCcw, Square, SquareStop, X } from "lucide-react";
+import { ChevronRight, Copy, Minus, PanelLeft, Pause, RotateCcw, Settings, Square, SquareStop, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { IconButton } from "../components/IconButton/IconButton";
 import { activeTab, activeWorkspace, useDeck } from "../store/deck";
 import { interruptAll, restartAll, stopAll } from "../store/runtime";
+import { useSettings } from "../store/settings";
 import { ActivityToggle } from "./Activity";
 
 const appWindow = getCurrentWindow();
 const warn = (what: string) => (err: unknown) => console.warn(`${what} failed`, err);
 
-function confirmStopAll() {
+/** Runs a bulk action on the active session, asking first unless disabled in Réglages. */
+function confirmBulk(question: (count: number) => string, action: () => Promise<unknown>) {
   const count = activeTab()?.paneIds.length ?? 0;
-  if (count > 0 && window.confirm(`Arrêter les ${count} agent(s) de cette session ?`)) void stopAll();
+  if (count > 0 && (!useSettings.getState().confirmBulk || window.confirm(question(count)))) void action();
 }
 
-function confirmRestartAll() {
-  const count = activeTab()?.paneIds.length ?? 0;
-  if (count > 0 && window.confirm(`Relancer les ${count} agent(s) de cette session ?`)) void restartAll();
-}
+const confirmStopAll = () => confirmBulk((n) => `Arrêter les ${n} agent(s) de cette session ?`, stopAll);
+const confirmRestartAll = () => confirmBulk((n) => `Relancer les ${n} agent(s) de cette session ?`, restartAll);
 
 /** Logo: three stacked cards, the front one in the accent color. */
 function AppMark() {
@@ -96,11 +96,13 @@ export function TitleBar({
   onToggleSidebar,
   activityOpen,
   onToggleActivity,
+  onOpenSettings,
 }: {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   activityOpen: boolean;
   onToggleActivity: () => void;
+  onOpenSettings: () => void;
 }) {
   const workspaceName = useDeck((s) => activeWorkspace(s).name);
   const sessionName = useDeck((s) => s.tabs.find((t) => t.id === s.activeTabId)?.name ?? "");
@@ -161,8 +163,9 @@ export function TitleBar({
         />
       </div>
       <span className="h-5 w-px bg-line" aria-hidden="true" />
-      <div className="px-2">
+      <div className="flex items-center gap-0.5 px-2">
         <ActivityToggle open={activityOpen} onToggle={onToggleActivity} />
+        <IconButton icon={Settings} label="Réglages" hint="Réglages (Ctrl+,)" onClick={onOpenSettings} />
       </div>
       <span className="h-5 w-px bg-line" aria-hidden="true" />
       <WindowControls />

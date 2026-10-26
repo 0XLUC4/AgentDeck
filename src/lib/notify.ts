@@ -20,9 +20,10 @@ function beep(): void {
   osc.stop(audio.currentTime + 0.25);
 }
 
-export async function notify(title: string, body: string): Promise<void> {
+export async function notify(title: string, body: string, { system = true, sound = true } = {}): Promise<void> {
   try {
-    beep();
+    if (sound) beep();
+    if (!system) return;
     if (await canNotify()) sendNotification({ title, body });
   } catch (err) {
     console.warn("notification failed", err);

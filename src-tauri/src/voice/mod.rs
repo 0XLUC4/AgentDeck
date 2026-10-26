@@ -1,29 +1,28 @@
-//! Voice input: global push-to-talk shortcut, mic capture (cpal), transcription,
-//! and typing the transcript into the active pane.
+//! Voice input: global push-to-talk shortcut, mic capture (cpal), transcription
+//! (local whisper.cpp or an OpenAI-compatible API), and typing the transcript into
+//! the active pane. Settings live in `config` and apply without restart.
 //!
 //! Events: `voice-level` (f32 0..1, ~30/s), `voice-state` ("idle" | "listening" |
-//! "transcribing" | "error"), `voice-transcript` (String), `voice-error` (String).
+//! "downloading" | "transcribing" | "error"), `voice-download` ({model, received, total}),
+//! `voice-transcript` (String), `voice-error` (String).
 
 mod audio;
+mod config;
+mod local;
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 use crate::AppState;
 use audio::Capture;
+use config::{Engine, VoiceConfig, VoiceConfigView, WhisperModel};
 
-// TODO(settings): make shortcut + mode configurable via tauri-plugin-store.
-/// User's choice. Note: may clash with IME switching on some Windows keyboard setups.
-const SHORTCUT: &str = "ctrl+space";
-/// true: hold to talk. false: press to start, press again to stop.
-const PUSH_TO_TALK: bool = true;
-/// Append `\r` after the transcript. Off: the user validates in the terminal.
-const SUBMIT_ON_TRANSCRIPT: bool = false;
 const MIN_CLIP_SECS: f32 = 0.3;
 /// Auto-stop (and transcribe) if the key-up is lost.
 const MAX_RECORDING: Duration = Duration::from_secs(60);
@@ -32,12 +31,11 @@ const ERROR_HIDE_DELAY: Duration = Duration::from_secs(4);
 /// Distance between the pill and the bottom of the screen, in logical px.
 const BOTTOM_MARGIN: f64 = 80.0;
 
-const DEFAULT_STT_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
-const DEFAULT_STT_MODEL: &str = "whisper-1";
-
 /// Voice state managed by Tauri.
 #[derive(Default)]
 struct Voice {
+    /// Live settings; snapshot (clone) before long work instead of holding the lock.
+    config: Mutex<VoiceConfig>,
     /// Running capture, tagged with its recording session id.
     capture: Mutex<Option<(u64, Capture)>>,
     /// Bumped on every state change so a pending hide is cancelled by newer activity.
@@ -48,31 +46,176 @@ struct Voice {
     transcribing: AtomicBool,
 }
 
-/// Registers the global shortcut and voice state. Called from `setup`.
+#[derive(Clone, Serialize)]
+struct DownloadProgress {
+    model: WhisperModel,
+    received: u64,
+    /// `None` when the server sends no Content-Length.
+    total: Option<u64>,
+}
+
+fn emit_download(app: &AppHandle, model: WhisperModel, received: u64, total: u64) {
+    let total = (total > 0).then_some(total);
+    let _ = app.emit(
+        "voice-download",
+        DownloadProgress {
+            model,
+            received,
+            total,
+        },
+    );
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStatus {
+    model: WhisperModel,
+    downloaded: bool,
+    size_bytes: Option<u64>,
+}
+
+/// Loads settings, registers the global shortcut and voice state. Called from `setup`.
 pub fn init(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    app.manage(Voice::default());
+    let config = VoiceConfig::load(&config_path(app)?);
+    let shortcut = config.shortcut.clone();
+    app.manage(Voice {
+        config: Mutex::new(config),
+        ..Voice::default()
+    });
     if let Some(pill) = app.get_webview_window("voice") {
         pill.set_focusable(false)?; // never steal focus from the terminal
     }
-    let registered = app
-        .global_shortcut()
-        .on_shortcut(SHORTCUT, |app, _, event| {
-            let result = match (event.state(), PUSH_TO_TALK) {
-                (ShortcutState::Pressed, true) => start(app),
-                (ShortcutState::Released, true) => stop(app, None),
-                (ShortcutState::Pressed, false) if is_recording(app) => stop(app, None),
-                (ShortcutState::Pressed, false) => start(app),
-                (ShortcutState::Released, false) => Ok(()),
-            };
-            if let Err(e) = result {
-                fail(app, &e);
-            }
-        });
     // Another app may own the shortcut: keep the app usable, voice_start still works.
-    if let Err(e) = registered {
-        eprintln!("voice: cannot register shortcut {SHORTCUT}: {e}");
+    if let Err(e) = app
+        .global_shortcut()
+        .on_shortcut(shortcut.as_str(), on_shortcut)
+    {
+        eprintln!("voice: cannot register shortcut {shortcut}: {e}");
     }
     Ok(())
+}
+
+fn on_shortcut(app: &AppHandle, _: &Shortcut, event: ShortcutEvent) {
+    let push_to_talk = app
+        .state::<Voice>()
+        .config
+        .lock()
+        .map_or(true, |c| c.push_to_talk);
+    let result = match (event.state(), push_to_talk) {
+        (ShortcutState::Pressed, true) => start(app),
+        (ShortcutState::Released, true) => stop(app, None),
+        (ShortcutState::Pressed, false) if is_recording(app) => stop(app, None),
+        (ShortcutState::Pressed, false) => start(app),
+        (ShortcutState::Released, false) => Ok(()),
+    };
+    if let Err(e) = result {
+        fail(app, &e);
+    }
+}
+
+fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("voice.json"))
+}
+
+fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models"))
+}
+
+fn config_snapshot(app: &AppHandle) -> Result<VoiceConfig, String> {
+    Ok(app
+        .state::<Voice>()
+        .config
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone())
+}
+
+fn view(config: VoiceConfig) -> VoiceConfigView {
+    VoiceConfigView {
+        config,
+        has_api_key: config::api_key().is_some(),
+    }
+}
+
+#[tauri::command]
+pub fn voice_get_config(app: AppHandle) -> Result<VoiceConfigView, String> {
+    config_snapshot(&app).map(view)
+}
+
+/// Validates, applies live (shortcut swap included) and persists the settings.
+/// Sync command: runs on the main thread, like shortcut registration and events.
+#[tauri::command]
+pub fn voice_set_config(app: AppHandle, config: VoiceConfig) -> Result<VoiceConfigView, String> {
+    let new_shortcut = config.validate()?;
+    let old = config_snapshot(&app)?;
+    let old_shortcut = old.shortcut.parse::<Shortcut>().ok();
+    if old_shortcut != Some(new_shortcut) {
+        let shortcuts = app.global_shortcut();
+        if let Some(old_shortcut) = old_shortcut {
+            let _ = shortcuts.unregister(old_shortcut); // may never have been registered
+        }
+        if let Err(e) = shortcuts.on_shortcut(new_shortcut, on_shortcut) {
+            if let Some(old_shortcut) = old_shortcut
+                && let Err(e) = shortcuts.on_shortcut(old_shortcut, on_shortcut)
+            {
+                eprintln!("voice: cannot restore shortcut {}: {e}", old.shortcut);
+            }
+            return Err(format!(
+                "cannot register shortcut \"{}\": {e}",
+                config.shortcut
+            ));
+        }
+    }
+    *app.state::<Voice>()
+        .config
+        .lock()
+        .map_err(|e| e.to_string())? = config.clone();
+    config.save(&config_path(&app)?)?;
+    Ok(view(config))
+}
+
+/// Saves the API key in the OS credential store; `None` deletes it.
+#[tauri::command]
+pub fn voice_set_api_key(key: Option<String>) -> Result<(), String> {
+    config::set_api_key(key.as_deref())
+}
+
+#[tauri::command]
+pub fn voice_list_models(app: AppHandle) -> Result<Vec<ModelStatus>, String> {
+    let dir = models_dir(&app)?;
+    Ok(WhisperModel::ALL
+        .into_iter()
+        .map(|model| {
+            let size = local::downloaded(&dir, model).map(|(_, size)| size);
+            ModelStatus {
+                model,
+                downloaded: size.is_some(),
+                size_bytes: size,
+            }
+        })
+        .collect())
+}
+
+/// Downloads `model` (no-op if present). Progress via `voice-download`.
+#[tauri::command]
+pub async fn voice_download_model(app: AppHandle, model: WhisperModel) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = models_dir(&app)?;
+        local::ensure_model(&dir, model, |received, total| {
+            emit_download(&app, model, received, total);
+        })
+        .map(drop)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -173,8 +316,12 @@ fn stop(app: &AppHandle, session: Option<u64>) -> Result<(), String> {
 }
 
 fn transcribe_and_type(app: &AppHandle, samples: &[f32], rate: u32) -> Result<(), String> {
+    let config = config_snapshot(app)?;
     let pcm = audio::resample(samples, rate, audio::TARGET_RATE);
-    let text = transcribe(audio::wav_16bit_mono(&pcm, audio::TARGET_RATE))?;
+    let text = match config.engine {
+        Engine::Api => transcribe_api(&config, audio::wav_16bit_mono(&pcm, audio::TARGET_RATE))?,
+        Engine::Local => transcribe_local(app, &config, &pcm)?,
+    };
     let text = text.trim();
     if text.is_empty() {
         return Ok(());
@@ -182,40 +329,49 @@ fn transcribe_and_type(app: &AppHandle, samples: &[f32], rate: u32) -> Result<()
     let _ = app.emit("voice-transcript", text);
     // TODO(team-voice): route "Codex, ..." / "Claude, ..." to the matching pane once
     // pane metadata is available backend-side.
-    voice_send(
-        app.state::<AppState>(),
-        text.to_string(),
-        SUBMIT_ON_TRANSCRIPT,
-    )
+    voice_send(app.state::<AppState>(), text.to_string(), config.submit)
+}
+
+/// Downloads the model on first use (pill shows progress), then runs whisper.cpp.
+fn transcribe_local(app: &AppHandle, config: &VoiceConfig, pcm: &[f32]) -> Result<String, String> {
+    let model = config.model;
+    let mut announced = false;
+    let path = local::ensure_model(&models_dir(app)?, model, |received, total| {
+        if !announced {
+            announced = true;
+            set_state(app, "downloading");
+        }
+        emit_download(app, model, received, total);
+    })?;
+    if announced {
+        set_state(app, "transcribing");
+    }
+    local::transcribe(&path, pcm, &config.language)
 }
 
 /// POSTs a WAV to an OpenAI-compatible `/audio/transcriptions` endpoint.
-/// Env: AGENTDECK_STT_URL, AGENTDECK_STT_MODEL, AGENTDECK_STT_KEY (else OPENAI_API_KEY).
-fn transcribe(wav: Vec<u8>) -> Result<String, String> {
+fn transcribe_api(config: &VoiceConfig, wav: Vec<u8>) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Transcript {
         text: String,
     }
-    let url = std::env::var("AGENTDECK_STT_URL").ok();
-    if let Some(url) = &url {
-        check_stt_url(url)?;
+    config::check_stt_url(&config.api_url)?;
+    let key = config::api_key();
+    if key.is_none() && config.api_url == config::DEFAULT_STT_URL {
+        return Err("no API key set (Settings > Voice)".into());
     }
-    let key = std::env::var("AGENTDECK_STT_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .ok();
-    if url.is_none() && key.is_none() {
-        return Err("OPENAI_API_KEY is not set".into());
-    }
-    let model = std::env::var("AGENTDECK_STT_MODEL").unwrap_or_else(|_| DEFAULT_STT_MODEL.into());
     let file = reqwest::blocking::multipart::Part::bytes(wav)
         .file_name("audio.wav")
         .mime_str("audio/wav")
         .map_err(|e| e.to_string())?;
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("model", model)
+    let mut form = reqwest::blocking::multipart::Form::new()
+        .text("model", config.api_model.clone())
         .part("file", file);
+    if config.language != "auto" {
+        form = form.text("language", config.language.clone());
+    }
     let mut request = reqwest::blocking::Client::new()
-        .post(url.as_deref().unwrap_or(DEFAULT_STT_URL))
+        .post(&config.api_url)
         .timeout(Duration::from_secs(60))
         .multipart(form);
     if let Some(key) = key {
@@ -238,17 +394,6 @@ fn transcribe(wav: Vec<u8>) -> Result<String, String> {
         .json::<Transcript>()
         .map(|t| t.text)
         .map_err(|e| format!("bad transcription response: {e}"))
-}
-
-/// Audio and the API key must not travel in clear: https only, except loopback.
-fn check_stt_url(url: &str) -> Result<(), String> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid AGENTDECK_STT_URL: {e}"))?;
-    let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
-    match parsed.scheme() {
-        "https" => Ok(()),
-        "http" if loopback => Ok(()),
-        _ => Err("AGENTDECK_STT_URL must use https (http only for localhost)".into()),
-    }
 }
 
 /// Reports an error. Never touches the capture slot: every failing path has
@@ -312,22 +457,5 @@ fn show_pill(app: &AppHandle) {
     }
     if let Err(e) = pill.show() {
         eprintln!("voice: show pill: {e}");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::check_stt_url;
-
-    #[test]
-    fn stt_url_requires_https_unless_loopback() {
-        assert!(check_stt_url("https://api.openai.com/v1/audio/transcriptions").is_ok());
-        assert!(check_stt_url("http://localhost:8080/v1/audio/transcriptions").is_ok());
-        assert!(check_stt_url("http://127.0.0.1:9000/x").is_ok());
-        assert!(check_stt_url("http://[::1]:9000/x").is_ok());
-        assert!(check_stt_url("http://example.com/x").is_err());
-        assert!(check_stt_url("http://localhost.evil.com/x").is_err());
-        assert!(check_stt_url("ftp://localhost/x").is_err());
-        assert!(check_stt_url("not a url").is_err());
     }
 }

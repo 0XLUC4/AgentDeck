@@ -32,6 +32,12 @@ tiny_http = "0.12.0"
 cpal = "0.18.2"
 uuid = { version = "1.29.0", features = ["v4"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "multipart", "json"] }
+whisper-rs = "0.16.0"
+keyring = { version = "4.2.0", default-features = false, features = ["windows-native-keyring-store", "v1"] }
+
+[features]
+# Vulkan GPU backend for local transcription (needs the Vulkan SDK at build time).
+gpu = ["whisper-rs/vulkan"]
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

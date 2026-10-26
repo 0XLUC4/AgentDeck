@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
 import { deck } from "../../store/deck";
 import { attachOutput, reportSize, sendInput } from "../../store/runtime";
+import { DEFAULT_FONT_FAMILY, useSettings } from "../../store/settings";
 
 // Hex mirrors of --color-base / --color-fg in index.css (xterm needs plain colors).
 const THEME = { background: "#100e0c", foreground: "#ebe7e2", cursor: "#f1e7d2", selectionBackground: "#3b3732" };
@@ -22,7 +23,7 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     const host = hostRef.current;
     if (!host) return;
     const term = new Terminal({
-      fontFamily: '"Cascadia Code", Consolas, monospace',
+      fontFamily: useSettings.getState().fontFamily.trim() || DEFAULT_FONT_FAMILY,
       fontSize: initialFontSize.current,
       cursorBlink: true,
       scrollback: 5000,

@@ -6,8 +6,9 @@ import { AGENT_KINDS, AGENTS } from "../../lib/agents";
 import { detectAgents } from "../../lib/ipc";
 import { splitArgs } from "../../lib/splitArgs";
 import type { AgentInfo, AgentKind } from "../../lib/types";
-import { activeWorkspace, FONT_SIZE, folderName, useDeck } from "../../store/deck";
+import { activeWorkspace, folderName, useDeck } from "../../store/deck";
 import { createPane } from "../../store/runtime";
+import { useSettings } from "../../store/settings";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
 import { IconButton } from "../IconButton/IconButton";
 
@@ -35,8 +36,8 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
   const [infos, setInfos] = useState<Partial<Record<AgentKind, AgentInfo>> | null>(null);
   const [agent, setAgent] = useState<AgentKind>("claude");
   const [cwd, setCwd] = useState(() => workspace.path || useDeck.getState().lastCwd);
-  const [worktree, setWorktree] = useState(false);
-  const [args, setArgs] = useState("");
+  const [worktree, setWorktree] = useState(() => useSettings.getState().agents.claude.worktree);
+  const [args, setArgs] = useState(() => useSettings.getState().agents.claude.args);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -48,6 +49,14 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
         setError(`Détection des agents impossible : ${errorMessage(err)}`);
       });
   }, []);
+
+  // Each agent comes prefilled with its defaults from Réglages > Agents.
+  function pickAgent(kind: AgentKind) {
+    const defaults = useSettings.getState().agents[kind];
+    setAgent(kind);
+    setArgs(defaults.args);
+    setWorktree(defaults.worktree);
+  }
 
   // Unknown install state (detection failed/pending) is treated as installed; spawn errors are toasted.
   const installed = (kind: AgentKind) => infos?.[kind]?.installed ?? true;
@@ -76,7 +85,7 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
         args: splitArgs(args),
         worktree,
         completedCount: 0,
-        fontSize: FONT_SIZE.default,
+        fontSize: useSettings.getState().fontSize,
       },
       activeTabId,
     );
@@ -122,7 +131,7 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
                     value={kind}
                     checked={selected}
                     disabled={!ok}
-                    onChange={() => setAgent(kind)}
+                    onChange={() => pickAgent(kind)}
                     className="sr-only"
                   />
                   <span className="flex size-8 shrink-0 items-center justify-center">
