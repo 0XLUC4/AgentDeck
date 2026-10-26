@@ -53,6 +53,8 @@ export interface SpawnOptions {
   worktree: boolean;
   cols: number;
   rows: number;
+  /** Pane title, saved with the terminal history. */
+  title?: string;
 }
 
 /** A project folder currently open in an app (VS Code, Cursor, Explorer...). From `list_open_projects`. */
@@ -78,4 +80,116 @@ export interface VoiceDownload {
   model: WhisperModel;
   received: number;
   total: number | null;
+}
+
+/** One changed file (src-tauri/src/git). Untracked files show as "A"; counts are null for binary files. */
+export interface GitFileChange {
+  path: string;
+  status: string;
+  additions: number | null;
+  deletions: number | null;
+}
+
+/** From `git_status`. */
+export interface GitStatus {
+  root: string;
+  branch: string | null;
+  base: string | null;
+  ahead: number;
+  behind: number;
+  /** Linked worktree on an agentdeck/* branch: merge and removal allowed. */
+  agentWorktree: boolean;
+  files: GitFileChange[];
+}
+
+export interface GitCheckpoint {
+  sha: string;
+  /** ms since epoch */
+  ts: number;
+}
+
+/** From `git_compare`: snapshot trees of both panes, to pass to `git_diff_trees`. */
+export interface GitComparison {
+  from: string;
+  to: string;
+  files: GitFileChange[];
+}
+
+/** `agent-permission` event: a tool call waiting for the user's approval (Claude PermissionRequest hook). */
+export interface PermissionRequest {
+  requestId: string;
+  paneId: string;
+  agent: AgentKind;
+  toolName: string;
+  /** "Bash: rm -rf build", "Edit src/x.ts". */
+  summary: string;
+  /** Full Bash command, or the tool input as JSON (capped 4 KB). */
+  detail: string;
+  /** Rules "Toujours autoriser" would add; empty when that option isn't offered. */
+  suggestions: string[];
+}
+
+/** "ask" releases the request without a decision: the agent shows its own terminal prompt. */
+export type PermissionDecision = "allow" | "allow_always" | "deny" | "ask";
+
+// --- Usage, history, journal (src-tauri/src/{usage,history}) ---
+
+/** Token counts and USD cost (priced models only; `unpricedTokens` are not in `cost`). */
+export interface UsageTotals {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+  tokens: number;
+  cost: number;
+  unpricedTokens: number;
+}
+export type UsageRange = "today" | "7d" | "30d";
+export interface UsageKeyed extends UsageTotals {
+  key: string;
+}
+export interface UsageSummary {
+  total: UsageTotals;
+  /** key: "claude" | "codex". */
+  byAgent: UsageKeyed[];
+  /** key: working directory as recorded by the agent. */
+  byWorkspaceCwd: UsageKeyed[];
+  /** key: YYYY-MM-DD (local), every day of the range, oldest first. */
+  byDay: UsageKeyed[];
+}
+export interface PaneUsage extends UsageTotals {
+  models: string[];
+}
+
+export interface HistoryRunMeta {
+  paneId: string;
+  title: string;
+  agent: string;
+  cwd: string;
+  startedAt: number;
+  endedAt: number | null;
+}
+export interface HistoryHit {
+  /** `<paneId>/<file stem>`: one log part of a run. */
+  runId: string;
+  meta: HistoryRunMeta | null;
+  /** 0-based line in the part. */
+  line: number;
+  text: string;
+  before: string | null;
+  after: string | null;
+}
+export interface HistoryWindow {
+  meta: HistoryRunMeta | null;
+  startLine: number;
+  totalLines: number;
+  lines: string[];
+}
+
+export interface GitCommitInfo {
+  hash: string;
+  /** ISO 8601. */
+  time: string;
+  author: string;
+  subject: string;
 }

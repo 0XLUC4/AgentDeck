@@ -249,15 +249,18 @@ pub fn uninstall_hooks(cwd: String) -> Result<(), String> {
     update_claude_settings(&cwd, strip_claude_hooks)
 }
 
-const CLAUDE_EVENTS: [&str; 7] = [
+const CLAUDE_EVENTS: [&str; 8] = [
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
+    "PermissionRequest",
     "PostToolUse",
     "Notification",
     "Stop",
     "StopFailure",
 ];
+/// PermissionRequest is held by the hook server until the user answers in AgentDeck (hold: 590 s).
+const PERMISSION_TIMEOUT_S: u64 = 600;
 
 /// Read-modify-write of settings.local.json; refuses to touch a file it cannot parse.
 fn update_claude_settings(cwd: &str, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
@@ -333,7 +336,11 @@ fn merge_claude_hooks(settings: &mut Value, url: &str) {
             .entry(event)
             .or_insert_with(|| json!([]));
         if let Some(arr) = groups.as_array_mut() {
-            arr.push(ours.clone());
+            let mut group = ours.clone();
+            if event == "PermissionRequest" {
+                group["hooks"][0]["timeout"] = json!(PERMISSION_TIMEOUT_S);
+            }
+            arr.push(group);
         }
     }
 }
@@ -357,6 +364,12 @@ mod tests {
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(s["hooks"]["Stop"][0]["hooks"][0], user);
         assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(s["hooks"]["PermissionRequest"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            s["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"],
+            600
+        );
+        assert_eq!(s["hooks"]["Stop"][1]["hooks"][0]["timeout"], 5);
 
         // New port replaces, never duplicates.
         merge_claude_hooks(&mut s, "http://127.0.0.1:2/hook");

@@ -28,9 +28,14 @@ interface Runtime {
   cols: number;
   rows: number;
   onExit: (() => void) | null;
+  /** When the current process was spawned (ms); pane usage counts from here. */
+  startedAt?: number;
 }
 
 const runtimes = new Map<string, Runtime>();
+
+/** Spawn time of the pane's current process, or null before it starts. */
+export const paneStartedAt = (id: string): number | null => runtimes.get(id)?.startedAt ?? null;
 /** In-flight stop/restart per pane: a second click joins the first instead of racing a second spawn. */
 const stopping = new Map<string, Promise<void>>();
 const restarting = new Map<string, Promise<void>>();
@@ -90,6 +95,7 @@ async function spawn(id: string): Promise<void> {
   const rt = runtimes.get(id);
   if (!pane || !rt) return;
   const { cols, rows } = rt;
+  rt.startedAt = Date.now();
   try {
     await spawnPane({
       paneId: id,
@@ -99,6 +105,7 @@ async function spawn(id: string): Promise<void> {
       worktree: pane.worktree,
       cols,
       rows,
+      title: pane.title,
     });
     // The terminal may have been fitted while spawning.
     if (rt.cols !== cols || rt.rows !== rows) await resizePane(id, rt.cols, rt.rows);
@@ -255,7 +262,8 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
     tasks.apply(e.paneId, e, prev.taskStartedAt ?? undefined);
     deck.setStatus(e.paneId, e.status, e.lastAction);
     const event = e.status as keyof typeof NOTIFY_TEXT;
-    if (e.status === prev.status || !(event in NOTIFY_TEXT)) return;
+    // PermissionRequest has its own, more precise notification (components/Permission/permissions.ts).
+    if (e.status === prev.status || !(event in NOTIFY_TEXT) || e.event === "PermissionRequest") return;
     const prefs = useSettings.getState().notify;
     const unseen = !document.hasFocus() || state.activePaneId !== e.paneId;
     if (prefs[event] && (unseen || !prefs.onlyUnseen) && (prefs.enabled || prefs.sound)) {

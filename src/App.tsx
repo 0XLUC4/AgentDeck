@@ -1,6 +1,6 @@
 import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { ActivityPanel } from "./app/Activity";
+import { ActivityPanel, PermissionBanner } from "./app/Activity";
 import { Deck } from "./app/Deck";
 import { Sidebar } from "./app/Sidebar";
 import { TabBar } from "./app/TabBar";
@@ -8,17 +8,34 @@ import { TitleBar } from "./app/TitleBar";
 import { Toasts } from "./app/Toasts";
 import { AgentLogo } from "./components/AgentLogo/AgentLogo";
 import { AgentPicker } from "./components/AgentPicker/AgentPicker";
+import { BroadcastHost } from "./components/Broadcast/Broadcast";
+import { CommandPalette } from "./components/CommandPalette/CommandPalette";
+import { startJournalRecorder } from "./components/Journal/recorder";
 import { LinkWorkspaceDialog } from "./components/LinkWorkspace/LinkWorkspaceDialog";
+import { listenPermissions } from "./components/Permission/permissions";
 import { SettingsDialog } from "./components/Settings/SettingsDialog";
+import { TemplatePickerHost } from "./components/Templates/TemplatePicker";
+import { WallOverlay } from "./components/Wall/Wall";
 import { onTick } from "./lib/clock";
+import { useTraySync } from "./lib/tray";
+import { startTaskSpeech } from "./lib/tts";
+import { checkForUpdateSilently } from "./lib/updater";
+import { listenVoiceTranscripts } from "./lib/voiceListener";
 import { activeWorkspace, useDeck } from "./store/deck";
 import { restoreAndAutosave } from "./store/persist";
+import { startQueueRunner } from "./store/queue";
 import { deriveStatuses, listenAgentStatus } from "./store/runtime";
 import { settingsReady, useSettings } from "./store/settings";
 
 // Module-level so StrictMode's double effects don't restore or subscribe twice.
 const ready = restoreAndAutosave();
 listenAgentStatus().catch((err) => console.warn("agent-status listener failed", err));
+startJournalRecorder();
+listenVoiceTranscripts().catch((err) => console.warn("voice-transcript listener failed", err));
+startQueueRunner();
+startTaskSpeech();
+listenPermissions().catch((err) => console.warn("agent-permission listener failed", err));
+void checkForUpdateSilently();
 
 function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
   const workspace = useDeck((s) => activeWorkspace(s));
@@ -67,6 +84,7 @@ export default function App() {
   const tabs = useDeck((s) => s.tabs);
   const activeTabId = useDeck((s) => s.activeTabId);
   const activeEmpty = useDeck((s) => s.tabs.find((t) => t.id === s.activeTabId)?.paneIds.length === 0);
+  useTraySync();
 
   useEffect(() => {
     // Settings first: terminals read the font at mount; panels start as configured.
@@ -124,6 +142,7 @@ export default function App() {
                 </div>
               ))}
             {hydrated && activeEmpty && <EmptySession onAddAgent={() => setPicking(true)} />}
+            {hydrated && <WallOverlay />}
           </div>
         </main>
         {activityOpen && <ActivityPanel onClose={() => setActivityOpen(false)} />}
@@ -131,6 +150,16 @@ export default function App() {
       {picking && <AgentPicker onClose={() => setPicking(false)} />}
       {linking && <LinkWorkspaceDialog onClose={() => setLinking(false)} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      <CommandPalette
+        onAddAgent={() => setPicking(true)}
+        onLinkWorkspace={() => setLinking(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onToggleSidebar={() => setSidebarOpen((open) => !open)}
+        onToggleActivity={() => setActivityOpen((open) => !open)}
+      />
+      {!activityOpen && <PermissionBanner />}
+      <BroadcastHost />
+      <TemplatePickerHost />
       <Toasts />
     </div>
   );

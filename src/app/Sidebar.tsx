@@ -6,6 +6,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  LayoutTemplate,
   Pencil,
   Plus,
   Trash2,
@@ -14,6 +15,7 @@ import {
 import { useState } from "react";
 import { IconButton } from "../components/IconButton/IconButton";
 import { StatusDot } from "../components/StatusBadge/StatusBadge";
+import { openTemplatePickerFor } from "../components/Templates/TemplatePicker";
 import {
   activeWorkspace,
   deck,
@@ -190,6 +192,15 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
               onClick={() => {
                 deck.selectWorkspace(ws.id);
                 deck.addTab();
+                setExpanded(true);
+              }}
+            />
+            <IconButton
+              icon={LayoutTemplate}
+              size="sm"
+              label={`Nouvelle session depuis un modèle dans ${ws.name}`}
+              onClick={() => {
+                openTemplatePickerFor(ws.id);
                 setExpanded(true);
               }}
             />

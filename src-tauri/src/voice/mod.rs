@@ -1,6 +1,7 @@
 //! Voice input: global push-to-talk shortcut, mic capture (cpal), transcription
-//! (local whisper.cpp or an OpenAI-compatible API), and typing the transcript into
-//! the active pane. Settings live in `config` and apply without restart.
+//! (local whisper.cpp or an OpenAI-compatible API). The main window receives the
+//! transcript, picks the target pane and types it via `voice_send` / `write_to_pane`.
+//! Settings live in `config` and apply without restart.
 //!
 //! Events: `voice-level` (f32 0..1, ~30/s), `voice-state` ("idle" | "listening" |
 //! "downloading" | "transcribing" | "error"), `voice-download` ({model, received, total}),
@@ -303,7 +304,7 @@ fn stop(app: &AppHandle, session: Option<u64>) -> Result<(), String> {
     set_state(app, "transcribing");
     let app = app.clone();
     std::thread::spawn(move || {
-        match transcribe_and_type(&app, &samples, rate) {
+        match transcribe(&app, &samples, rate) {
             Ok(()) => set_state(&app, "idle"),
             Err(e) => fail(&app, &e),
         }
@@ -315,7 +316,7 @@ fn stop(app: &AppHandle, session: Option<u64>) -> Result<(), String> {
     Ok(())
 }
 
-fn transcribe_and_type(app: &AppHandle, samples: &[f32], rate: u32) -> Result<(), String> {
+fn transcribe(app: &AppHandle, samples: &[f32], rate: u32) -> Result<(), String> {
     let config = config_snapshot(app)?;
     let pcm = audio::resample(samples, rate, audio::TARGET_RATE);
     let text = match config.engine {
@@ -326,10 +327,9 @@ fn transcribe_and_type(app: &AppHandle, samples: &[f32], rate: u32) -> Result<()
     if text.is_empty() {
         return Ok(());
     }
+    // The main window routes it ("Codex, ..." -> that pane, else the active one) and types it.
     let _ = app.emit("voice-transcript", text);
-    // TODO(team-voice): route "Codex, ..." / "Claude, ..." to the matching pane once
-    // pane metadata is available backend-side.
-    voice_send(app.state::<AppState>(), text.to_string(), config.submit)
+    Ok(())
 }
 
 /// Downloads the model on first use (pill shows progress), then runs whisper.cpp.

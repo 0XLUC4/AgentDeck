@@ -1,7 +1,24 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronRight, Copy, Minus, PanelLeft, Pause, RotateCcw, Settings, Square, SquareStop, X } from "lucide-react";
+import {
+  ChevronRight,
+  Copy,
+  Megaphone,
+  Minus,
+  PanelLeft,
+  Pause,
+  RotateCcw,
+  Settings,
+  Square,
+  SquareStop,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
+import { openBroadcast } from "../components/Broadcast/Broadcast";
+import { HistoryButton } from "../components/History/HistoryDialog";
 import { IconButton } from "../components/IconButton/IconButton";
+import { JournalButton } from "../components/Journal/JournalDialog";
+import { UsageButton } from "../components/Usage/UsageDialog";
+import { WallToggle } from "../components/Wall/Wall";
 import { activeTab, activeWorkspace, useDeck } from "../store/deck";
 import { interruptAll, restartAll, stopAll } from "../store/runtime";
 import { useSettings } from "../store/settings";
@@ -16,8 +33,8 @@ function confirmBulk(question: (count: number) => string, action: () => Promise<
   if (count > 0 && (!useSettings.getState().confirmBulk || window.confirm(question(count)))) void action();
 }
 
-const confirmStopAll = () => confirmBulk((n) => `Arrêter les ${n} agent(s) de cette session ?`, stopAll);
-const confirmRestartAll = () => confirmBulk((n) => `Relancer les ${n} agent(s) de cette session ?`, restartAll);
+export const confirmStopAll = () => confirmBulk((n) => `Arrêter les ${n} agent(s) de cette session ?`, stopAll);
+export const confirmRestartAll = () => confirmBulk((n) => `Relancer les ${n} agent(s) de cette session ?`, restartAll);
 
 /** Logo: three stacked cards, the front one in the accent color. */
 function AppMark() {
@@ -143,6 +160,12 @@ export function TitleBar({
 
       <div className="flex items-center gap-0.5 pr-2" role="toolbar" aria-label="Contrôles de la session">
         <IconButton
+          icon={Megaphone}
+          label="Diffuser un prompt"
+          hint="Diffuser un prompt à plusieurs agents (Ctrl+Maj+B)"
+          onClick={openBroadcast}
+        />
+        <IconButton
           icon={Pause}
           label="Interrompre tout"
           hint="Interrompre tout : envoie Échap (Ctrl+C pour un shell) à chaque agent de la session. Les agents restent ouverts."
@@ -164,6 +187,10 @@ export function TitleBar({
       </div>
       <span className="h-5 w-px bg-line" aria-hidden="true" />
       <div className="flex items-center gap-0.5 px-2">
+        <WallToggle />
+        <UsageButton />
+        <HistoryButton />
+        <JournalButton />
         <ActivityToggle open={activityOpen} onToggle={onToggleActivity} />
         <IconButton icon={Settings} label="Réglages" hint="Réglages (Ctrl+,)" onClick={onOpenSettings} />
       </div>

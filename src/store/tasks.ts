@@ -1,5 +1,6 @@
 // Per-pane task log built from hook events: what was asked, what the agent did, what it answered. In memory only.
 import { create } from "zustand";
+import { onTaskStart } from "../lib/checkpoints";
 import type { AgentStatusEvent, PaneStatus } from "../lib/types";
 
 export const MAX_ACTIONS = 200;
@@ -71,7 +72,11 @@ export const useTasks = create<Record<string, TaskLog>>(() => ({}));
 
 export const tasks = {
   apply(paneId: string, e: AgentStatusEvent, fallbackStart?: number, now = Date.now()) {
-    useTasks.setState({ [paneId]: applyTaskEvent(useTasks.getState()[paneId], e, now, fallbackStart) });
+    const before = useTasks.getState()[paneId]?.current;
+    const after = applyTaskEvent(useTasks.getState()[paneId], e, now, fallbackStart);
+    useTasks.setState({ [paneId]: after });
+    // shortcut: snapshot runs async after the hook answered, so a very fast first edit can land before it.
+    if (after.current && after.current.startedAt !== before?.startedAt) onTaskStart(paneId);
   },
   remove(paneId: string) {
     const { [paneId]: _removed, ...rest } = useTasks.getState();
