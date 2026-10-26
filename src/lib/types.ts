@@ -17,6 +17,10 @@ export interface AgentStatusEvent {
   status: PaneStatus;
   lastAction: string | null;
   event: string;
+  /** User request that started the turn (Claude UserPromptSubmit, Codex turn end). */
+  prompt?: string | null;
+  /** Agent's final message of the turn (Claude Stop, Codex turn end). */
+  summary?: string | null;
 }
 
 export type VoiceState = "idle" | "listening" | "downloading" | "transcribing" | "error";
