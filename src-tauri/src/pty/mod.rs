@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -15,13 +15,21 @@ use crate::agents::{self, AgentKind};
 
 /// Output is flushed to the webview at most every 16 ms (~60 fps).
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+/// Max bytes per `pane-output` event; the rest waits for the next tick.
+const MAX_EMIT_BYTES: usize = 256 * 1024;
+/// Reader -> batcher queue depth (8 KB chunks): a full queue blocks the reader.
+const QUEUE_CHUNKS: usize = 64;
+/// ConPTY often keeps the output pipe open after the child exits: poll for exit.
+const EXIT_POLL: Duration = Duration::from_millis(250);
 
 /// Distinguishes successive processes spawned under the same pane id (restart).
 static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
 
+type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
 pub struct Pane {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: SharedWriter,
     child: Box<dyn Child + Send + Sync>,
     run: u64,
 }
@@ -31,17 +39,25 @@ pub struct Panes(pub Mutex<HashMap<String, Pane>>);
 
 impl Panes {
     /// Writes raw bytes to a pane's PTY. Used by commands and by the voice module.
+    /// The map lock is released before the (possibly blocking) write.
     pub fn write(&self, pane_id: &str, data: &[u8]) -> Result<(), String> {
-        let mut panes = self.0.lock().map_err(|e| e.to_string())?;
-        let pane = panes.get_mut(pane_id).ok_or("pane not found")?;
-        pane.writer.write_all(data).map_err(|e| e.to_string())?;
-        pane.writer.flush().map_err(|e| e.to_string())
+        let writer = self
+            .0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get(pane_id)
+            .ok_or("pane not found")?
+            .writer
+            .clone();
+        let mut writer = writer.lock().map_err(|e| e.to_string())?;
+        writer.write_all(data).map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())
     }
 }
 
 /// Spawns an agent (or a plain shell) in a new PTY under `pane_id`.
 /// The frontend picks the id so it can subscribe to output before spawning.
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_pane(
     app: AppHandle,
@@ -100,16 +116,17 @@ pub fn spawn_pane(
         pane_id.clone(),
         Pane {
             master: pair.master,
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             child,
             run,
         },
     );
+    watch_exit(app.clone(), pane_id.clone(), run);
     stream_output(app, pane_id, run, reader);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn write_to_pane(
     state: State<'_, AppState>,
     pane_id: String,
@@ -118,7 +135,7 @@ pub fn write_to_pane(
     state.panes.write(&pane_id, data.as_bytes())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn resize_pane(
     state: State<'_, AppState>,
     pane_id: String,
@@ -137,8 +154,9 @@ pub fn resize_pane(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn kill_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), String> {
+    // Removed under the lock (temporary guard), killed and dropped outside it.
     let pane = state
         .panes
         .0
@@ -159,9 +177,34 @@ pub fn set_active_pane(state: State<'_, AppState>, pane_id: Option<String>) -> R
     Ok(())
 }
 
+/// Polls the child; on exit frees the slot if `run` still owns it and drops the
+/// pane (closing the pseudoconsole -> reader EOF -> `pane-exit` from the batcher).
+fn watch_exit(app: AppHandle, pane_id: String, run: u64) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(EXIT_POLL);
+            let state = app.state::<AppState>();
+            let Ok(mut panes) = state.panes.0.lock() else {
+                return;
+            };
+            let exited = match panes.get_mut(&pane_id) {
+                Some(pane) if pane.run == run => !matches!(pane.child.try_wait(), Ok(None)),
+                _ => return, // killed, EOF already handled, or replaced by a newer run
+            };
+            if exited {
+                let pane = panes.remove(&pane_id);
+                drop(panes);
+                drop(pane); // ConPTY close can block: never under the map lock
+                return;
+            }
+        }
+    });
+}
+
 /// Reader thread -> batching thread -> `pane-output:{id}` events, then `pane-exit:{id}`.
+/// `pane-exit` is emitted only here, once, after all pending output is flushed.
 fn stream_output(app: AppHandle, pane_id: String, run: u64, mut reader: Box<dyn Read + Send>) {
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(QUEUE_CHUNKS);
 
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -181,23 +224,27 @@ fn stream_output(app: AppHandle, pane_id: String, run: u64, mut reader: Box<dyn 
         let output_event = format!("pane-output:{pane_id}");
         let mut pending: Vec<u8> = Vec::new();
         let mut last_flush = Instant::now();
+        let mut closed = false;
         loop {
-            let closed = match rx.recv_timeout(FLUSH_INTERVAL) {
-                Ok(chunk) => {
-                    pending.extend_from_slice(&chunk);
-                    false
+            // Once closed, just drain `pending` in capped events.
+            if !closed && pending.len() < MAX_EMIT_BYTES {
+                match rx.recv_timeout(FLUSH_INTERVAL) {
+                    Ok(chunk) => pending.extend_from_slice(&chunk),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => closed = true,
                 }
-                Err(RecvTimeoutError::Timeout) => false,
-                Err(RecvTimeoutError::Disconnected) => true,
-            };
+            } else if !closed {
+                // Backlog: stop pulling (the reader blocks on the full queue) until next tick.
+                std::thread::sleep(FLUSH_INTERVAL.saturating_sub(last_flush.elapsed()));
+            }
             if !pending.is_empty() && (closed || last_flush.elapsed() >= FLUSH_INTERVAL) {
-                let text = take_valid_utf8(&mut pending, closed);
+                let text = take_valid_utf8(&mut pending, MAX_EMIT_BYTES, closed);
                 if !text.is_empty() {
                     let _ = app.emit(&output_event, text);
                 }
                 last_flush = Instant::now();
             }
-            if closed {
+            if closed && pending.is_empty() {
                 if is_current_run(&app, &pane_id, run) {
                     let _ = app.emit(&format!("pane-exit:{pane_id}"), ());
                 }
@@ -235,22 +282,32 @@ fn is_current_run(app: &AppHandle, pane_id: &str, run: u64) -> bool {
     };
     match panes.get(pane_id) {
         Some(pane) if pane.run == run => {
-            panes.remove(pane_id);
+            let pane = panes.remove(pane_id);
+            drop(panes);
+            drop(pane); // ConPTY close can block: never under the map lock
             true
         }
         Some(_) => false,
-        None => true, // killed via kill_pane
+        None => true, // killed via kill_pane or reaped by watch_exit
     }
 }
 
-/// Drains the longest valid UTF-8 prefix, keeping an incomplete trailing
-/// multi-byte sequence for the next chunk (unless `flush_all`).
-fn take_valid_utf8(pending: &mut Vec<u8>, flush_all: bool) -> String {
-    let cut = match std::str::from_utf8(pending) {
-        Ok(_) => pending.len(),
+/// Drains the longest valid UTF-8 prefix of at most `max` bytes, keeping an
+/// incomplete trailing multi-byte sequence for the next chunk (unless `flush_all`).
+fn take_valid_utf8(pending: &mut Vec<u8>, max: usize, flush_all: bool) -> String {
+    let mut limit = pending.len().min(max);
+    if limit < pending.len() {
+        // Don't split a multi-byte char at the size cap (continuation bytes are 10xxxxxx).
+        let floor = limit.saturating_sub(3);
+        while limit > floor && pending[limit] & 0xC0 == 0x80 {
+            limit -= 1;
+        }
+    }
+    let cut = match std::str::from_utf8(&pending[..limit]) {
+        Ok(_) => limit,
         // error_len() == None means "truncated sequence at the end".
         Err(e) if e.error_len().is_none() && !flush_all => e.valid_up_to(),
-        Err(_) => pending.len(),
+        Err(_) => limit,
     };
     let rest = pending.split_off(cut);
     let text = String::from_utf8_lossy(pending).into_owned();
@@ -276,17 +333,86 @@ mod tests {
     #[test]
     fn keeps_truncated_multibyte_tail() {
         let mut buf = vec![b'a', 0xC3]; // 'a' + first byte of 'é'
-        assert_eq!(take_valid_utf8(&mut buf, false), "a");
+        assert_eq!(take_valid_utf8(&mut buf, usize::MAX, false), "a");
         assert_eq!(buf, vec![0xC3]);
         buf.push(0xA9);
-        assert_eq!(take_valid_utf8(&mut buf, false), "é");
+        assert_eq!(take_valid_utf8(&mut buf, usize::MAX, false), "é");
         assert!(buf.is_empty());
     }
 
     #[test]
     fn invalid_bytes_are_replaced_not_stuck() {
         let mut buf = vec![b'x', 0xFF, b'y'];
-        assert_eq!(take_valid_utf8(&mut buf, false), "x\u{FFFD}y");
+        assert_eq!(take_valid_utf8(&mut buf, usize::MAX, false), "x\u{FFFD}y");
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn caps_bytes_per_flush_on_char_boundary() {
+        let mut buf = "abcdef".as_bytes().to_vec();
+        assert_eq!(take_valid_utf8(&mut buf, 4, false), "abcd");
+        assert_eq!(take_valid_utf8(&mut buf, 4, true), "ef");
+        // "aé€": cap 2 would split 'é' (bytes 1..3) -> back off to "a".
+        let mut buf = "aé€".as_bytes().to_vec();
+        assert_eq!(take_valid_utf8(&mut buf, 2, false), "a");
+        assert_eq!(take_valid_utf8(&mut buf, 3, false), "é");
+        assert_eq!(take_valid_utf8(&mut buf, 3, true), "€");
+        assert!(buf.is_empty());
+    }
+
+    /// The real child-exit path: try_wait sees the exit, and dropping the master
+    /// (as watch_exit does) makes the reader hit EOF even on ConPTY.
+    #[test]
+    fn child_exit_is_detected_and_reader_ends() {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::io::{Read, Write};
+        use std::time::{Duration, Instant};
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut cmd = if cfg!(windows) {
+            CommandBuilder::new("cmd")
+        } else {
+            CommandBuilder::new("sh")
+        };
+        cmd.args(if cfg!(windows) {
+            ["/c", "exit 3"]
+        } else {
+            ["-c", "exit 3"]
+        });
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        // ConPTY asks for the cursor position (ESC[6n) and waits for the answer,
+        // which xterm.js gives in the app: answer it here.
+        let mut writer = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            while let Ok(n @ 1..) = reader.read(&mut buf) {
+                if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+                    let _ = writer.write_all(b"\x1b[1;1R");
+                }
+            }
+            let _ = tx.send(());
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "child exit not detected");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(status.exit_code(), 3);
+        drop(pair.master);
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("reader did not reach EOF after dropping the master");
     }
 }
