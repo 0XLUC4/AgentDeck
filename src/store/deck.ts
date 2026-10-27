@@ -17,8 +17,6 @@ export interface PaneSpec {
   fontSize: number;
   /** "Chef d'orchestre": a Claude pane wired to AgentDeck's MCP server (src/lib/orchestrator.ts). */
   orchestrator?: boolean;
-  /** Claude pane with its own Chrome window to drive (src-tauri/src/browser.rs). */
-  browser?: boolean;
   /** Claude pane allowed to see the screen and drive mouse and keyboard; one pane at most. */
   desktop?: boolean;
 }
@@ -154,7 +152,6 @@ export const toSpec = ({
   completedCount,
   fontSize,
   orchestrator,
-  browser,
   desktop,
 }: Pane): PaneSpec => ({
   id,
@@ -166,7 +163,6 @@ export const toSpec = ({
   completedCount,
   fontSize,
   ...(orchestrator ? { orchestrator } : {}),
-  ...(browser ? { browser } : {}),
   ...(desktop ? { desktop } : {}),
 });
 
