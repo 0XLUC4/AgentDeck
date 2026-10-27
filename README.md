@@ -53,6 +53,7 @@ tells you which one needs you.
 
 **And**
 - Command palette (Ctrl+K), wall view of every agent, orchestrator agent that can drive the others over MCP
+- Browser button on a Claude pane: the agent gets its own Chrome window (Playwright MCP, separate profile) to open pages, click and fill forms
   (spawn, prompt, wait, read diffs, undo a task, merge worktrees, close agents)
 - System tray, launch at startup, signed auto-updates
 
