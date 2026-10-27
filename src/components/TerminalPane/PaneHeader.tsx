@@ -4,7 +4,6 @@ import {
   GitBranch,
   Maximize2,
   Minimize2,
-  Monitor,
   Pause,
   Pencil,
   RotateCcw,
@@ -154,16 +153,6 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               onClick={() => interruptPane(pane.id)}
               disabled={pane.exited}
             />
-            {pane.agent === "claude" && (
-              <IconButton
-                icon={Monitor}
-                size="sm"
-                label="Desktop"
-                hint="Let this agent see the screen and use the mouse and keyboard; one agent at a time (restarts the agent)"
-                aria-pressed={Boolean(pane.desktop)}
-                onClick={() => toggleDesktop(pane)}
-              />
-            )}
             <IconButton icon={RotateCcw} size="sm" label="Restart" onClick={() => void restartPane(pane.id)} />
             <IconButton
               icon={ZoomOut}
@@ -232,21 +221,4 @@ function ReviewChip({ paneId }: { paneId: string }) {
       {reviewer.title}
     </span>
   );
-}
-
-/** The desktop MCP server is added at spawn, so switching it restarts the agent. */
-function toggleDesktop(pane: Pane) {
-  const on = !pane.desktop;
-  const question = on
-    ? `Let ${pane.title} see your screen and use your mouse and keyboard? Any other agent loses this access.`
-    : `Remove ${pane.title}'s desktop access?`;
-  if (!window.confirm(`${question} The agent restarts.`)) return;
-  if (on) {
-    // One holder at a time: the backend revokes the others when this pane registers.
-    for (const other of Object.values(useDeck.getState().panes)) {
-      if (other.desktop) deck.updatePane(other.id, (p) => ({ ...p, desktop: false }));
-    }
-  }
-  deck.updatePane(pane.id, (p) => ({ ...p, desktop: on }));
-  void restartPane(pane.id);
 }
