@@ -41,6 +41,9 @@ export const uninstallHooks = (cwd: string) => invoke<void>("uninstall_hooks", {
 export const listOpenProjects = () => invoke<OpenProject[]>("list_open_projects");
 export const inspectFolder = (path: string) => invoke<FolderInfo>("inspect_folder", { path });
 export const setTrayStatus = (waiting: number) => invoke<void>("set_tray_status", { waiting });
+/** POSTs the notification to an ntfy topic URL or webhook (https, or http on localhost). */
+export const pushNotify = (url: string, title: string, body: string) =>
+  invoke<void>("push_notify", { url, title, body });
 export const setCloseToTray = (enabled: boolean) => invoke<void>("set_close_to_tray", { enabled });
 
 export const voiceStart = () => invoke<void>("voice_start");
@@ -79,6 +82,9 @@ export const gitDiffTrees = (cwd: string, from: string, to: string, path: string
   invoke<string>("git_diff_trees", { cwd, from, to, path });
 export const gitCommit = (cwd: string, message: string) => invoke<string>("git_commit", { cwd, message });
 export const gitMergeWorktree = (cwd: string) => invoke<string>("git_merge_worktree", { cwd });
+/** Pushes the worktree branch and runs `gh pr create`; resolves to the PR URL. */
+export const gitCreatePr = (cwd: string, title: string, body: string) =>
+  invoke<string>("git_create_pr", { cwd, title, body });
 export const gitRemoveWorktree = (cwd: string) => invoke<void>("git_remove_worktree", { cwd });
 export const gitCheckpoint = (cwd: string, paneId: string) => invoke<string | null>("git_checkpoint", { cwd, paneId });
 export const gitListCheckpoints = (cwd: string, paneId: string) =>

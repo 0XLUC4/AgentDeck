@@ -38,6 +38,20 @@ describe("mergeSettings", () => {
     expect(s).not.toHaveProperty("unknown");
   });
 
+  it("validates auto-allow rules, budget and phone URL", () => {
+    const s = mergeSettings({
+      autoAllow: [{ rule: " Bash(ls) ", folder: "D:\\p" }, { rule: "" }, "Read", { rule: "Edit", folder: 3 }],
+      budget: { dailyUsd: 5, paneUsd: -1, interrupt: "yes" },
+      phoneUrl: " https://ntfy.sh/t ",
+    });
+    expect(s.autoAllow).toEqual([
+      { rule: "Bash(ls)", folder: "D:\\p" },
+      { rule: "Edit", folder: "" },
+    ]);
+    expect(s.budget).toEqual({ dailyUsd: 5, paneUsd: 0, interrupt: false });
+    expect(s.phoneUrl).toBe("https://ntfy.sh/t");
+  });
+
   it("clamps and rounds the font size", () => {
     expect(mergeSettings({ fontSize: 2 }).fontSize).toBe(8);
     expect(mergeSettings({ fontSize: 14.6 }).fontSize).toBe(15);

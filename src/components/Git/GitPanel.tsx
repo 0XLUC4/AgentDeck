@@ -1,4 +1,4 @@
-import { GitBranch, GitCommitHorizontal, GitMerge, History, RefreshCw, Trash2, X } from "lucide-react";
+import { GitBranch, GitCommitHorizontal, GitMerge, GitPullRequest, History, RefreshCw, Trash2, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AGENTS } from "../../lib/agents";
@@ -6,6 +6,7 @@ import { checkpointPane, paneGitDir } from "../../lib/checkpoints";
 import {
   gitCommit,
   gitCompare,
+  gitCreatePr,
   gitDiff,
   gitDiffTrees,
   gitListCheckpoints,
@@ -16,6 +17,8 @@ import {
 } from "../../lib/ipc";
 import type { GitCheckpoint, GitComparison, GitFileChange, GitStatus } from "../../lib/types";
 import { deck, type Pane, useDeck } from "../../store/deck";
+import { setReviewer, useReviews } from "../../store/review";
+import { useTasks } from "../../store/tasks";
 import { IconButton } from "../IconButton/IconButton";
 import { classifyDiff, type DiffLineKind, diffLines } from "./diff";
 
@@ -96,6 +99,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 /** Right slide-over with the Git state of one pane's working directory (its worktree when it has one). */
 export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void }) {
   const panes = useDeck((s) => s.panes);
+  const reviewerId = useReviews((s) => s[pane.id] ?? "");
   const [dir, setDir] = useState<string | null>(null);
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [checkpoints, setCheckpoints] = useState<GitCheckpoint[]>([]);
@@ -183,6 +187,15 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
   const merge = () => {
     if (!dir || !window.confirm(`Merge ${status?.branch} into the main repository (--no-ff)?`)) return;
     void act(() => gitMergeWorktree(dir));
+  };
+
+  const createPr = () => {
+    const task = useTasks.getState()[pane.id]?.history[0];
+    const suggested = task?.prompt?.split("\n")[0].slice(0, 120) || status?.branch || "";
+    const title = window.prompt(`Pull request for ${status?.branch} (pushes the branch to origin):`, suggested);
+    if (!dir || !title?.trim()) return;
+    const body = task?.summary ? `${task.summary}\n\nMade with ${AGENTS[pane.agent].name} in AgentDeck.` : "";
+    void act(async () => `Pull request opened: ${await gitCreatePr(dir, title, body)}`);
   };
 
   const removeWorktree = () => {
@@ -362,6 +375,10 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
                   <GitMerge size={14} strokeWidth={1.5} aria-hidden="true" />
                   Merge into {base}
                 </button>
+                <button type="button" className={BTN} disabled={busy} onClick={createPr}>
+                  <GitPullRequest size={14} strokeWidth={1.5} aria-hidden="true" />
+                  Open pull request
+                </button>
                 <button
                   type="button"
                   className={BTN_DANGER}
@@ -374,6 +391,24 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
                 </button>
               </Section>
             )}
+
+            <Section title="Auto review">
+              <label className="flex flex-col gap-1 text-xs text-subtle">
+                When this agent finishes a task, ask another one to review its changes:
+                <select
+                  className="h-7 rounded-md border border-line-strong bg-base px-1.5 text-fg outline-none focus:border-accent"
+                  value={reviewerId}
+                  onChange={(e) => setReviewer(pane.id, e.target.value || null)}
+                >
+                  <option value="">Nobody</option>
+                  {others.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {paneName(p)} · {AGENTS[p.agent].name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </Section>
 
             <Section title="Restore points">
               <button

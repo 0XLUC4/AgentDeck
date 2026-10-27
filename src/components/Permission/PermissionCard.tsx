@@ -1,7 +1,8 @@
 import { FilePen, FileText, Globe, type LucideIcon, Plug, ShieldQuestion, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 import type { PermissionRequest } from "../../lib/types";
-import { answer } from "./permissions";
+import { ruleFor } from "./autoAllow";
+import { answer, autoAllowHere } from "./permissions";
 
 const TOOL_ICON: Record<string, LucideIcon> = {
   Bash: SquareTerminal,
@@ -23,11 +24,12 @@ const PRIMARY = `${BUTTON} bg-accent text-on-accent hover:bg-accent-hover`;
 const SECONDARY = `${BUTTON} border border-line-strong text-fg hover:bg-hover`;
 const DANGER = `${BUTTON} text-bad hover:bg-bad/15`;
 
-/** A pending tool approval: exactly what will run, and Allow / Always allow / Deny. Never auto-allows. */
+/** A pending tool approval: exactly what will run, and Allow / Always allow / Auto-allow here / Deny. */
 export function PermissionCard({ request, onJump }: { request: PermissionRequest; onJump?: () => void }) {
   const [refusing, setRefusing] = useState(false);
   const [reason, setReason] = useState("");
   const Icon = toolIcon(request.toolName);
+  const autoRule = ruleFor(request);
   const detail = (
     <pre className="scroll-thin max-h-40 overflow-auto rounded bg-gutter p-1.5 font-mono text-[11px] whitespace-pre-wrap break-all text-fg">
       {request.detail}
@@ -99,6 +101,16 @@ export function PermissionCard({ request, onJump }: { request: PermissionRequest
               onClick={() => void answer(request, "allow_always")}
             >
               Always allow
+            </button>
+          )}
+          {autoRule && (
+            <button
+              type="button"
+              className={SECONDARY}
+              title={`AgentDeck will answer ${autoRule} itself in this folder from now on (Settings > Agents)`}
+              onClick={() => void autoAllowHere(request)}
+            >
+              Auto-allow here
             </button>
           )}
           <button type="button" className={DANGER} onClick={() => setRefusing(true)}>

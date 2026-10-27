@@ -27,6 +27,21 @@ export interface SpeechSettings {
   rate: number;
 }
 
+/** Permission auto-approved by AgentDeck. `rule`: "Read", "Bash(pnpm test)" or "Bash(pnpm test *)". */
+export interface AutoAllowRule {
+  rule: string;
+  /** Folder the rule applies to (and its subfolders); "" = every folder. */
+  folder: string;
+}
+
+/** Cost limits in USD; 0 = off. Claude Code and Codex only (the agents with transcripts). */
+export interface BudgetSettings {
+  dailyUsd: number;
+  paneUsd: number;
+  /** Interrupt the working agents and pause the orchestrator once a limit is hit. */
+  interrupt: boolean;
+}
+
 export interface Settings {
   fontSize: number;
   fontFamily: string;
@@ -42,6 +57,10 @@ export interface Settings {
   /** Pre-accept each agent's "trust this folder" prompt for folders opened in AgentDeck. */
   trustAgentFolders: boolean;
   speech: SpeechSettings;
+  autoAllow: AutoAllowRule[];
+  budget: BudgetSettings;
+  /** Webhook (ntfy topic URL or similar) also receiving the notifications; "" = off. */
+  phoneUrl: string;
 }
 
 export const DEFAULT_FONT_FAMILY = "Cascadia Code, Consolas, monospace";
@@ -57,6 +76,9 @@ export const DEFAULT_SETTINGS: Settings = {
   notify: { enabled: true, sound: true, done: true, waiting: true, error: false, onlyUnseen: true },
   speech: { enabled: false, voice: "", rate: 1 },
   trustAgentFolders: true,
+  autoAllow: [],
+  budget: { dailyUsd: 0, paneUsd: 0, interrupt: false },
+  phoneUrl: "",
   agents: Object.fromEntries(AGENT_KINDS.map((k) => [k, { args: "", worktree: false }])) as Record<
     AgentKind,
     AgentDefaults
@@ -65,6 +87,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
+const usd = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 
 /** Builds valid settings from anything read from disk: unknown or invalid fields fall back to defaults. */
 export function mergeSettings(raw: unknown): Settings {
@@ -73,6 +96,7 @@ export function mergeSettings(raw: unknown): Settings {
   const n = isObject(raw.notify) ? raw.notify : {};
   const agents = isObject(raw.agents) ? raw.agents : {};
   const sp = isObject(raw.speech) ? raw.speech : {};
+  const b = isObject(raw.budget) ? raw.budget : {};
   const fontFamily = typeof raw.fontFamily === "string" ? raw.fontFamily.trim() : "";
   return {
     fontSize: typeof raw.fontSize === "number" ? clampFontSize(raw.fontSize) : d.fontSize,
@@ -96,6 +120,13 @@ export function mergeSettings(raw: unknown): Settings {
       voice: typeof sp.voice === "string" ? sp.voice : d.speech.voice,
       rate: typeof sp.rate === "number" && sp.rate >= 0.5 && sp.rate <= 2 ? sp.rate : d.speech.rate,
     },
+    autoAllow: (Array.isArray(raw.autoAllow) ? raw.autoAllow : []).flatMap((r) =>
+      isObject(r) && typeof r.rule === "string" && r.rule.trim()
+        ? [{ rule: r.rule.trim(), folder: typeof r.folder === "string" ? r.folder : "" }]
+        : [],
+    ),
+    budget: { dailyUsd: usd(b.dailyUsd), paneUsd: usd(b.paneUsd), interrupt: bool(b.interrupt, d.budget.interrupt) },
+    phoneUrl: typeof raw.phoneUrl === "string" ? raw.phoneUrl.trim() : "",
     agents: Object.fromEntries(
       AGENT_KINDS.map((k) => {
         const a = isObject(agents[k]) ? agents[k] : {};

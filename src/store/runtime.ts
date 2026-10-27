@@ -318,11 +318,11 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
     const event = e.status as keyof typeof NOTIFY_TEXT;
     // PermissionRequest has its own, more precise notification (components/Permission/permissions.ts).
     if (e.status === prev.status || !(event in NOTIFY_TEXT) || e.event === "PermissionRequest") return;
-    const prefs = useSettings.getState().notify;
+    const { notify: prefs, phoneUrl } = useSettings.getState();
     const unseen = !document.hasFocus() || state.activePaneId !== e.paneId;
-    if (prefs[event] && (unseen || !prefs.onlyUnseen) && (prefs.enabled || prefs.sound)) {
+    if (prefs[event] && (unseen || !prefs.onlyUnseen)) {
       const title = `${AGENTS[prev.agent].name} ${NOTIFY_TEXT[event]}`;
-      void notify(title, prev.title, { system: prefs.enabled, sound: prefs.sound });
+      void notify(title, prev.title, { system: prefs.enabled, sound: prefs.sound, phoneUrl });
     }
   });
 }

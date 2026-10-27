@@ -6,7 +6,8 @@ import { answerPermission, onAgentPermission, onAgentPermissionResolved } from "
 import { notify } from "../../lib/notify";
 import type { PermissionDecision, PermissionRequest } from "../../lib/types";
 import { deck, useDeck } from "../../store/deck";
-import { useSettings } from "../../store/settings";
+import { updateSettings, useSettings } from "../../store/settings";
+import { autoAllowed, ruleFor } from "./autoAllow";
 
 /** Keyed by requestId; insertion order = arrival order. */
 export type PendingPermissions = Record<string, PermissionRequest>;
@@ -39,6 +40,20 @@ export async function answer(req: PermissionRequest, decision: PermissionDecisio
   }
 }
 
+/** Adds an AgentDeck rule for this request in the pane's folder, then allows it. */
+export async function autoAllowHere(req: PermissionRequest): Promise<void> {
+  const pane = useDeck.getState().panes[req.paneId];
+  const rule = ruleFor(req);
+  if (!pane || !rule) return;
+  const rules = useSettings.getState().autoAllow;
+  if (!rules.some((r) => r.rule === rule && r.folder === pane.cwd)) {
+    await updateSettings({ autoAllow: [...rules, { rule, folder: pane.cwd }] }).catch((err) =>
+      deck.toast(`Rule not saved: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
+  await answer(req, "allow");
+}
+
 /** Subscribes once to permission events; notifies like a "waiting" status would. */
 export async function listenPermissions(): Promise<UnlistenFn> {
   const unlisten = await Promise.all([
@@ -46,12 +61,19 @@ export async function listenPermissions(): Promise<UnlistenFn> {
       const state = useDeck.getState();
       const pane = state.panes[req.paneId];
       if (!pane) return;
+      const settings = useSettings.getState();
+      const rule = autoAllowed(req, pane.cwd, settings.autoAllow);
+      if (rule) {
+        void answer(req, "allow");
+        deck.toast(`Auto-allowed (${rule.rule}): ${req.summary}`);
+        return;
+      }
       usePermissions.setState((s) => addPermission(s, req), true);
-      const prefs = useSettings.getState().notify;
+      const prefs = settings.notify;
       const unseen = !document.hasFocus() || state.activePaneId !== req.paneId;
-      if (prefs.waiting && (unseen || !prefs.onlyUnseen) && (prefs.enabled || prefs.sound)) {
+      if (prefs.waiting && (unseen || !prefs.onlyUnseen)) {
         const title = `${AGENTS[pane.agent].name} is asking for permission: ${req.summary}`;
-        void notify(title, pane.title, { system: prefs.enabled, sound: prefs.sound });
+        void notify(title, pane.title, { system: prefs.enabled, sound: prefs.sound, phoneUrl: settings.phoneUrl });
       }
     }),
     onAgentPermissionResolved(remove),

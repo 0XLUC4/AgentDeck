@@ -2,13 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipc = vi.hoisted(() => ({
   spawnPane: vi.fn(),
-  killPane: vi.fn(),
+  killPane: vi.fn(async () => undefined),
   setActivePane: vi.fn(),
   resizePane: vi.fn(),
   writeToPane: vi.fn(),
   mcpRegister: vi.fn(async () => ({ args: ["--mcp-config", "cfg.json"], secret: "s" })),
   mcpRespond: vi.fn(),
   mcpSetPaused: vi.fn(),
+  gitPaneDir: vi.fn(async () => "C:\\proj"),
+  gitStatus: vi.fn(async () => ({ branch: "agentdeck/a", files: [{ path: "x.ts" }] })),
+  gitDiff: vi.fn(async () => "diff x.ts\n"),
+  gitCommit: vi.fn(async () => "abc1234"),
+  gitMergeWorktree: vi.fn(async () => "merged"),
+  gitListCheckpoints: vi.fn(async () => [{ sha: "f".repeat(40), ts: 0 }]),
+  gitRestoreCheckpoint: vi.fn(async () => "e".repeat(40)),
 }));
 
 vi.mock("./ipc", () => ({
@@ -126,6 +133,30 @@ describe("handleMcpRequest", () => {
     expect(useDeck.getState().tabs[0].paneIds).toContain(r.paneId);
     expect(ipc.spawnPane).toHaveBeenCalledOnce();
     await expect(call("spawn_agent", { agent: "codex", title: "t", cwd: "C:\\other" })).rejects.toThrow("stay inside");
+  });
+});
+
+describe("git tools", () => {
+  it("returns the diff with restore points", async () => {
+    const r = (await call("get_diff", { paneId: "a" })) as { diff: string; checkpoints: unknown[] };
+    expect(r.diff).toBe("diff x.ts\n");
+    expect(r.checkpoints).toHaveLength(1);
+  });
+
+  it("commits before merging when given a message, refuses while working", async () => {
+    await call("merge_worktree", { paneId: "a", commitMessage: "feat: x" });
+    expect(ipc.gitCommit).toHaveBeenCalledWith("C:\\proj", "feat: x");
+    deck.updatePane("a", (p) => ({ ...p, status: "working" }));
+    await expect(call("merge_worktree", { paneId: "a" })).rejects.toThrow("still working");
+    await expect(call("restore_checkpoint", { paneId: "a" })).rejects.toThrow("interrupt");
+  });
+
+  it("restores the latest checkpoint by default and closes agents", async () => {
+    await call("restore_checkpoint", { paneId: "b" });
+    expect(ipc.gitRestoreCheckpoint).toHaveBeenCalledWith("C:\\proj", "b", "f".repeat(40));
+    await call("close_agent", { paneId: "b" });
+    expect(useDeck.getState().panes.b).toBeUndefined();
+    await expect(call("close_agent", { paneId: "x" })).rejects.toThrow("not found");
   });
 });
 

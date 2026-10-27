@@ -330,6 +330,56 @@ fn merge_worktree(cwd: &str) -> Result<String, String> {
     Ok(format!("{branch} merged into {target}"))
 }
 
+/// Pushes the worktree's branch to `origin` and opens a pull request with the GitHub CLI; returns its URL.
+fn create_pr(cwd: &str, title: &str, body: &str) -> Result<String, String> {
+    let title = title.trim();
+    if title.is_empty() || title.len() > 256 || title.contains(char::is_control) {
+        return Err("title: 1 to 256 characters, single line".into());
+    }
+    let root = repo_root(cwd)?;
+    let (branch, main) = agent_worktree(&root)?;
+    if !run_trim(&root, &["status", "--porcelain"])?.is_empty() {
+        return Err(format!(
+            "{branch} has uncommitted changes: commit them first"
+        ));
+    }
+    let base = current_branch(&main)
+        .or_else(|| base_branch(&root))
+        .ok_or("no base branch found")?;
+    // Fail before pushing when the GitHub CLI is missing or logged out.
+    gh(&root, &["auth", "status"])?;
+    run(&root, &["push", "-u", "origin", &branch], None)?;
+    let out = gh(
+        &root,
+        &[
+            "pr", "create", "--head", &branch, "--base", &base, "--title", title, "--body", body,
+        ],
+    )?;
+    // gh prints the PR URL last.
+    Ok(out.lines().last().unwrap_or_default().to_string())
+}
+
+fn gh(root: &Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new("gh");
+    cmd.current_dir(root).args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("cannot run gh (install the GitHub CLI): {e}"))?;
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
+    }
+    Err(format!(
+        "gh {}: {}",
+        args[0],
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
 fn remove_worktree(cwd: &str) -> Result<(), String> {
     let root = repo_root(cwd)?;
     let (branch, main) = agent_worktree(&root)?;
@@ -528,6 +578,11 @@ pub fn git_commit(cwd: String, message: String) -> Result<String, String> {
 #[tauri::command(async)]
 pub fn git_merge_worktree(cwd: String) -> Result<String, String> {
     merge_worktree(&cwd)
+}
+
+#[tauri::command(async)]
+pub fn git_create_pr(cwd: String, title: String, body: String) -> Result<String, String> {
+    create_pr(&cwd, &title, &body)
 }
 
 #[tauri::command(async)]

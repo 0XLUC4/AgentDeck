@@ -3,10 +3,22 @@
 import { create } from "zustand";
 import { sendPrompt } from "../components/Broadcast/send";
 import { activeTab, activeWorkspace, activityKey, deck, type Pane, type Tab, useDeck } from "../store/deck";
-import { createPane, interruptPane, paneOutput } from "../store/runtime";
+import { closePane, createPane, interruptPane, paneOutput } from "../store/runtime";
 import { useSettings } from "../store/settings";
 import { useTasks } from "../store/tasks";
-import { mcpRespond, mcpSetPaused, onMcpActivity, onMcpRequest } from "./ipc";
+import { paneGitDir } from "./checkpoints";
+import {
+  gitCommit,
+  gitDiff,
+  gitListCheckpoints,
+  gitMergeWorktree,
+  gitRestoreCheckpoint,
+  gitStatus,
+  mcpRespond,
+  mcpSetPaused,
+  onMcpActivity,
+  onMcpRequest,
+} from "./ipc";
 import type { AgentKind, McpActivity, McpRequest } from "./types";
 
 export const ORCHESTRATOR_TITLE = "Orchestrator";
@@ -14,6 +26,8 @@ const MAX_LOG = 100;
 /** Raw terminal text handed to the backend for read_output (it strips ANSI and keeps the last lines). */
 const OUTPUT_TAIL_CHARS = 64 * 1024;
 const RESULT_ACTIONS = 30;
+/** get_diff without a path: unified diffs of the changed files until this many characters. */
+const DIFF_CAP_CHARS = 48 * 1024;
 
 export interface ActivityEntry {
   at: number;
@@ -226,6 +240,49 @@ export async function handleMcpRequest(req: Pick<McpRequest, "orchestratorId" | 
       const pane = target(scope, str(args.paneId));
       assertCanType(pane);
       interruptPane(pane.id);
+      return { ok: true };
+    }
+    case "get_diff": {
+      const pane = target(scope, str(args.paneId));
+      const dir = await paneGitDir(pane);
+      const [status, checkpoints] = await Promise.all([gitStatus(dir), gitListCheckpoints(dir, pane.id)]);
+      let diff = "";
+      for (const file of str(args.path) ? [{ path: str(args.path) }] : status.files) {
+        if (diff.length >= DIFF_CAP_CHARS) {
+          diff += "\n... (diff truncated: ask for one file with `path`)";
+          break;
+        }
+        diff += await gitDiff(dir, file.path);
+      }
+      return {
+        paneId: pane.id,
+        dir,
+        branch: status.branch,
+        files: status.files,
+        checkpoints: checkpoints.slice(0, 10).map((c) => ({ sha: c.sha, at: new Date(c.ts).toISOString() })),
+        diff: diff.slice(0, DIFF_CAP_CHARS + 100),
+      };
+    }
+    case "merge_worktree": {
+      const pane = target(scope, str(args.paneId));
+      if (pane.status === "working") throw new Error(`${pane.title} is still working: wait for it first`);
+      const dir = await paneGitDir(pane);
+      const message = str(args.commitMessage);
+      if (message && (await gitStatus(dir)).files.length > 0) await gitCommit(dir, message);
+      return { result: await gitMergeWorktree(dir) };
+    }
+    case "restore_checkpoint": {
+      const pane = target(scope, str(args.paneId));
+      if (pane.status === "working") throw new Error(`${pane.title} is working: interrupt it first`);
+      const dir = await paneGitDir(pane);
+      const sha = str(args.sha) || (await gitListCheckpoints(dir, pane.id))[0]?.sha;
+      if (!sha) throw new Error(`${pane.title} has no restore point`);
+      const backup = await gitRestoreCheckpoint(dir, pane.id, sha);
+      return { restored: sha, backup };
+    }
+    case "close_agent": {
+      const pane = target(scope, str(args.paneId));
+      await closePane(pane.id);
       return { ok: true };
     }
     default:
