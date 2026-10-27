@@ -2,7 +2,6 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { AGENTS, interruptKey } from "../lib/agents";
 import {
-  browserMcpArgs,
   desktopRegister,
   desktopRelease,
   killPane,
@@ -138,14 +137,12 @@ async function spawn(id: string): Promise<void> {
     // Orchestrator wiring (MCP config, role prompt, secret) is regenerated on each spawn; the secret only
     // goes to this process's env.
     const mcp = pane.orchestrator ? await mcpRegister(id) : null;
-    const claude = pane.agent === "claude";
-    const browser = pane.browser && claude ? await browserMcpArgs(id) : [];
-    const desktop = pane.desktop && claude ? await desktopRegister(id) : null;
+    const desktop = pane.desktop && pane.agent === "claude" ? await desktopRegister(id) : null;
     await spawnPane({
       paneId: id,
       agent: pane.agent,
       cwd: pane.cwd,
-      args: [...browser, ...(desktop?.args ?? []), ...(mcp?.args ?? []), ...pane.args],
+      args: [...(desktop?.args ?? []), ...(mcp?.args ?? []), ...pane.args],
       worktree: pane.worktree,
       cols,
       rows,
