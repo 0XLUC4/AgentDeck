@@ -55,7 +55,7 @@ export interface SpawnOptions {
   rows: number;
   /** Pane title, saved with the terminal history. */
   title?: string;
-  /** Extra env for the process; the backend only accepts AGENTDECK_MCP_SECRET (orchestrators). */
+  /** Extra env for the process; the backend only accepts the orchestrator and desktop MCP secrets. */
   env?: Record<string, string>;
   /** Pre-accept the agent's folder trust prompt for the pane's folder (settings.trustAgentFolders). */
   trust?: boolean;

@@ -334,11 +334,13 @@ fn validate_spawn_input(pane_id: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Extra env vars the frontend may set: only the orchestrator's MCP secret (a UUID).
+/// Extra env vars the frontend may set: only the MCP secrets of orchestrator and desktop panes (UUIDs).
 fn validate_extra_env(env: &HashMap<String, String>) -> Result<(), String> {
     let ok = env.iter().all(|(k, v)| {
-        k == "AGENTDECK_MCP_SECRET"
-            && (1..=64).contains(&v.len())
+        matches!(
+            k.as_str(),
+            "AGENTDECK_MCP_SECRET" | "AGENTDECK_DESKTOP_SECRET"
+        ) && (1..=64).contains(&v.len())
             && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     });
     ok.then_some(())

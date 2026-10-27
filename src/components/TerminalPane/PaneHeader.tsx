@@ -5,6 +5,7 @@ import {
   Globe,
   Maximize2,
   Minimize2,
+  Monitor,
   Pause,
   Pencil,
   RotateCcw,
@@ -161,7 +162,17 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
                 label="Browser"
                 hint="Give this agent its own Chrome window to drive (restarts the agent)"
                 aria-pressed={Boolean(pane.browser)}
-                onClick={() => toggleBrowser(pane)}
+                onClick={() => toggleMcp(pane, "browser")}
+              />
+            )}
+            {pane.agent === "claude" && (
+              <IconButton
+                icon={Monitor}
+                size="sm"
+                label="Desktop"
+                hint="Let this agent see the screen and use the mouse and keyboard; one agent at a time (restarts the agent)"
+                aria-pressed={Boolean(pane.desktop)}
+                onClick={() => toggleMcp(pane, "desktop")}
               />
             )}
             <IconButton icon={RotateCcw} size="sm" label="Restart" onClick={() => void restartPane(pane.id)} />
@@ -234,10 +245,23 @@ function ReviewChip({ paneId }: { paneId: string }) {
   );
 }
 
-/** The browser MCP server is added at spawn, so switching it restarts the agent. */
-function toggleBrowser(pane: Pane) {
-  const on = !pane.browser;
-  if (!window.confirm(`${on ? "Give" : "Remove"} ${pane.title}'s Chrome window? The agent restarts.`)) return;
-  deck.updatePane(pane.id, (p) => ({ ...p, browser: on }));
+const MCP_CONFIRM = {
+  browser: (title: string) => `Give ${title} its own Chrome window?`,
+  desktop: (title: string) =>
+    `Let ${title} see your screen and use your mouse and keyboard? Any other agent loses this access.`,
+};
+
+/** These MCP servers are added at spawn, so switching one restarts the agent. */
+function toggleMcp(pane: Pane, kind: "browser" | "desktop") {
+  const on = !pane[kind];
+  const question = on ? MCP_CONFIRM[kind](pane.title) : `Remove ${pane.title}'s ${kind} access?`;
+  if (!window.confirm(`${question} The agent restarts.`)) return;
+  if (on && kind === "desktop") {
+    // One holder at a time: the backend revokes the others when this pane registers.
+    for (const other of Object.values(useDeck.getState().panes)) {
+      if (other.desktop) deck.updatePane(other.id, (p) => ({ ...p, desktop: false }));
+    }
+  }
+  deck.updatePane(pane.id, (p) => ({ ...p, [kind]: on }));
   void restartPane(pane.id);
 }
