@@ -1,4 +1,5 @@
 mod agents;
+mod browser;
 mod git;
 mod history;
 mod hooks_server;
@@ -57,6 +58,11 @@ pub fn run() {
             agents::detect_agents,
             agents::uninstall_hooks,
             hooks_server::permissions::answer_permission,
+            browser::browser_open,
+            browser::browser_bounds,
+            browser::browser_go,
+            browser::browser_url,
+            browser::browser_close,
             mcp::mcp_register,
             mcp::mcp_respond,
             mcp::mcp_set_paused,

@@ -2,6 +2,8 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { AGENTS, interruptKey } from "../lib/agents";
 import {
+  browserClose,
+  browserOpen,
   killPane,
   mcpRegister,
   onAgentStatus,
@@ -135,11 +137,12 @@ async function spawn(id: string): Promise<void> {
     // Orchestrator wiring (MCP config, role prompt, secret) is regenerated on each spawn; the secret only
     // goes to this process's env.
     const mcp = pane.orchestrator ? await mcpRegister(id) : null;
+    const browser = pane.browser && pane.agent === "claude" ? await browserOpen(id) : [];
     await spawnPane({
       paneId: id,
       agent: pane.agent,
       cwd: pane.cwd,
-      args: mcp ? [...mcp.args, ...pane.args] : pane.args,
+      args: [...browser, ...(mcp?.args ?? []), ...pane.args],
       worktree: pane.worktree,
       cols,
       rows,
@@ -208,6 +211,7 @@ async function doRestart(id: string): Promise<void> {
 
 export async function closePane(id: string): Promise<void> {
   const rt = runtimes.get(id);
+  const hadBrowser = useDeck.getState().panes[id]?.browser;
   runtimes.delete(id);
   deck.removePane(id);
   tasks.remove(id);
@@ -216,6 +220,7 @@ export async function closePane(id: string): Promise<void> {
     setActivePane(null).catch((err) => console.warn("set_active_pane failed", err));
   }
   for (const unlisten of rt?.unlisten ?? []) unlisten();
+  if (hadBrowser) browserClose(id).catch((err) => console.warn("browser_close failed", err));
   await killPane(id).catch((err) => console.warn("kill_pane failed", err));
 }
 

@@ -103,6 +103,13 @@ export const onAgentPermissionResolved = (cb: (requestId: string) => void): Prom
 
 // Orchestrator MCP bridge (src-tauri/src/mcp). `mcpRegister` returns the Claude args to prepend and the
 // per-spawn secret to pass as env to spawn_pane only (never store it).
+// Browser window driven by a Claude pane (src-tauri/src/browser.rs).
+export const browserOpen = (paneId: string) => invoke<string[]>("browser_open", { paneId });
+export const browserBounds = (paneId: string, x: number, y: number, width: number, height: number, visible: boolean) =>
+  invoke<void>("browser_bounds", { paneId, x, y, width, height, visible });
+export const browserGo = (paneId: string, to: string) => invoke<void>("browser_go", { paneId, to });
+export const browserUrl = (paneId: string) => invoke<string>("browser_url", { paneId });
+export const browserClose = (paneId: string) => invoke<void>("browser_close", { paneId });
 export const mcpRegister = (paneId: string) => invoke<{ args: string[]; secret: string }>("mcp_register", { paneId });
 export const mcpRespond = (requestId: string, result: unknown, error: string | null) =>
   invoke<void>("mcp_respond", { requestId, result, error });

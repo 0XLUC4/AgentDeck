@@ -2,6 +2,7 @@ import {
   CheckCheck,
   ExternalLink,
   GitBranch,
+  Globe,
   Maximize2,
   Minimize2,
   Pause,
@@ -15,13 +16,16 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { useState } from "react";
+import { revealPane } from "../../app/Deck";
 import { AGENTS } from "../../lib/agents";
 import { formatElapsed, useNow } from "../../lib/clock";
+import { shortAction } from "../../lib/shortAction";
 import type { Pane } from "../../store/deck";
-import { deck, FONT_SIZE, useDeck } from "../../store/deck";
+import { deck, FONT_SIZE, folderName, useDeck } from "../../store/deck";
 import { useReviews } from "../../store/review";
 import { closePane, focusPane, interruptPane, restartPane } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
+import { browserPanelId, removeBrowser } from "../Browser/BrowserPanel";
 import { toggleDetached, useDetached } from "../Detached/host";
 import { GitPanel } from "../Git/GitPanel";
 import { IconButton } from "../IconButton/IconButton";
@@ -105,15 +109,16 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
         <TitleField pane={pane} onDone={() => setRenaming(false)} />
       ) : (
         <span className="truncate font-medium" title={`${agent.name} · ${pane.cwd}`}>
-          {pane.title || agent.name}
+          {/* Older panes were named after their folder: show the agent instead. */}
+          {!pane.title || pane.title === folderName(pane.cwd) ? agent.name : pane.title}
         </span>
       )}
       <StatusBadge status={pane.status} />
 
       {!compact && (
         <>
-          <span className="min-w-0 flex-1 truncate text-xs text-subtle" title={pane.lastAction ?? undefined}>
-            {pane.lastAction}
+          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-fg" title={pane.lastAction ?? undefined}>
+            {shortAction(pane.lastAction)}
           </span>
           <UsageChip pane={pane} />
           {pane.taskStartedAt !== null && <Elapsed since={pane.taskStartedAt} />}
@@ -153,6 +158,25 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               onClick={() => interruptPane(pane.id)}
               disabled={pane.exited}
             />
+            {pane.agent === "claude" && (
+              <IconButton
+                icon={Globe}
+                size="sm"
+                label="Browser"
+                hint={
+                  pane.browser
+                    ? "Show this agent's browser (right-click to close it)"
+                    : "Give this agent a browser it can drive, in a panel next to it"
+                }
+                aria-pressed={Boolean(pane.browser)}
+                onClick={() => browserButton(pane)}
+                onContextMenu={(e) => {
+                  if (!pane.browser) return;
+                  e.preventDefault();
+                  removeBrowser(pane);
+                }}
+              />
+            )}
             <IconButton icon={RotateCcw} size="sm" label="Restart" onClick={() => void restartPane(pane.id)} />
             <IconButton
               icon={ZoomOut}
@@ -221,4 +245,16 @@ function ReviewChip({ paneId }: { paneId: string }) {
       {reviewer.title}
     </span>
   );
+}
+
+/** Off: turns the browser on (its MCP server is added at spawn, so the agent restarts). On: reveals its panel. */
+function browserButton(pane: Pane) {
+  if (pane.browser) {
+    const tab = useDeck.getState().tabs.find((t) => t.paneIds.includes(pane.id));
+    if (tab) revealPane(tab.id, browserPanelId(pane.id));
+    return;
+  }
+  if (!window.confirm(`Give ${pane.title} a browser it can drive? The agent restarts.`)) return;
+  deck.updatePane(pane.id, (p) => ({ ...p, browser: true }));
+  void restartPane(pane.id);
 }
