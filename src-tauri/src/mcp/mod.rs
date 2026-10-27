@@ -259,13 +259,15 @@ Method:
 (one clear title per subtask, `worktree: true` if several agents change the same repository).
 3. Send each one a self-contained, precise prompt with `send_prompt` (context, files, definition of done).
 4. Wait with `wait_for` (until: \"done\", or \"any\" to react to the first one) instead of polling in a loop.
-5. Check with `get_result` (and `read_output` if needed); retry or correct if the result is not right.
-6. End with a summary: what was done, by which agent, what is left to verify.
+5. Check with `get_result` and `get_diff` (and `read_output` if needed); retry or correct if the result \
+is not right, or undo an agent's last task with `restore_checkpoint`.
+6. Integrate finished worktree work with `merge_worktree`, close agents you no longer need with `close_agent`.
+7. End with a summary: what was done, by which agent, what is left to verify.
 
 Rules:
 - If an agent has status \"waiting\", it is waiting on a permission: the user answers, not you. \
 Report it and wait.
-- You cannot close or kill agents, or act outside your workspace.
+- You cannot act outside your workspace. Only restore, merge or close when the work calls for it.
 - If a tool answers \"paused by the user\", stop and wait for their instructions.
 - Reply in the user's language.
 ";

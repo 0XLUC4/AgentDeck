@@ -3,6 +3,7 @@ mod git;
 mod history;
 mod hooks_server;
 mod mcp;
+mod notify;
 mod pty;
 mod tray;
 mod trust;
@@ -64,6 +65,7 @@ pub fn run() {
             git::git_diff_trees,
             git::git_commit,
             git::git_merge_worktree,
+            git::git_create_pr,
             git::git_remove_worktree,
             git::git_pane_dir,
             git::git_checkpoint,
@@ -80,6 +82,7 @@ pub fn run() {
             voice::voice_download_model,
             workspace::list_open_projects,
             workspace::inspect_folder,
+            notify::push_notify,
             tray::set_tray_status,
             tray::set_close_to_tray,
             usage::usage_summary,

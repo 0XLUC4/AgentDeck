@@ -7,6 +7,7 @@ import {
   Pause,
   Pencil,
   RotateCcw,
+  ScanEye,
   SquareArrowDownLeft,
   SquareTerminal,
   X,
@@ -17,7 +18,8 @@ import { useState } from "react";
 import { AGENTS } from "../../lib/agents";
 import { formatElapsed, useNow } from "../../lib/clock";
 import type { Pane } from "../../store/deck";
-import { deck, FONT_SIZE } from "../../store/deck";
+import { deck, FONT_SIZE, useDeck } from "../../store/deck";
+import { useReviews } from "../../store/review";
 import { closePane, focusPane, interruptPane, restartPane } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
 import { toggleDetached, useDetached } from "../Detached/host";
@@ -124,6 +126,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               {pane.completedCount}
             </span>
           )}
+          <ReviewChip paneId={pane.id} />
           <QueueButton pane={pane} active={active} />
           {/* Actions stay out of the way until the pane is hovered, focused or active. */}
           <div
@@ -204,5 +207,18 @@ export function EmptyPaneHeader() {
       <SquareTerminal size={15} strokeWidth={1.5} aria-hidden="true" />
       Agent
     </header>
+  );
+}
+
+/** Shows who reviews this agent's work (set in the Git panel). */
+function ReviewChip({ paneId }: { paneId: string }) {
+  const reviewerId = useReviews((r) => r[paneId]);
+  const reviewer = useDeck((s) => (reviewerId ? s.panes[reviewerId] : undefined));
+  if (!reviewer) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-1 text-xs text-subtle" title={`Reviewed by ${reviewer.title}`}>
+      <ScanEye size={12} strokeWidth={1.5} aria-hidden="true" />
+      {reviewer.title}
+    </span>
   );
 }

@@ -17,6 +17,7 @@ import { listenPermissions } from "./components/Permission/permissions";
 import { SettingsDialog } from "./components/Settings/SettingsDialog";
 import { TemplatePickerHost } from "./components/Templates/TemplatePicker";
 import { WallOverlay } from "./components/Wall/Wall";
+import { startBudgetWatch } from "./lib/budget";
 import { onTick } from "./lib/clock";
 import { listenOrchestrator } from "./lib/orchestrator";
 import { useTraySync } from "./lib/tray";
@@ -26,6 +27,7 @@ import { listenVoiceTranscripts } from "./lib/voiceListener";
 import { activeWorkspace, useDeck } from "./store/deck";
 import { restoreAndAutosave } from "./store/persist";
 import { startQueueRunner } from "./store/queue";
+import { startReviewRunner } from "./store/review";
 import { deriveStatuses, listenAgentStatus } from "./store/runtime";
 import { settingsReady, useSettings } from "./store/settings";
 
@@ -35,6 +37,8 @@ listenAgentStatus().catch((err) => console.warn("agent-status listener failed", 
 startJournalRecorder();
 listenVoiceTranscripts().catch((err) => console.warn("voice-transcript listener failed", err));
 startQueueRunner();
+startReviewRunner();
+startBudgetWatch();
 startTaskSpeech();
 listenPermissions().catch((err) => console.warn("agent-permission listener failed", err));
 listenOrchestrator().catch((err) => console.warn("orchestrator listener failed", err));

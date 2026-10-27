@@ -12,7 +12,14 @@ use crate::hooks_server::PaneStatus;
 /// Versions we can speak (we only use initialize/ping/tools, unchanged across these).
 pub(super) const VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 pub const PAUSED_MSG: &str = "Orchestrator paused by the user";
-const MUTATING: [&str; 3] = ["spawn_agent", "send_prompt", "interrupt"];
+const MUTATING: [&str; 6] = [
+    "spawn_agent",
+    "send_prompt",
+    "interrupt",
+    "merge_worktree",
+    "restore_checkpoint",
+    "close_agent",
+];
 const MAX_PROMPT: usize = 64 * 1024;
 const MAX_WAIT_S: u64 = 600;
 const MAX_LINES: u64 = 200;
@@ -132,6 +139,30 @@ fn definitions() -> Value {
             json!({ "paneId": pane }),
             &["paneId"]
         ),
+        tool(
+            "get_diff",
+            "An agent's Git changes vs HEAD (untracked files included): branch, changed files, restore points, and the unified diff (of `path` only when given; capped).",
+            json!({ "paneId": pane, "path": { "type": "string", "description": "One file, relative to the repo" } }),
+            &["paneId"]
+        ),
+        tool(
+            "merge_worktree",
+            "Merges an agent's AgentDeck worktree branch into the main checkout (--no-ff). Uncommitted changes are committed first with commitMessage, or the merge is refused.",
+            json!({ "paneId": pane, "commitMessage": { "type": "string" } }),
+            &["paneId"]
+        ),
+        tool(
+            "restore_checkpoint",
+            "Puts an agent's files back as they were at a restore point (one is taken before each task). Default: the latest one, i.e. undo its last task. The current state is saved first.",
+            json!({ "paneId": pane, "sha": { "type": "string", "description": "From get_diff's checkpoints" } }),
+            &["paneId"]
+        ),
+        tool(
+            "close_agent",
+            "Stops an agent and closes its pane. Its worktree and files stay on disk.",
+            json!({ "paneId": pane }),
+            &["paneId"]
+        ),
     ])
 }
 
@@ -196,6 +227,22 @@ fn run(name: &str, args: &Value, host: &impl Host) -> Result<Value, String> {
             Ok(json!({ "paneId": pane_id, "output": text }))
         }
         "wait_for" => wait_for(args, host),
+        "get_diff" => host.frontend(
+            name,
+            &json!({ "paneId": pane_arg(args)?, "path": opt_str(args, "path", 1024)? }),
+        ),
+        "merge_worktree" => host.frontend(
+            name,
+            &json!({ "paneId": pane_arg(args)?, "commitMessage": opt_str(args, "commitMessage", 4096)? }),
+        ),
+        "restore_checkpoint" => {
+            let sha = opt_str(args, "sha", 64)?;
+            if sha.is_some_and(|s| !s.bytes().all(|b| b.is_ascii_hexdigit())) {
+                return Err("sha must be hexadecimal".into());
+            }
+            host.frontend(name, &json!({ "paneId": pane_arg(args)?, "sha": sha }))
+        }
+        "close_agent" => host.frontend(name, &json!({ "paneId": pane_arg(args)? })),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -272,6 +319,16 @@ fn pane_arg(args: &Value) -> Result<&str, String> {
         .as_str()
         .filter(|p| !p.is_empty() && p.len() <= 64)
         .ok_or_else(|| "missing paneId".into())
+}
+
+/// Optional non-empty string of at most `max` bytes.
+fn opt_str<'a>(args: &'a Value, key: &str, max: usize) -> Result<Option<&'a str>, String> {
+    match &args[key] {
+        Value::Null => Ok(None),
+        Value::String(s) if s.trim().is_empty() => Ok(None),
+        Value::String(s) if s.len() <= max => Ok(Some(s.trim())),
+        _ => Err(format!("{key}: text of at most {max} bytes")),
+    }
 }
 
 fn bool_arg(args: &Value, key: &str, default: bool) -> Result<bool, String> {
@@ -386,11 +443,11 @@ mod tests {
     }
 
     #[test]
-    fn lists_eight_tools_with_schemas() {
+    fn lists_twelve_tools_with_schemas() {
         let host = Fake::default();
         let r = handle(&req("tools/list", json!({})), &host).unwrap();
         let tools = r["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 12);
         assert!(tools.iter().all(|t| t["inputSchema"]["type"] == "object"));
     }
 
@@ -454,6 +511,42 @@ mod tests {
             json!({ "agent": "codex", "title": "Tests", "cwd": null, "worktree": false, "args": ["--model", "o3"] })
         );
         assert_eq!(host.log.borrow().len(), 10);
+    }
+
+    #[test]
+    fn git_tools_validate_and_forward() {
+        let host = Fake::default();
+        let err = |r: Value| r["isError"] == true;
+        assert!(err(tool(
+            &host,
+            "restore_checkpoint",
+            json!({ "paneId": "p1", "sha": "HEAD~1; rm" })
+        )));
+        assert!(err(tool(
+            &host,
+            "get_diff",
+            json!({ "paneId": "p1", "path": 3 })
+        )));
+        assert!(err(tool(&host, "close_agent", json!({}))));
+        assert!(host.calls.borrow().is_empty());
+        tool(
+            &host,
+            "merge_worktree",
+            json!({ "paneId": "p1", "commitMessage": " feat: x " }),
+        );
+        tool(&host, "restore_checkpoint", json!({ "paneId": "p1" }));
+        let calls = host.calls.borrow();
+        assert_eq!(
+            calls[0].1,
+            json!({ "paneId": "p1", "commitMessage": "feat: x" })
+        );
+        assert_eq!(calls[1].1, json!({ "paneId": "p1", "sha": null }));
+        let paused = Fake {
+            paused: true,
+            ..Fake::default()
+        };
+        assert!(err(tool(&paused, "close_agent", json!({ "paneId": "p1" }))));
+        assert!(!err(tool(&paused, "get_diff", json!({ "paneId": "p1" }))));
     }
 
     #[test]

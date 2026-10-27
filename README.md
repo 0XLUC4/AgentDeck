@@ -32,15 +32,19 @@ tells you which one needs you.
 **Know what's going on**
 - Live status for every agent (working, waiting for you, done, error) through the agents' own hooks
 - Activity panel across all workspaces, with the prompt, the actions taken and the final answer of each task
-- Answer Claude Code permission prompts from the panel without switching windows
-- Desktop notifications and a sound when an agent finishes or needs you
+- Answer Claude Code permission prompts from the panel without switching windows, or let AgentDeck
+  auto-allow the ones you trust in a folder ("Bash(pnpm test *)", chained commands never match)
+- Desktop notifications and a sound when an agent finishes or needs you, also on your phone (ntfy or any webhook)
+- Daily and per-agent cost limits that warn you, and can stop the agents
 - Token and cost estimates per agent, terminal history with search, a daily journal you can export
 
 **Workspaces and sessions**
 - Link a folder, a git repo or a project already open in VS Code / Cursor / Explorer
 - Several sessions per workspace, archived and reopened with their layout
 - Session templates, a prompt queue per agent, broadcast one prompt to many agents
-- Git panel: diff, commit, merge a worktree back, compare two agents, restore points taken before each task
+- Git panel: diff, commit, merge a worktree back or open a pull request (GitHub CLI), compare two agents,
+  restore points taken before each task
+- Auto review: when an agent finishes, another one reviews its changes
 
 **Voice**
 - Push-to-talk (Ctrl+Space) with a floating pill
@@ -49,6 +53,7 @@ tells you which one needs you.
 
 **And**
 - Command palette (Ctrl+K), wall view of every agent, orchestrator agent that can drive the others over MCP
+  (spawn, prompt, wait, read diffs, undo a task, merge worktrees, close agents)
 - System tray, launch at startup, signed auto-updates
 
 | Activity | Command palette | Settings |

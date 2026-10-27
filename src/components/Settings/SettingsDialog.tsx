@@ -12,10 +12,12 @@ import {
   type LucideIcon,
   Mic,
   SlidersHorizontal,
+  Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AGENT_KINDS, AGENTS } from "../../lib/agents";
+import { pushNotify } from "../../lib/ipc";
 import { FONT_SIZE } from "../../store/deck";
 import { DEFAULT_FONT_FAMILY, type Settings, updateSettings, useSettings } from "../../store/settings";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
@@ -141,7 +143,80 @@ function Notifications({ s, save }: { s: Settings; save: Save }) {
         <Toggle id="set-unseen" checked={s.notify.onlyUnseen} onChange={(v) => set({ onlyUnseen: v })} />
       </Row>
       <SpeechRows s={s} save={save} />
+      <PhoneRow s={s} save={save} />
+      <BudgetRows s={s} save={save} />
     </Section>
+  );
+}
+
+function PhoneRow({ s, save }: { s: Settings; save: Save }) {
+  const [url, setUrl] = useState(s.phoneUrl);
+  const commit = () => url.trim() !== s.phoneUrl && save(updateSettings({ phoneUrl: url.trim() }));
+  return (
+    <Row
+      label="Phone notifications"
+      hint="An ntfy topic URL (e.g. https://ntfy.sh/your-secret-topic) or any webhook. Gets the same events, even without system notifications. Pick a topic nobody can guess."
+      htmlFor="set-phone"
+    >
+      <input
+        id="set-phone"
+        value={url}
+        placeholder="https://ntfy.sh/…"
+        onChange={(e) => setUrl(e.target.value)}
+        onBlur={commit}
+        className={`${field} w-56 text-xs`}
+      />
+      <button
+        type="button"
+        className={button}
+        disabled={!url.trim()}
+        onClick={() => {
+          commit();
+          save(pushNotify(url.trim(), "AgentDeck", "Test notification"));
+        }}
+      >
+        Test
+      </button>
+    </Row>
+  );
+}
+
+function BudgetRows({ s, save }: { s: Settings; save: Save }) {
+  const set = (patch: Partial<Settings["budget"]>) => save(updateSettings({ budget: { ...s.budget, ...patch } }));
+  const usd = (key: "dailyUsd" | "paneUsd", label: string) => (
+    <input
+      type="number"
+      min={0}
+      step={1}
+      aria-label={label}
+      defaultValue={s.budget[key] || ""}
+      placeholder="Off"
+      onBlur={(e) => {
+        const value = Math.max(0, Number(e.target.value) || 0);
+        if (value !== s.budget[key]) set({ [key]: value });
+      }}
+      className={`${field} w-24 text-xs tabular-nums`}
+    />
+  );
+  return (
+    <>
+      <Row
+        label="Daily cost limit (USD)"
+        hint="Estimated cost of every Claude Code and Codex session on this computer today, including ones started outside AgentDeck"
+      >
+        {usd("dailyUsd", "Daily cost limit in USD")}
+      </Row>
+      <Row label="Cost limit per agent (USD)" hint="Since the agent was started">
+        {usd("paneUsd", "Cost limit per agent in USD")}
+      </Row>
+      <Row
+        label="Stop at the limit"
+        hint="Interrupts the working agents and pauses the orchestrator, after the warning"
+        htmlFor="set-budget-stop"
+      >
+        <Toggle id="set-budget-stop" checked={s.budget.interrupt} onChange={(v) => set({ interrupt: v })} />
+      </Row>
+    </>
   );
 }
 
@@ -159,6 +234,7 @@ function Agents({ s, save }: { s: Settings; save: Save }) {
           onChange={(v) => save(updateSettings({ trustAgentFolders: v }))}
         />
       </Row>
+      <AutoAllowRows s={s} save={save} />
       <p className="pb-2 text-xs text-subtle">Values prefilled in "Add agent".</p>
       {AGENT_KINDS.map((kind) => {
         const defaults = s.agents[kind];
@@ -189,6 +265,63 @@ function Agents({ s, save }: { s: Settings; save: Save }) {
         );
       })}
     </Section>
+  );
+}
+
+function AutoAllowRows({ s, save }: { s: Settings; save: Save }) {
+  const [rule, setRule] = useState("");
+  const [folder, setFolder] = useState("");
+  const add = () => {
+    if (!rule.trim()) return;
+    save(updateSettings({ autoAllow: [...s.autoAllow, { rule: rule.trim(), folder: folder.trim() }] }));
+    setRule("");
+  };
+  return (
+    <div className="flex flex-col gap-2 py-3">
+      <span className="text-fg">Auto-allowed permissions (Claude Code)</span>
+      <span className="text-xs text-subtle">
+        AgentDeck answers these itself. "Read" covers a whole tool; "Bash(pnpm test)" one command, "Bash(pnpm test *)"
+        its variants. Chained commands (&&, ;, |, $(...)) are never auto-allowed.
+      </span>
+      {s.autoAllow.map((r, i) => (
+        <div key={`${r.rule}|${r.folder}`} className="flex items-center gap-2 text-xs">
+          <code className="min-w-0 flex-1 truncate font-mono text-fg">{r.rule}</code>
+          <span className="max-w-60 truncate text-subtle" title={r.folder}>
+            {r.folder || "All folders"}
+          </span>
+          <IconButton
+            icon={Trash2}
+            label={`Remove ${r.rule}`}
+            onClick={() => save(updateSettings({ autoAllow: s.autoAllow.filter((_, j) => j !== i) }))}
+          />
+        </div>
+      ))}
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <input
+          aria-label="Rule"
+          value={rule}
+          placeholder="Bash(pnpm test *)"
+          onChange={(e) => setRule(e.target.value)}
+          className={`${field} flex-1 font-mono text-xs`}
+        />
+        <input
+          aria-label="Folder (empty: all folders)"
+          value={folder}
+          placeholder="Folder (empty: all)"
+          onChange={(e) => setFolder(e.target.value)}
+          className={`${field} w-48 text-xs`}
+        />
+        <button type="submit" className={button} disabled={!rule.trim()}>
+          Add
+        </button>
+      </form>
+    </div>
   );
 }
 

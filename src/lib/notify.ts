@@ -1,4 +1,5 @@
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { pushNotify } from "./ipc";
 
 let permission: Promise<boolean> | undefined;
 let audio: AudioContext | undefined;
@@ -20,7 +21,13 @@ function beep(): void {
   osc.stop(audio.currentTime + 0.25);
 }
 
-export async function notify(title: string, body: string, { system = true, sound = true } = {}): Promise<void> {
+/** Desktop notification, beep, and a push to `phoneUrl` (ntfy topic or webhook) when set. */
+export async function notify(
+  title: string,
+  body: string,
+  { system = true, sound = true, phoneUrl = "" } = {},
+): Promise<void> {
+  if (phoneUrl) pushNotify(phoneUrl, title, body).catch((err) => console.warn("phone push failed", err));
   try {
     if (sound) beep();
     if (!system) return;
