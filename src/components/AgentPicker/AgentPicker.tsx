@@ -6,7 +6,7 @@ import { AGENT_KINDS, AGENTS } from "../../lib/agents";
 import { detectAgents } from "../../lib/ipc";
 import { splitArgs } from "../../lib/splitArgs";
 import type { AgentInfo, AgentKind } from "../../lib/types";
-import { activeWorkspace, folderName, useDeck } from "../../store/deck";
+import { activeWorkspace, useDeck } from "../../store/deck";
 import { createPane } from "../../store/runtime";
 import { useSettings } from "../../store/settings";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
@@ -80,7 +80,7 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
       {
         id: crypto.randomUUID(),
         agent,
-        title: folderName(cwd) || AGENTS[agent].name,
+        title: AGENTS[agent].name,
         cwd,
         args: splitArgs(args),
         worktree,
