@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ipc = vi.hoisted(() => ({
   spawnPane: vi.fn(),
   killPane: vi.fn(async () => undefined),
-  desktopRelease: vi.fn(async () => undefined),
   setActivePane: vi.fn(),
   resizePane: vi.fn(),
   writeToPane: vi.fn(),

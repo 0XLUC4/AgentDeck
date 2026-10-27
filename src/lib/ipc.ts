@@ -103,10 +103,6 @@ export const onAgentPermissionResolved = (cb: (requestId: string) => void): Prom
 
 // Orchestrator MCP bridge (src-tauri/src/mcp). `mcpRegister` returns the Claude args to prepend and the
 // per-spawn secret to pass as env to spawn_pane only (never store it).
-/** Gives the desktop MCP server (screen, mouse, keyboard) to this pane only (src-tauri/src/mcp/desktop.rs). */
-export const desktopRegister = (paneId: string) =>
-  invoke<{ args: string[]; secret: string }>("desktop_register", { paneId });
-export const desktopRelease = (paneId: string) => invoke<void>("desktop_release", { paneId });
 export const mcpRegister = (paneId: string) => invoke<{ args: string[]; secret: string }>("mcp_register", { paneId });
 export const mcpRespond = (requestId: string, result: unknown, error: string | null) =>
   invoke<void>("mcp_respond", { requestId, result, error });
