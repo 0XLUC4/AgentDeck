@@ -59,6 +59,8 @@ pub fn run() {
             agents::uninstall_hooks,
             hooks_server::permissions::answer_permission,
             browser::browser_mcp_args,
+            mcp::desktop::desktop_register,
+            mcp::desktop::desktop_release,
             mcp::mcp_register,
             mcp::mcp_respond,
             mcp::mcp_set_paused,

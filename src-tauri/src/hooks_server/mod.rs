@@ -81,8 +81,10 @@ pub fn start(app: AppHandle) -> HookServer {
             // One thread per request: a slow body (or a held permission request) must not stall other panes.
             let (app, expected) = (app.clone(), expected.clone());
             std::thread::spawn(move || {
-                if req.url().split('?').next() == Some("/mcp") {
-                    return crate::mcp::serve(&app, req, &expected);
+                match req.url().split('?').next() {
+                    Some("/mcp") => return crate::mcp::serve(&app, req, &expected),
+                    Some("/desktop") => return crate::mcp::desktop::serve(&app, req, &expected),
+                    _ => {}
                 }
                 let reply = match handle(&mut req, &expected) {
                     Ok(hook) => process(&app, &hook),

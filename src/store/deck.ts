@@ -19,6 +19,8 @@ export interface PaneSpec {
   orchestrator?: boolean;
   /** Claude pane with its own Chrome window to drive (src-tauri/src/browser.rs). */
   browser?: boolean;
+  /** Claude pane allowed to see the screen and drive mouse and keyboard; one pane at most. */
+  desktop?: boolean;
 }
 
 export interface Pane extends PaneSpec {
@@ -153,6 +155,7 @@ export const toSpec = ({
   fontSize,
   orchestrator,
   browser,
+  desktop,
 }: Pane): PaneSpec => ({
   id,
   agent,
@@ -164,6 +167,7 @@ export const toSpec = ({
   fontSize,
   ...(orchestrator ? { orchestrator } : {}),
   ...(browser ? { browser } : {}),
+  ...(desktop ? { desktop } : {}),
 });
 
 export const newTab = (name: string, workspaceId: string, layout: SerializedDockview | null = null): Tab => ({

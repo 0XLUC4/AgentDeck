@@ -39,6 +39,8 @@ tauri-plugin-process = "2.4.0"
 tauri-plugin-autostart = "2.7.0"
 chrono = "0.4.45"
 ruzstd = "0.9.1"
+enigo = "0.6.1"
+xcap = "0.9.8"
 
 [features]
 # Vulkan GPU backend for local transcription (needs the Vulkan SDK at build time).

@@ -6,6 +6,7 @@
 //! process gets (env `AGENTDECK_MCP_SECRET`): the hook token alone, known to every agent, is not enough. Scope checks (same workspace, not itself,
 //! not waiting on a permission) and pane actions run in the UI, which answers via `mcp_respond`.
 
+pub mod desktop;
 mod rpc;
 mod status;
 
@@ -45,7 +46,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// Answers one HTTP request on `/mcp`.
 pub fn serve(app: &AppHandle, mut req: Request, token: &str) {
-    let reply = match parse(&mut req, token) {
+    let reply = match parse(&mut req, token, SECRET_HEADER, &ORCHESTRATORS) {
         Err(code) => Response::empty(code).boxed(),
         Ok((_, msg)) if !msg.is_object() => {
             json_reply(400, &rpc::error(Value::Null, -32600, "Invalid Request"))
@@ -75,8 +76,14 @@ fn json_reply(code: u16, body: &Value) -> tiny_http::ResponseBox {
         .boxed()
 }
 
-/// Authenticates an orchestrator request; `Err` is the HTTP status to answer.
-fn parse(req: &mut Request, token: &str) -> Result<(String, Value), u16> {
+/// Authenticates a request from a pane registered in `registry` (pane id -> secret, sent in
+/// `secret_header`); `Err` is the HTTP status to answer.
+fn parse(
+    req: &mut Request,
+    token: &str,
+    secret_header: &'static str,
+    registry: &Mutex<HashMap<String, String>>,
+) -> Result<(String, Value), u16> {
     if *req.method() != tiny_http::Method::Post {
         return Err(405); // no SSE stream (GET) nor session to delete (DELETE)
     }
@@ -88,9 +95,9 @@ fn parse(req: &mut Request, token: &str) -> Result<(String, Value), u16> {
         return Err(401);
     }
     let pane_id = header(req, PANE_HEADER).unwrap_or("").to_owned();
-    let secret_ok = lock(&ORCHESTRATORS)
+    let secret_ok = lock(registry)
         .get(&pane_id)
-        .is_some_and(|s| token_ok(header(req, SECRET_HEADER).unwrap_or(""), s));
+        .is_some_and(|s| token_ok(header(req, secret_header).unwrap_or(""), s));
     if !secret_ok {
         return Err(403);
     }
@@ -307,7 +314,8 @@ mod tests {
             let mut s = std::net::TcpStream::connect(addr).unwrap();
             write!(s, "{method} /mcp HTTP/1.1\r\nHost: x\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             let mut req = server.recv().unwrap();
-            parse(&mut req, "tok").map(|(p, m)| (p, m["method"].clone()))
+            parse(&mut req, "tok", SECRET_HEADER, &ORCHESTRATORS)
+                .map(|(p, m)| (p, m["method"].clone()))
         };
         // Hook token + orchestrator pane id without its secret: what any other agent could forge.
         let no_secret = "X-AgentDeck-Token: tok\r\nX-AgentDeck-Pane: orch-1\r\n";

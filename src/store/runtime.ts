@@ -3,6 +3,8 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { AGENTS, interruptKey } from "../lib/agents";
 import {
   browserMcpArgs,
+  desktopRegister,
+  desktopRelease,
   killPane,
   mcpRegister,
   onAgentStatus,
@@ -136,17 +138,22 @@ async function spawn(id: string): Promise<void> {
     // Orchestrator wiring (MCP config, role prompt, secret) is regenerated on each spawn; the secret only
     // goes to this process's env.
     const mcp = pane.orchestrator ? await mcpRegister(id) : null;
-    const browser = pane.browser && pane.agent === "claude" ? await browserMcpArgs(id) : [];
+    const claude = pane.agent === "claude";
+    const browser = pane.browser && claude ? await browserMcpArgs(id) : [];
+    const desktop = pane.desktop && claude ? await desktopRegister(id) : null;
     await spawnPane({
       paneId: id,
       agent: pane.agent,
       cwd: pane.cwd,
-      args: [...browser, ...(mcp?.args ?? []), ...pane.args],
+      args: [...browser, ...(desktop?.args ?? []), ...(mcp?.args ?? []), ...pane.args],
       worktree: pane.worktree,
       cols,
       rows,
       title: pane.title,
-      env: mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : undefined,
+      env: {
+        ...(mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : {}),
+        ...(desktop ? { AGENTDECK_DESKTOP_SECRET: desktop.secret } : {}),
+      },
       trust: useSettings.getState().trustAgentFolders,
     });
     // The terminal may have been fitted while spawning.
@@ -218,6 +225,7 @@ export async function closePane(id: string): Promise<void> {
     setActivePane(null).catch((err) => console.warn("set_active_pane failed", err));
   }
   for (const unlisten of rt?.unlisten ?? []) unlisten();
+  if (rt) desktopRelease(id).catch((err) => console.warn("desktop_release failed", err));
   await killPane(id).catch((err) => console.warn("kill_pane failed", err));
 }
 

@@ -5,6 +5,7 @@ const exitHandlers = new Map<string, () => void>();
 const ipc = vi.hoisted(() => ({
   spawnPane: vi.fn(),
   killPane: vi.fn(),
+  desktopRelease: vi.fn(async () => undefined),
   setActivePane: vi.fn(),
   resizePane: vi.fn(),
   writeToPane: vi.fn(),
