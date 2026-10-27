@@ -2,6 +2,7 @@ import {
   CheckCheck,
   ExternalLink,
   GitBranch,
+  Globe,
   Maximize2,
   Minimize2,
   Pause,
@@ -153,6 +154,16 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               onClick={() => interruptPane(pane.id)}
               disabled={pane.exited}
             />
+            {pane.agent === "claude" && (
+              <IconButton
+                icon={Globe}
+                size="sm"
+                label="Browser"
+                hint="Give this agent its own Chrome window to drive (restarts the agent)"
+                aria-pressed={Boolean(pane.browser)}
+                onClick={() => toggleBrowser(pane)}
+              />
+            )}
             <IconButton icon={RotateCcw} size="sm" label="Restart" onClick={() => void restartPane(pane.id)} />
             <IconButton
               icon={ZoomOut}
@@ -221,4 +232,12 @@ function ReviewChip({ paneId }: { paneId: string }) {
       {reviewer.title}
     </span>
   );
+}
+
+/** The browser MCP server is added at spawn, so switching it restarts the agent. */
+function toggleBrowser(pane: Pane) {
+  const on = !pane.browser;
+  if (!window.confirm(`${on ? "Give" : "Remove"} ${pane.title}'s Chrome window? The agent restarts.`)) return;
+  deck.updatePane(pane.id, (p) => ({ ...p, browser: on }));
+  void restartPane(pane.id);
 }
