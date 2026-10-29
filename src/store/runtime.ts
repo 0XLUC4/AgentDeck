@@ -91,6 +91,13 @@ export async function createPane(spec: PaneSpec, tabId: string, adopt = false): 
         for (const fn of rt.listeners) fn(data);
       }),
       onPaneExit(spec.id, () => {
+        const pane = useDeck.getState().panes[spec.id];
+        // The agent quit by itself (Ctrl+C, /exit): close its pane instead of leaving a dead one in the layout.
+        if (!rt.onExit && pane && !pane.exited) {
+          deck.toast(`${pane.title} exited`);
+          void closePane(spec.id);
+          return;
+        }
         deck.updatePane(spec.id, (p) => ({ ...p, exited: true, statusSince: Date.now() }));
         rt.onExit?.();
       }),
