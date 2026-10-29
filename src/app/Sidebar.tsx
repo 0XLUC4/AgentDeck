@@ -234,7 +234,7 @@ export function Sidebar({ onLink }: { onLink: () => void }) {
   const activeId = useDeck((s) => activeWorkspace(s).id);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-line bg-panel" aria-label="Workspaces and sessions">
+    <aside className="flex w-80 shrink-0 flex-col border-r border-line bg-panel" aria-label="Workspaces and sessions">
       <div className="flex h-10 shrink-0 items-center justify-between pr-2 pl-3">
         <h2 className="text-xs font-medium text-subtle">Workspaces</h2>
         <IconButton icon={FolderPlus} label="Link workspace" onClick={onLink} />
