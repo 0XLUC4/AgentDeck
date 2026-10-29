@@ -11,6 +11,7 @@ import {
   LayoutTemplate,
   type LucideIcon,
   Mic,
+  Network,
   SlidersHorizontal,
   Trash2,
   X,
@@ -26,19 +27,21 @@ import { IconButton } from "../IconButton/IconButton";
 import { TemplatesSection } from "../Templates/TemplatesSection";
 import { AutostartRow, UpdateRow } from "./AppControls";
 import { button, ErrorText, errorMessage, field, Row, Section, Toggle } from "./controls";
+import { McpHubSection } from "./McpHubSection";
 import { SpeechRows } from "./SpeechRows";
 import { VoiceSection } from "./VoiceSection";
 
 /** Runs a save and reports it in the dialog header ("Saved" or the error). */
 export type Save = (task: Promise<unknown>) => void;
 
-type SectionId = "general" | "notifications" | "voice" | "agents" | "templates" | "about";
+type SectionId = "general" | "notifications" | "voice" | "agents" | "mcp" | "templates" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "mcp", label: "MCP hub", icon: Network },
   { id: "templates", label: "Templates", icon: LayoutTemplate },
   { id: "about", label: "About", icon: Info },
 ];
@@ -447,6 +450,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {section === "notifications" && <Notifications s={settings} save={save} />}
             {section === "voice" && <VoiceSection save={save} />}
             {section === "agents" && <Agents s={settings} save={save} />}
+            {section === "mcp" && <McpHubSection save={save} />}
             {section === "templates" && <TemplatesSection save={save} />}
             {section === "about" && <About />}
           </div>

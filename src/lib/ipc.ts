@@ -114,6 +114,23 @@ export const mcpRegister = (paneId: string) => invoke<{ args: string[]; secret: 
 export const mcpRespond = (requestId: string, result: unknown, error: string | null) =>
   invoke<void>("mcp_respond", { requestId, result, error });
 export const mcpSetPaused = (paused: boolean) => invoke<void>("mcp_set_paused", { paused });
+
+// Shared MCP hub (src-tauri/src/mcp/hub.rs): one server process for every agent pane.
+export interface HubServer {
+  name: string;
+  /** Local server (stdio); empty for a URL server. */
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  /** Remote server (streamable HTTP); empty for a local one. */
+  url: string;
+  headers: Record<string, string>;
+}
+export const hubList = () => invoke<HubServer[]>("hub_list");
+export const hubSave = (servers: HubServer[]) => invoke<void>("hub_save", { servers });
+/** Starts the server if needed; resolves to its tool count. */
+export const hubTest = (name: string) => invoke<number>("hub_test", { name });
+export const hubClaudeServers = () => invoke<HubServer[]>("hub_claude_servers");
 export const onMcpRequest = (cb: (req: McpRequest) => void): Promise<UnlistenFn> =>
   listen<McpRequest>("mcp-request", (e) => cb(e.payload));
 export const onMcpActivity = (cb: (e: McpActivity) => void): Promise<UnlistenFn> =>
