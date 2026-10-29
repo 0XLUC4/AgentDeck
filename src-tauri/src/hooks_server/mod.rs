@@ -81,8 +81,12 @@ pub fn start(app: AppHandle) -> HookServer {
             // One thread per request: a slow body (or a held permission request) must not stall other panes.
             let (app, expected) = (app.clone(), expected.clone());
             std::thread::spawn(move || {
-                if req.url().split('?').next() == Some("/mcp") {
+                let path = req.url().split('?').next().unwrap_or("").to_owned();
+                if path == "/mcp" {
                     return crate::mcp::serve(&app, req, &expected);
+                }
+                if let Some(name) = path.strip_prefix("/hub/") {
+                    return crate::mcp::hub::serve(&app, req, &expected, name);
                 }
                 let reply = match handle(&mut req, &expected) {
                     Ok(hook) => process(&app, &hook),
@@ -295,7 +299,7 @@ fn truncate(text: &str, max: usize) -> String {
     text[..end].to_owned()
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
 

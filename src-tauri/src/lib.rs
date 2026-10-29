@@ -39,6 +39,7 @@ pub fn run() {
         .on_window_event(tray::on_window_event)
         .setup(|app| {
             let hooks = hooks_server::start(app.handle().clone());
+            mcp::hub::init(app.handle(), hooks.port);
             app.manage(AppState {
                 panes: pty::Panes::default(),
                 active_pane: Mutex::new(None),
@@ -67,6 +68,10 @@ pub fn run() {
             mcp::mcp_register,
             mcp::mcp_respond,
             mcp::mcp_set_paused,
+            mcp::hub::hub_list,
+            mcp::hub::hub_save,
+            mcp::hub::hub_test,
+            mcp::hub::hub_claude_servers,
             git::git_status,
             git::git_diff,
             git::git_diff_trees,
@@ -111,6 +116,11 @@ pub fn run() {
             skills::agent_file_read,
             skills::agent_file_write,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_, event| {
+            if let tauri::RunEvent::Exit = event {
+                mcp::hub::stop_all();
+            }
+        });
 }

@@ -105,7 +105,12 @@ pub fn spawn_pane(
         })
         .map_err(|e| e.to_string())?;
 
-    let args = [agents::hook_args(agent, &pane_id, &state.hooks), args].concat();
+    let args = [
+        agents::hook_args(agent, &pane_id, &state.hooks),
+        crate::mcp::hub::agent_args(agent),
+        args,
+    ]
+    .concat();
     let mut cmd: CommandBuilder = agents::command_for(agent, &args);
     cmd.cwd(&cwd);
     // When AgentDeck itself is started from a Claude Code session, don't leak that session's
@@ -126,6 +131,9 @@ pub fn spawn_pane(
     // Grok documents no trust-file format, only this switch (docs/user-guide/10-hooks.md).
     if trust && agent == AgentKind::Grok {
         cmd.env("GROK_FOLDER_TRUST", "0");
+    }
+    if let Some((key, value)) = crate::mcp::hub::agent_env(agent) {
+        cmd.env(key, value);
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;

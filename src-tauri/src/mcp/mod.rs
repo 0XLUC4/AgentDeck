@@ -6,6 +6,7 @@
 //! process gets (env `AGENTDECK_MCP_SECRET`): the hook token alone, known to every agent, is not enough. Scope checks (same workspace, not itself,
 //! not waiting on a permission) and pane actions run in the UI, which answers via `mcp_respond`.
 
+pub mod hub;
 mod rpc;
 mod status;
 
@@ -98,6 +99,11 @@ fn parse(req: &mut Request, token: &str) -> Result<(String, Value), u16> {
     if header(req, VERSION_HEADER).is_some_and(|v| !rpc::VERSIONS.contains(&v)) {
         return Err(400);
     }
+    Ok((pane_id, read_json(req)?))
+}
+
+/// Reads a JSON body of at most `MAX_BODY` bytes; `Err` is the HTTP status to answer.
+fn read_json(req: &mut Request) -> Result<Value, u16> {
     let mut body = Vec::new();
     req.as_reader()
         .take(MAX_BODY + 1)
@@ -106,8 +112,7 @@ fn parse(req: &mut Request, token: &str) -> Result<(String, Value), u16> {
     if body.len() as u64 > MAX_BODY {
         return Err(413);
     }
-    let msg = serde_json::from_slice(&body).map_err(|_| 400u16)?;
-    Ok((pane_id, msg))
+    serde_json::from_slice(&body).map_err(|_| 400u16)
 }
 
 struct AppHost<'a> {
