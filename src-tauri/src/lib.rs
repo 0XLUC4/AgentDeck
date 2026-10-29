@@ -6,6 +6,7 @@ mod hooks_server;
 mod mcp;
 mod notify;
 mod pty;
+mod skills;
 mod tray;
 mod trust;
 mod usage;
@@ -102,6 +103,13 @@ pub fn run() {
             history::journal::journal_read,
             history::journal::journal_git_commits,
             history::journal::write_text_file,
+            skills::skills_list,
+            skills::skills_install,
+            skills::skills_remove,
+            skills::save_paste_image,
+            skills::notes_list,
+            skills::agent_file_read,
+            skills::agent_file_write,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

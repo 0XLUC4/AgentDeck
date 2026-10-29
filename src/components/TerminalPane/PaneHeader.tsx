@@ -31,6 +31,8 @@ import { GitPanel } from "../Git/GitPanel";
 import { IconButton } from "../IconButton/IconButton";
 import { OrchestratorButton } from "../Orchestrator/OrchestratorButton";
 import { QueueButton } from "../Queue/QueueButton";
+import { NotesButton } from "../Skills/NotesButton";
+import { SkillsButton } from "../Skills/SkillsButton";
 import { StatusBadge } from "../StatusBadge/StatusBadge";
 import { UsageChip } from "../Usage/UsageChip";
 
@@ -158,6 +160,12 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
               onClick={() => interruptPane(pane.id)}
               disabled={pane.exited}
             />
+            {pane.agent !== "shell" && (
+              <>
+                <SkillsButton pane={pane} />
+                <NotesButton pane={pane} />
+              </>
+            )}
             {pane.agent === "claude" && (
               <IconButton
                 icon={Globe}

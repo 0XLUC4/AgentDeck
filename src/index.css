@@ -133,3 +133,9 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line-strong) transparent;
 }
+
+/* Terminal under a file being dragged in (TerminalPane). */
+.drop-target {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -4px;
+}

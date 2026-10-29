@@ -137,3 +137,33 @@ export const journalGitCommits = (cwd: string) => invoke<GitCommitInfo[]>("journ
 /** Opens a native save dialog, then writes. Resolves to the saved path, or null if cancelled. */
 export const writeTextFile = (defaultName: string, contents: string) =>
   invoke<string | null>("write_text_file", { defaultName, contents });
+
+export type SkillScope = "user" | "project";
+export interface SkillInfo {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  /** Its SKILL.md file. */
+  path: string;
+}
+/** An agent instruction or memory Markdown file; `exists` is false for one that can be created. */
+export interface NoteFile {
+  label: string;
+  path: string;
+  exists: boolean;
+}
+export const skillsList = (agent: AgentKind, cwd: string) => invoke<SkillInfo[]>("skills_list", { agent, cwd });
+/** Installs every skill found at a GitHub link (repo, or `/tree/<ref>/<folder>`). Resolves to their names. */
+export const skillsInstall = (agent: AgentKind, cwd: string, url: string, scope: SkillScope) =>
+  invoke<string[]>("skills_install", { agent, cwd, url, scope });
+export const skillsRemove = (agent: AgentKind, cwd: string, path: string) =>
+  invoke<void>("skills_remove", { agent, cwd, path });
+export const notesList = (agent: AgentKind, cwd: string) => invoke<NoteFile[]>("notes_list", { agent, cwd });
+/** Reads a listed note or SKILL.md ("" when it does not exist yet). */
+export const agentFileRead = (agent: AgentKind, cwd: string, path: string) =>
+  invoke<string>("agent_file_read", { agent, cwd, path });
+export const agentFileWrite = (agent: AgentKind, cwd: string, path: string, text: string) =>
+  invoke<void>("agent_file_write", { agent, cwd, path, text });
+/** Saves image bytes to a temp file; resolves to its path. */
+export const savePasteImage = (bytes: Uint8Array, ext: string) =>
+  invoke<string>("save_paste_image", bytes, { headers: { "x-ext": ext } });

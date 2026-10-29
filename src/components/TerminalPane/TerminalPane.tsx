@@ -2,9 +2,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useRef } from "react";
 import { forwardsInput } from "../../lib/detach";
-import { deck } from "../../store/deck";
+import { fileRefs, imageExt } from "../../lib/fileRefs";
+import { savePasteImage } from "../../lib/ipc";
+import { deck, useDeck } from "../../store/deck";
 import { attachOutput, reportSize, sendInput } from "../../store/runtime";
 import { DEFAULT_FONT_FAMILY, useSettings } from "../../store/settings";
 import { isDetached } from "../Detached/host";
@@ -43,6 +46,8 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     }
 
     term.attachCustomKeyEventHandler((e) => {
+      // Ctrl+V / Ctrl+Shift+V: let the webview paste (text, or an image via onPaste) instead of sending ^V.
+      if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === "v") return false;
       const zoom = e.ctrlKey && !e.altKey ? ZOOM_KEYS[e.key] : undefined;
       if (zoom === undefined) return true;
       if (e.type === "keydown") deck.zoom(paneId, zoom);
@@ -65,8 +70,40 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     observer.observe(host);
     viewRef.current = { term, refit };
 
+    // Files reach the agent as paths in its prompt; term.paste respects the agent's bracketed paste mode.
+    const pastePaths = (paths: string[]) => {
+      const agent = useDeck.getState().panes[paneId]?.agent ?? "shell";
+      term.paste(fileRefs(agent, paths));
+      term.focus();
+    };
+    // Images have no path on the clipboard: save them to a temp file first.
+    const onPaste = (e: ClipboardEvent) => {
+      const images = [...(e.clipboardData?.files ?? [])].filter((f) => imageExt(f.type));
+      if (images.length === 0) return; // text: xterm's own paste handler
+      e.preventDefault();
+      e.stopPropagation();
+      Promise.all(
+        images.map(async (f) => savePasteImage(new Uint8Array(await f.arrayBuffer()), imageExt(f.type) ?? "png")),
+      )
+        .then(pastePaths)
+        .catch((err) => deck.toast(`Could not paste the image: ${String(err)}`));
+    };
+    host.addEventListener("paste", onPaste, true);
+
+    // Native drag & drop gives real file paths (any file, not only images); highlight the pane under the cursor.
+    const setDropTarget = (on: boolean) => host.classList.toggle("drop-target", on);
+    const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "leave") return setDropTarget(false);
+      const at = payload.position.toLogical(window.devicePixelRatio);
+      const inside = host.contains(document.elementFromPoint(at.x, at.y));
+      setDropTarget(inside && payload.type !== "drop");
+      if (payload.type === "drop" && inside && payload.paths.length > 0) pastePaths(payload.paths);
+    });
+
     return () => {
       viewRef.current = null;
+      host.removeEventListener("paste", onPaste, true);
+      void unlistenDrop.then((unlisten) => unlisten());
       observer.disconnect();
       clearTimeout(resizeTimer);
       detach();
