@@ -70,6 +70,11 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     observer.observe(host);
     viewRef.current = { term, refit };
 
+    // WebView2 can drop the WebGL canvas while the window is in the background: repaint on return.
+    const repaint = () => document.visibilityState === "visible" && term.refresh(0, term.rows - 1);
+    window.addEventListener("focus", repaint);
+    document.addEventListener("visibilitychange", repaint);
+
     // Files reach the agent as paths in its prompt; term.paste respects the agent's bracketed paste mode.
     const pastePaths = (paths: string[]) => {
       const agent = useDeck.getState().panes[paneId]?.agent ?? "shell";
@@ -102,6 +107,8 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
 
     return () => {
       viewRef.current = null;
+      window.removeEventListener("focus", repaint);
+      document.removeEventListener("visibilitychange", repaint);
       host.removeEventListener("paste", onPaste, true);
       void unlistenDrop.then((unlisten) => unlisten());
       observer.disconnect();
