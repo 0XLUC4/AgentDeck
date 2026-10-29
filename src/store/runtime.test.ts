@@ -90,6 +90,15 @@ describe("runtime", () => {
     expect(exitHandlers.has("p3")).toBe(false);
   });
 
+  it("closes the pane when the agent exits by itself, but not on restart", async () => {
+    await createPane(spec("p6"), "t1");
+    await restartPane("p6");
+    expect(useDeck.getState().panes.p6).toBeDefined();
+    exitHandlers.get("p6")?.(); // e.g. Ctrl+C confirmed in Claude Code
+    expect(useDeck.getState().panes.p6).toBeUndefined();
+    expect(ipc.killPane).toHaveBeenLastCalledWith("p6");
+  });
+
   it("adopts a live pane without spawning and repaints it on the first size report", async () => {
     await createPane(spec("p9"), "t1", true);
     expect(ipc.spawnPane).not.toHaveBeenCalled();
