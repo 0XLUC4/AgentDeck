@@ -86,7 +86,6 @@ pub fn run() {
             git::git_compare,
             voice::voice_start,
             voice::voice_stop,
-            voice::voice_send,
             voice::voice_get_config,
             voice::voice_set_config,
             voice::voice_set_api_key,

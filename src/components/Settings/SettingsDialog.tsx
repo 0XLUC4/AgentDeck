@@ -237,6 +237,17 @@ function Agents({ s, save }: { s: Settings; save: Save }) {
           onChange={(v) => save(updateSettings({ trustAgentFolders: v }))}
         />
       </Row>
+      <Row
+        label="Show sub-agents as panes"
+        hint="When a Claude agent starts its own sub-agents, each one appears as a read-only pane next to it, to follow what it does."
+        htmlFor="set-show-subagents"
+      >
+        <Toggle
+          id="set-show-subagents"
+          checked={s.showSubagents}
+          onChange={(v) => save(updateSettings({ showSubagents: v }))}
+        />
+      </Row>
       <AutoAllowRows s={s} save={save} />
       <p className="pb-2 text-xs text-subtle">Values prefilled in "Add agent".</p>
       {AGENT_KINDS.map((kind) => {

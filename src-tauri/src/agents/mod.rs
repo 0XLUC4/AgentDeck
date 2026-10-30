@@ -249,7 +249,7 @@ pub fn uninstall_hooks(cwd: String) -> Result<(), String> {
     update_claude_settings(&cwd, strip_claude_hooks)
 }
 
-const CLAUDE_EVENTS: [&str; 8] = [
+const CLAUDE_EVENTS: [&str; 10] = [
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
@@ -258,6 +258,8 @@ const CLAUDE_EVENTS: [&str; 8] = [
     "Notification",
     "Stop",
     "StopFailure",
+    "SubagentStart",
+    "SubagentStop",
 ];
 /// PermissionRequest is held by the hook server until the user answers in AgentDeck (hold: 590 s).
 const PERMISSION_TIMEOUT_S: u64 = 600;

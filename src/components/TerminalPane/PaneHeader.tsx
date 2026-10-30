@@ -4,6 +4,7 @@ import {
   GitBranch,
   Globe,
   Maximize2,
+  Mic,
   Minimize2,
   Pause,
   Pencil,
@@ -20,6 +21,7 @@ import { revealPane } from "../../app/Deck";
 import { AGENTS } from "../../lib/agents";
 import { formatElapsed, useNow } from "../../lib/clock";
 import { shortAction } from "../../lib/shortAction";
+import { useVoiceTarget } from "../../lib/voiceListener";
 import type { Pane } from "../../store/deck";
 import { deck, FONT_SIZE, folderName, useDeck } from "../../store/deck";
 import { useReviews } from "../../store/review";
@@ -93,6 +95,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
   const [gitOpen, setGitOpen] = useState(false);
   const detached = useDetached((s) => s[pane.id] === true);
   const agent = AGENTS[pane.agent];
+  const voiceTarget = useVoiceTarget() === pane.id;
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: double-click shortcut; the maximize button is the accessible path
@@ -116,6 +119,17 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
         </span>
       )}
       <StatusBadge status={pane.status} />
+      {voiceTarget && (
+        <Mic
+          size={12}
+          strokeWidth={1.5}
+          className="shrink-0 text-subtle"
+          role="img"
+          aria-label="Next dictation goes here"
+        >
+          <title>Next dictation goes here</title>
+        </Mic>
+      )}
 
       {!compact && (
         <>

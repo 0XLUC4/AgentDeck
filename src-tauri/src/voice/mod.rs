@@ -1,6 +1,6 @@
 //! Voice input: global push-to-talk shortcut, mic capture (cpal), transcription
 //! (local whisper.cpp or an OpenAI-compatible API). The main window receives the
-//! transcript, picks the target pane and types it via `voice_send` / `write_to_pane`.
+//! transcript, picks the target pane and types it via `write_to_pane`.
 //! Settings live in `config` and apply without restart.
 //!
 //! Events: `voice-level` (f32 0..1, ~30/s), `voice-state` ("idle" | "listening" |
@@ -17,10 +17,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
-use crate::AppState;
 use audio::Capture;
 use config::{Engine, VoiceConfig, VoiceConfigView, WhisperModel};
 
@@ -227,24 +226,6 @@ pub fn voice_start(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn voice_stop(app: AppHandle) -> Result<(), String> {
     stop(&app, None).inspect_err(|e| fail(&app, e))
-}
-
-/// Types `text` into the active pane, then presses Enter in a separate write when `submit`
-/// (agent TUIs treat text + Enter in one write as a paste and insert a newline instead).
-#[tauri::command(async)]
-pub fn voice_send(state: State<'_, AppState>, text: String, submit: bool) -> Result<(), String> {
-    let pane_id = state
-        .active_pane
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone()
-        .ok_or("no active pane")?;
-    state.panes.write(&pane_id, text.as_bytes())?;
-    if submit {
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        state.panes.write(&pane_id, b"\r")?;
-    }
-    Ok(())
 }
 
 fn is_recording(app: &AppHandle) -> bool {

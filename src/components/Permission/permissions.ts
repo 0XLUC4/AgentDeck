@@ -5,7 +5,7 @@ import { AGENTS } from "../../lib/agents";
 import { answerPermission, onAgentPermission, onAgentPermissionResolved } from "../../lib/ipc";
 import { notify } from "../../lib/notify";
 import type { PermissionDecision, PermissionRequest } from "../../lib/types";
-import { deck, useDeck } from "../../store/deck";
+import { activeWorkspace, deck, useDeck } from "../../store/deck";
 import { updateSettings, useSettings } from "../../store/settings";
 import { autoAllowed, ruleFor } from "./autoAllow";
 
@@ -65,7 +65,10 @@ export async function listenPermissions(): Promise<UnlistenFn> {
       const rule = autoAllowed(req, pane.cwd, settings.autoAllow);
       if (rule) {
         void answer(req, "allow");
-        deck.toast(`Auto-allowed (${rule.rule}): ${req.summary}`);
+        // Another workspace's auto-allow names its workspace, so it isn't read as the current one's.
+        const wsId = state.tabs.find((t) => t.paneIds.includes(req.paneId))?.workspaceId;
+        const ws = wsId !== activeWorkspace(state).id && state.workspaces.find((w) => w.id === wsId);
+        deck.toast(`${ws ? `[${ws.name}] ` : ""}Auto-allowed (${rule.rule}): ${req.summary}`);
         return;
       }
       usePermissions.setState((s) => addPermission(s, req), true);
