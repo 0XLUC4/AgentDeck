@@ -136,15 +136,18 @@ export default function App() {
         {sidebarOpen && <Sidebar onLink={() => setLinking(true)} />}
         <main className="flex min-w-0 flex-1 flex-col">
           <TabBar onAddAgent={() => setPicking(true)} />
-          <div className="relative min-h-0 flex-1">
+          <div className="relative isolate min-h-0 flex-1">
             {hydrated &&
               tabs.map((tab) => (
                 // Every session of every workspace stays mounted (invisible, same size): terminals keep their
                 // state and answer ConPTY's startup cursor query even in the background.
+                // Not `visibility: hidden`: dockview sets `visibility: visible` on sashes and headers, which leaked
+                // them into other sessions. Opacity and inert apply to the whole subtree.
                 <div
                   key={tab.id}
-                  className={`absolute inset-0 p-1.5 ${tab.id === activeTabId ? "" : "invisible"}`}
+                  className={`absolute inset-0 p-1.5 ${tab.id === activeTabId ? "" : "-z-10 opacity-0"}`}
                   aria-hidden={tab.id !== activeTabId}
+                  inert={tab.id !== activeTabId}
                 >
                   <Deck tab={tab} />
                 </div>
