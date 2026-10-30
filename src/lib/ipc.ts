@@ -5,6 +5,7 @@ import type {
   AgentInfo,
   AgentKind,
   AgentStatusEvent,
+  AgentSubagentEvent,
   FolderInfo,
   GitCheckpoint,
   GitCommitInfo,
@@ -48,7 +49,6 @@ export const setCloseToTray = (enabled: boolean) => invoke<void>("set_close_to_t
 
 export const voiceStart = () => invoke<void>("voice_start");
 export const voiceStop = () => invoke<void>("voice_stop");
-export const voiceSend = (text: string, submit: boolean) => invoke<void>("voice_send", { text, submit });
 export const getVoiceConfig = () => invoke<VoiceConfig>("voice_get_config");
 export const setVoiceConfig = (config: Omit<VoiceConfig, "hasApiKey">) =>
   invoke<VoiceConfig>("voice_set_config", { config });
@@ -63,6 +63,8 @@ export const onPaneExit = (paneId: string, cb: () => void): Promise<UnlistenFn> 
   listen(`pane-exit:${paneId}`, () => cb());
 export const onAgentStatus = (cb: (e: AgentStatusEvent) => void): Promise<UnlistenFn> =>
   listen<AgentStatusEvent>("agent-status", (e) => cb(e.payload));
+export const onAgentSubagent = (cb: (e: AgentSubagentEvent) => void): Promise<UnlistenFn> =>
+  listen<AgentSubagentEvent>("agent-subagent", (e) => cb(e.payload));
 
 export const onVoiceLevel = (cb: (level: number) => void) => listen<number>("voice-level", (e) => cb(e.payload));
 export const onVoiceState = (cb: (state: VoiceState) => void) =>

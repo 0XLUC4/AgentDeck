@@ -1,6 +1,6 @@
 import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { ActivityPanel, PermissionBanner } from "./app/Activity";
+import { ActivityPanel, jumpToNextWaiting, PermissionBanner } from "./app/Activity";
 import { Deck } from "./app/Deck";
 import { Sidebar } from "./app/Sidebar";
 import { TabBar } from "./app/TabBar";
@@ -15,6 +15,7 @@ import { startJournalRecorder } from "./components/Journal/recorder";
 import { LinkWorkspaceDialog } from "./components/LinkWorkspace/LinkWorkspaceDialog";
 import { listenPermissions } from "./components/Permission/permissions";
 import { SettingsDialog } from "./components/Settings/SettingsDialog";
+import { listenSubagents } from "./components/Subagents/subagents";
 import { TemplatePickerHost } from "./components/Templates/TemplatePicker";
 import { WallOverlay } from "./components/Wall/Wall";
 import { startBudgetWatch } from "./lib/budget";
@@ -41,6 +42,7 @@ startReviewRunner();
 startBudgetWatch();
 startTaskSpeech();
 listenPermissions().catch((err) => console.warn("agent-permission listener failed", err));
+listenSubagents().catch((err) => console.warn("agent-subagent listener failed", err));
 listenOrchestrator().catch((err) => console.warn("orchestrator listener failed", err));
 checkForUpdateSilently();
 startDetachHost();
@@ -110,13 +112,15 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const activity = e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyA";
       const settings = e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",";
+      const nextWaiting = e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyJ";
       // The voice shortcut recorder needs every combo.
       const recording = e.target instanceof HTMLElement && e.target.closest("[data-shortcut-recorder]");
-      if ((!activity && !settings) || recording) return;
+      if ((!activity && !settings && !nextWaiting) || recording) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.repeat) return;
       if (activity) setActivityOpen((open) => !open);
+      else if (nextWaiting) jumpToNextWaiting();
       else setSettingsOpen(true);
     };
     window.addEventListener("keydown", onKey, true);

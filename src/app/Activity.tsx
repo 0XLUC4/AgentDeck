@@ -12,6 +12,7 @@ import type { PermissionRequest } from "../lib/types";
 import {
   type ActivityItem,
   type ActivityKey,
+  activeWorkspace,
   activityGroups,
   activityKey,
   deck,
@@ -42,6 +43,17 @@ function jumpTo({ pane, tab }: Pick<ActivityItem, "pane" | "tab">) {
   requestAnimationFrame(() =>
     document.querySelector<HTMLElement>(`[data-pane-id="${CSS.escape(pane.id)}"] .xterm-helper-textarea`)?.focus(),
   );
+}
+
+/** Ctrl+Shift+J: jumps to the agent waiting longest for an answer, in any workspace. */
+export function jumpToNextWaiting() {
+  const { panes, tabs } = useDeck.getState();
+  const pane = Object.values(panes)
+    .filter((p) => activityKey(p) === "waiting")
+    .sort((a, b) => a.statusSince - b.statusSince)[0];
+  const tab = pane && tabs.find((t) => t.paneIds.includes(pane.id));
+  if (pane && tab) jumpTo({ pane, tab });
+  else deck.toast("No agent is waiting.");
 }
 
 function Since({ since }: { since: number }) {
@@ -216,7 +228,7 @@ export function ActivityToggle({ open, onToggle }: { open: boolean; onToggle: ()
       <IconButton
         icon={Activity}
         label={summary ? `Activity (${summary})` : "Activity"}
-        hint={`${open ? "Hide" : "Show"} activity of all agents (Ctrl+Shift+A)`}
+        hint={`${open ? "Hide" : "Show"} activity of all agents (Ctrl+Shift+A). Next waiting agent: Ctrl+Shift+J`}
         aria-pressed={open}
         onClick={onToggle}
       />
@@ -241,13 +253,18 @@ export function ActivityToggle({ open, onToggle }: { open: boolean; onToggle: ()
   );
 }
 
-/** Shown while the activity panel is closed: the oldest pending permission, answerable in place. */
+/** Shown while the activity panel is closed: the oldest pending permission of the current workspace. */
 export function PermissionBanner() {
   const pending = usePermissions((s) => s);
-  const requests = Object.values(pending);
+  const tabs = useDeck((s) => s.tabs);
+  const workspaceId = useDeck((s) => activeWorkspace(s).id);
+  // Other workspaces' requests stay in the activity panel (the toggle shows the waiting count).
+  const requests = Object.values(pending).filter(
+    (r) => tabs.find((t) => t.paneIds.includes(r.paneId))?.workspaceId === workspaceId,
+  );
   const request = requests[0];
   const pane = useDeck((s) => (request ? s.panes[request.paneId] : undefined));
-  const tab = useDeck((s) => (request ? s.tabs.find((t) => t.paneIds.includes(request.paneId)) : undefined));
+  const tab = tabs.find((t) => request && t.paneIds.includes(request.paneId));
   if (!request || !pane) return null;
   const more = requests.length - 1;
   return (

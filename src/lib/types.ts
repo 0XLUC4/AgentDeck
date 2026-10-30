@@ -23,6 +23,16 @@ export interface AgentStatusEvent {
   summary?: string | null;
 }
 
+/** Activity of one of a Claude pane's internal subagents (SubagentStart/Stop hooks, tool hooks with agent_id). */
+export interface AgentSubagentEvent {
+  paneId: string;
+  agentId: string;
+  agentType: string | null;
+  event: "SubagentStart" | "SubagentStop" | "PreToolUse";
+  action: string | null;
+  summary: string | null;
+}
+
 export type VoiceState = "idle" | "listening" | "downloading" | "transcribing" | "error";
 
 export type VoiceEngine = "local" | "api";

@@ -18,6 +18,7 @@ import { StatusDot } from "../components/StatusBadge/StatusBadge";
 import { openTemplatePickerFor } from "../components/Templates/TemplatePicker";
 import {
   activeWorkspace,
+  activityKey,
   deck,
   type SavedSession,
   sessionStatus,
@@ -129,6 +130,15 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
   const open = tabs.filter((t) => t.workspaceId === ws.id);
   const closed = archived.filter((s) => s.workspaceId === ws.id);
   const FolderIcon = active ? FolderOpen : Folder;
+  const keys = useDeck((s) =>
+    s.tabs
+      .filter((t) => t.workspaceId === ws.id)
+      .flatMap((t) => t.paneIds.map((id) => (s.panes[id] ? activityKey(s.panes[id]) : null)))
+      .join(","),
+  ).split(",");
+  const waiting = keys.filter((k) => k === "waiting").length;
+  const failed = keys.includes("error");
+  const summary = [waiting > 0 && `${waiting} waiting`, failed && "error"].filter(Boolean).join(", ");
 
   return (
     <li>
@@ -177,6 +187,20 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
               >
                 <GitBranch size={12} strokeWidth={1.5} className="shrink-0" aria-hidden="true" />
                 <span className="truncate">{ws.git.branch ?? "Git"}</span>
+              </span>
+            )}
+            {summary && (
+              <span className="ml-auto flex shrink-0 items-center gap-1 pr-1">
+                <span className="sr-only">, {summary}</span>
+                {waiting > 0 && (
+                  <span
+                    className="min-w-3.5 rounded-full bg-wait px-1 text-center text-[10px] leading-3.5 font-semibold tabular-nums text-on-accent"
+                    aria-hidden="true"
+                  >
+                    {waiting}
+                  </span>
+                )}
+                {failed && <span className="size-2 rounded-full bg-bad" aria-hidden="true" />}
               </span>
             )}
           </button>

@@ -61,6 +61,19 @@ pub struct AgentStatusEvent {
     pub summary: Option<String>,
 }
 
+/// Payload of the `agent-subagent` event: activity of a Claude subagent running inside a pane.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentEvent {
+    pub pane_id: String,
+    pub agent_id: String,
+    pub agent_type: Option<String>,
+    /// "SubagentStart", "SubagentStop" or "PreToolUse".
+    pub event: String,
+    pub action: Option<String>,
+    pub summary: Option<String>,
+}
+
 /// Starts the hook server on a background thread.
 pub fn start(app: AppHandle) -> HookServer {
     let token = uuid::Uuid::new_v4().to_string();
@@ -109,6 +122,9 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
     if let Some(event) = status_event(hook) {
         crate::mcp::STATUS.set(&event.pane_id, event.status);
         let _ = app.emit("agent-status", event);
+    }
+    if let Some(event) = subagent_event(&hook.pane_id, &hook.json) {
+        let _ = app.emit("agent-subagent", event);
     }
     if hook.json["hook_event_name"] != "PermissionRequest" {
         return no_decision();
@@ -160,6 +176,32 @@ fn status_event(hook: &Hook) -> Option<AgentStatusEvent> {
         last_action,
         event,
         prompt,
+        summary,
+    })
+}
+
+/// Subagent activity: Claude adds `agent_id` to hooks fired inside a subagent. `None` for anything else.
+fn subagent_event(pane_id: &str, body: &Value) -> Option<SubagentEvent> {
+    let agent_id = body["agent_id"].as_str().filter(|s| !s.is_empty())?;
+    let event = body["hook_event_name"].as_str()?;
+    let (action, summary) = match event {
+        "SubagentStart" => (None, None),
+        "SubagentStop" => (
+            None,
+            body["last_assistant_message"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .map(cap),
+        ),
+        "PreToolUse" => (describe_tool(body), None),
+        _ => return None,
+    };
+    Some(SubagentEvent {
+        pane_id: pane_id.to_owned(),
+        agent_id: agent_id.to_owned(),
+        agent_type: body["agent_type"].as_str().map(str::to_owned),
+        event: event.to_owned(),
+        action,
         summary,
     })
 }
@@ -387,6 +429,56 @@ mod tests {
 
     fn status(v: Value) -> Option<(PaneStatus, Option<String>)> {
         map_event(&v).map(|(s, a, _)| (s, a))
+    }
+
+    #[test]
+    fn builds_subagent_events() {
+        let ev = |v: Value| subagent_event("p1", &v);
+        let start = ev(
+            json!({"hook_event_name": "SubagentStart", "agent_id": "a1", "agent_type": "Explore"}),
+        );
+        assert_eq!(
+            start,
+            Some(SubagentEvent {
+                pane_id: "p1".into(),
+                agent_id: "a1".into(),
+                agent_type: Some("Explore".into()),
+                event: "SubagentStart".into(),
+                action: None,
+                summary: None,
+            })
+        );
+        let tool = ev(json!({"hook_event_name": "PreToolUse", "agent_id": "a1",
+            "tool_name": "Bash", "tool_input": {"command": "npm test"}}))
+        .unwrap();
+        assert_eq!(tool.action.as_deref(), Some("Bash: npm test"));
+        assert_eq!(tool.agent_type, None);
+        let stop = ev(json!({"hook_event_name": "SubagentStop", "agent_id": "a1",
+            "last_assistant_message": "found it"}))
+        .unwrap();
+        assert_eq!(stop.summary.as_deref(), Some("found it"));
+        // Main-session tool calls, other events and empty ids are not subagent activity.
+        assert_eq!(
+            ev(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash"})),
+            None
+        );
+        assert_eq!(
+            ev(json!({"hook_event_name": "PostToolUse", "agent_id": "a1"})),
+            None
+        );
+        assert_eq!(
+            ev(json!({"hook_event_name": "SubagentStart", "agent_id": ""})),
+            None
+        );
+        // The parent pane's status is untouched by subagent lifecycle events.
+        assert_eq!(
+            status(json!({"hook_event_name": "SubagentStart", "agent_id": "a1"})),
+            None
+        );
+        assert_eq!(
+            status(json!({"hook_event_name": "SubagentStop", "agent_id": "a1"})),
+            None
+        );
     }
 
     #[test]
