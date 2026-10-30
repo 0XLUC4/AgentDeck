@@ -27,7 +27,7 @@ export function usageDetails(u: UsageTotals): string {
     `Input: ${formatTokens(u.input)}`,
     `Output: ${formatTokens(u.output)}`,
     `Cache write: ${formatTokens(u.cacheWrite)}`,
-    `Cache read: ${formatTokens(u.cacheRead)}`,
+    `Cache read: ${formatTokens(u.cacheRead)} (not in the token total, priced at the cache rate)`,
     `Estimated cost (API pricing): ${formatCost(u.cost)}`,
   ];
   if (u.unpricedTokens > 0) lines.push(`${formatTokens(u.unpricedTokens)} tokens from a model with no known price`);
