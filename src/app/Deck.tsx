@@ -8,25 +8,18 @@ import {
 import "dockview-react/dist/styles/dockview.css";
 import { useEffect, useState } from "react";
 import { BrowserHeader, BrowserPanel, browserPanelId, paneOfBrowserPanel } from "../components/Browser/BrowserPanel";
-import { SubagentHeader, SubagentPanel } from "../components/Subagents/SubagentPanel";
-import { parseSubagentPanel, subagentPanelId, useSubagents } from "../components/Subagents/subagents";
 import { EmptyPaneHeader, PaneHeader } from "../components/TerminalPane/PaneHeader";
 import { PanePanel } from "../components/TerminalPane/PanePanel";
 import { gridLayout } from "../lib/gridLayout";
 import { deck, type Tab, useDeck } from "../store/deck";
 import { useSettings } from "../store/settings";
 
-const components = { pane: PanePanel, browser: BrowserPanel, subagent: SubagentPanel };
+const components = { pane: PanePanel, browser: BrowserPanel };
 
-/** Dock panels of a session: each pane, followed by its browser panel and its subagent viewers. */
+/** Dock panels of a session: each pane, followed by its browser panel. */
 function dockPanels(paneIds: string[]): string[] {
   const { panes } = useDeck.getState();
-  const subagents = useSettings.getState().showSubagents ? useSubagents.getState() : {};
-  return paneIds.flatMap((id) => [
-    id,
-    ...(panes[id]?.browser ? [browserPanelId(id)] : []),
-    ...(subagents[id] ?? []).map((a) => subagentPanelId(id, a.id)),
-  ]);
+  return paneIds.flatMap((id) => [id, ...(panes[id]?.browser ? [browserPanelId(id)] : [])]);
 }
 
 /** Dockview api of each mounted session tab, so other parts of the UI can reveal a pane. */
@@ -75,9 +68,7 @@ const theme: DockviewTheme = {
 /** Our pane header doubles as the dockview tab, so there is one row of chrome per pane and it stays draggable. */
 function PaneTab(props: IDockviewPanelHeaderProps) {
   const browserOf = paneOfBrowserPanel(props.api.id);
-  const subagent = parseSubagentPanel(props.api.id);
-  if (browserOf) return <BrowserHeader paneId={browserOf} />;
-  return subagent ? <SubagentHeader {...subagent} /> : <AgentTab {...props} />;
+  return browserOf ? <BrowserHeader paneId={browserOf} /> : <AgentTab {...props} />;
 }
 
 function AgentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
@@ -115,8 +106,6 @@ export function Deck({ tab }: { tab: Tab }) {
   const [api, setApi] = useState<DockviewApi | null>(null);
   // Joined to a string so the sync below only reruns when the set of browsers changes.
   const browsers = useDeck((s) => tab.paneIds.filter((id) => s.panes[id]?.browser).join(","));
-  const showSubagents = useSettings((s) => s.showSubagents);
-  const subagents = useSubagents((s) => tab.paneIds.flatMap((id) => (s[id] ?? []).map((a) => a.id)).join(","));
 
   // Registered before the pane sync below, which may re-grid through `apis`.
   useEffect(() => {
@@ -127,7 +116,7 @@ export function Deck({ tab }: { tab: Tab }) {
     };
   }, [api, tab.id]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: browsers/subagents/showSubagents only trigger the resync; dockPanels reads the stores
+  // biome-ignore lint/correctness/useExhaustiveDependencies: browsers only triggers the resync; dockPanels reads the store
   useEffect(() => {
     if (!api) return;
     const { panes } = useDeck.getState();
@@ -137,16 +126,15 @@ export function Deck({ tab }: { tab: Tab }) {
       if (!api.getPanel(id)) {
         changed = true;
         const browserOf = paneOfBrowserPanel(id);
-        const subagent = parseSubagentPanel(id);
-        const paneId = browserOf ?? subagent?.paneId;
-        // New panes go side by side (not as tabs of the same group); a browser or subagent goes right of its agent.
+        const paneId = browserOf;
+        // New panes go side by side (not as tabs of the same group); a browser goes right of its agent.
         const last = api.panels[api.panels.length - 1];
         const reference = paneId && api.getPanel(paneId) ? paneId : last?.id;
         api.addPanel({
           id,
-          component: browserOf ? "browser" : subagent ? "subagent" : "pane",
-          params: subagent ?? { paneId: paneId ?? id },
-          title: browserOf ? "Browser" : subagent ? "Sub-agent" : panes[id]?.title || "Agent",
+          component: browserOf ? "browser" : "pane",
+          params: { paneId: paneId ?? id },
+          title: browserOf ? "Browser" : panes[id]?.title || "Agent",
           position: reference ? { referencePanel: reference, direction: "right" } : undefined,
         });
       }
@@ -159,7 +147,7 @@ export function Deck({ tab }: { tab: Tab }) {
     }
     // Auto grid also applies to restored layouts, so a session always opens as a grid.
     if (useSettings.getState().autoGrid && (changed || tab.paneIds.length > 1)) arrangePanesInGrid(tab.id);
-  }, [api, tab.paneIds, tab.id, browsers, subagents, showSubagents]);
+  }, [api, tab.paneIds, tab.id, browsers]);
 
   useEffect(() => {
     if (!api) return;
