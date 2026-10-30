@@ -56,8 +56,6 @@ export interface Settings {
   agents: Record<AgentKind, AgentDefaults>;
   /** Pre-accept each agent's "trust this folder" prompt for folders opened in AgentDeck. */
   trustAgentFolders: boolean;
-  /** Claude's internal subagents shown as read-only panes next to their parent (components/Subagents). */
-  showSubagents: boolean;
   speech: SpeechSettings;
   autoAllow: AutoAllowRule[];
   budget: BudgetSettings;
@@ -78,7 +76,6 @@ export const DEFAULT_SETTINGS: Settings = {
   notify: { enabled: true, sound: true, done: true, waiting: true, error: false, onlyUnseen: true },
   speech: { enabled: false, voice: "", rate: 1 },
   trustAgentFolders: true,
-  showSubagents: true,
   autoAllow: [],
   budget: { dailyUsd: 0, paneUsd: 0, interrupt: false },
   phoneUrl: "",
@@ -110,7 +107,6 @@ export function mergeSettings(raw: unknown): Settings {
     closeToTray: bool(raw.closeToTray, d.closeToTray),
     autoGrid: bool(raw.autoGrid, d.autoGrid),
     trustAgentFolders: bool(raw.trustAgentFolders, d.trustAgentFolders),
-    showSubagents: bool(raw.showSubagents, d.showSubagents),
     notify: {
       enabled: bool(n.enabled, d.notify.enabled),
       sound: bool(n.sound, d.notify.sound),

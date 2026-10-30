@@ -5,7 +5,6 @@ import type {
   AgentInfo,
   AgentKind,
   AgentStatusEvent,
-  AgentSubagentEvent,
   FolderInfo,
   GitCheckpoint,
   GitCommitInfo,
@@ -63,8 +62,6 @@ export const onPaneExit = (paneId: string, cb: () => void): Promise<UnlistenFn> 
   listen(`pane-exit:${paneId}`, () => cb());
 export const onAgentStatus = (cb: (e: AgentStatusEvent) => void): Promise<UnlistenFn> =>
   listen<AgentStatusEvent>("agent-status", (e) => cb(e.payload));
-export const onAgentSubagent = (cb: (e: AgentSubagentEvent) => void): Promise<UnlistenFn> =>
-  listen<AgentSubagentEvent>("agent-subagent", (e) => cb(e.payload));
 
 export const onVoiceLevel = (cb: (level: number) => void) => listen<number>("voice-level", (e) => cb(e.payload));
 export const onVoiceState = (cb: (state: VoiceState) => void) =>
