@@ -21,6 +21,8 @@ pub struct Totals {
     pub output: u64,
     pub cache_write: u64,
     pub cache_read: u64,
+    /// Input + output + cache writes. Cache reads are left out: every turn re-reads the whole context,
+    /// so they would dwarf the real work (they stay in `cache_read` and in `cost`, at their low price).
     pub tokens: u64,
     /// USD, priced models only.
     pub cost: f64,
@@ -35,7 +37,7 @@ impl Totals {
         self.output += t.output;
         self.cache_write += t.cache_write_5m + t.cache_write_1h;
         self.cache_read += t.cache_read;
-        self.tokens += t.total();
+        self.tokens += t.total() - t.cache_read;
         match prices::price(&e.model) {
             Some(p) => {
                 self.cost += (t.input as f64 * p.input
@@ -333,7 +335,7 @@ mod tests {
             1_000_000,
         ));
         assert!((t.cost - (4.0 + 20.0 + 0.2 + 5.0 + 8.0)).abs() < 1e-9);
-        assert_eq!(t.tokens, 5_000_000);
+        assert_eq!(t.tokens, 4_000_000);
         assert_eq!(t.cache_write, 2_000_000);
         t.add(&entry("gpt-6-astra", 10, 5, 0, 0, 0));
         assert_eq!(t.unpriced_tokens, 15);
