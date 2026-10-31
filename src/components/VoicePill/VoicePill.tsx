@@ -130,21 +130,17 @@ export function VoicePill() {
         {state === "listening" && (
           <div data-tauri-drag-region className="flex min-w-0 flex-col items-center">
             {partial && (
-              // Live words above the waveform: keep the end visible, the start is cut on the left.
-              <span
-                data-tauri-drag-region
-                dir="rtl"
-                className="max-w-[400px] truncate text-sm leading-5 text-white/85 [unicode-bidi:plaintext]"
-              >
-                {partial}
+              // Live words above the waveform: rtl box + ltr text keeps the last words, "…" replaces the start.
+              <span data-tauri-drag-region dir="rtl" className="max-w-[400px] truncate text-sm leading-5 text-white/85">
+                <bdi dir="ltr">{partial}</bdi>
               </span>
             )}
             <Waveform />
           </div>
         )}
         {state === "transcribing" && partial && (
-          <span data-tauri-drag-region className="min-w-0 truncate text-sm text-white/60">
-            {partial}
+          <span data-tauri-drag-region dir="rtl" className="min-w-0 truncate text-sm text-white/60">
+            <bdi dir="ltr">{partial}</bdi>
           </span>
         )}
         {state === "transcribing" && <Dots />}
