@@ -27,7 +27,7 @@
         "label": "voice",
         "title": "AgentDeck Voice",
         "url": "voice.html",
-        "width": 320,
+        "width": 460,
         "height": 72,
         "decorations": false,
         "transparent": true,

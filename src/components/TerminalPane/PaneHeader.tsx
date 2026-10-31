@@ -16,7 +16,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { revealPane } from "../../app/Deck";
 import { AGENTS } from "../../lib/agents";
 import { formatElapsed, useNow } from "../../lib/clock";
@@ -29,7 +29,6 @@ import { closePane, focusPane, interruptPane, restartPane } from "../../store/ru
 import { AgentLogo } from "../AgentLogo/AgentLogo";
 import { browserPanelId, removeBrowser } from "../Browser/BrowserPanel";
 import { toggleDetached, useDetached } from "../Detached/host";
-import { GitPanel } from "../Git/GitPanel";
 import { IconButton } from "../IconButton/IconButton";
 import { OrchestratorButton } from "../Orchestrator/OrchestratorButton";
 import { QueueButton } from "../Queue/QueueButton";
@@ -37,6 +36,9 @@ import { NotesButton } from "../Skills/NotesButton";
 import { SkillsButton } from "../Skills/SkillsButton";
 import { StatusBadge } from "../StatusBadge/StatusBadge";
 import { UsageChip } from "../Usage/UsageChip";
+
+// Diff viewer: loaded on first open, not at startup.
+const GitPanel = lazy(() => import("../Git/GitPanel").then((m) => ({ default: m.GitPanel })));
 
 interface Props {
   pane: Pane;
@@ -241,7 +243,11 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
         className={compact ? "ml-auto" : ""}
         onClick={() => confirmClose(pane)}
       />
-      {gitOpen && <GitPanel pane={pane} onClose={() => setGitOpen(false)} />}
+      {gitOpen && (
+        <Suspense fallback={null}>
+          <GitPanel pane={pane} onClose={() => setGitOpen(false)} />
+        </Suspense>
+      )}
     </header>
   );
 }

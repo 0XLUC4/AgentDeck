@@ -14,6 +14,7 @@ import {
 import { createPane } from "./runtime";
 
 const KEY = "deck";
+const SAVE_DEBOUNCE_MS = 300;
 
 export interface Saved {
   version: 2;
@@ -110,6 +111,17 @@ export async function restoreAndAutosave(): Promise<void> {
   } catch (err) {
     deck.toast(`Could not restore the session: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // Coalesce bursts (split drags, hook events) into one snapshot + IPC call.
+  // shortcut: a change in the last SAVE_DEBOUNCE_MS before a hard kill is lost; flush on quit if that matters.
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastSaved = "";
+  const save = () => {
+    const data = snapshot();
+    const json = JSON.stringify(data);
+    if (json === lastSaved) return; // only runtime fields (status, lastAction) changed
+    lastSaved = json;
+    store?.set(KEY, data).catch((err) => console.warn("save failed", err));
+  };
   useDeck.subscribe((state, prev) => {
     const changed =
       state.workspaces !== prev.workspaces ||
@@ -118,6 +130,12 @@ export async function restoreAndAutosave(): Promise<void> {
       state.archived !== prev.archived ||
       state.lastCwd !== prev.lastCwd ||
       state.activeTabId !== prev.activeTabId;
-    if (changed) store?.set(KEY, snapshot()).catch((err) => console.warn("save failed", err));
+    if (!changed) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, SAVE_DEBOUNCE_MS);
+  });
+  window.addEventListener("beforeunload", () => {
+    clearTimeout(saveTimer);
+    save();
   });
 }

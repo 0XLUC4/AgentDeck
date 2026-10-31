@@ -4,18 +4,21 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Emitter, Manager, State, Webview};
 
 use crate::AppState;
 use crate::agents::{self, AgentKind};
 
 /// Output is flushed to the webview at most every 16 ms (~60 fps).
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
-/// Max bytes per `pane-output` event; the rest waits for the next tick.
+/// Wake-up period with nothing pending: matches the history recorder's flush cadence.
+const IDLE_WAIT: Duration = Duration::from_secs(2);
+/// Max bytes per output message; the rest waits for the next tick.
 const MAX_EMIT_BYTES: usize = 256 * 1024;
 /// Reader -> batcher queue depth (8 KB chunks): a full queue blocks the reader.
 const QUEUE_CHUNKS: usize = 64;
@@ -24,6 +27,60 @@ const EXIT_POLL: Duration = Duration::from_millis(250);
 
 /// Distinguishes successive processes spawned under the same pane id (restart).
 static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
+static NEXT_SINK: AtomicU64 = AtomicU64::new(0);
+
+/// Output subscriber: (webview label, sink id, channel).
+type Sink = (String, u64, Channel<String>);
+/// Output subscribers per pane id. Keyed by id, not run, so they survive a restart.
+/// IPC channels instead of events: big payloads are fetched, not inlined into an eval'd script.
+static SINKS: LazyLock<Mutex<HashMap<String, Vec<Sink>>>> = LazyLock::new(Mutex::default);
+
+fn sinks() -> std::sync::MutexGuard<'static, HashMap<String, Vec<Sink>>> {
+    SINKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Subscribes the calling webview to a pane's output. Returns the id for `detach_pane_output`.
+#[tauri::command]
+pub fn attach_pane_output(webview: Webview, pane_id: String, on_output: Channel<String>) -> u64 {
+    let id = NEXT_SINK.fetch_add(1, Ordering::Relaxed);
+    sinks()
+        .entry(pane_id)
+        .or_default()
+        .push((webview.label().to_string(), id, on_output));
+    id
+}
+
+#[tauri::command]
+pub fn detach_pane_output(pane_id: String, sink: u64) {
+    let mut sinks = sinks();
+    if let Some(list) = sinks.get_mut(&pane_id) {
+        list.retain(|(_, id, _)| *id != sink);
+        if list.is_empty() {
+            sinks.remove(&pane_id);
+        }
+    }
+}
+
+/// Forgets every subscription of a webview that reloaded or closed (its channels are dead).
+pub fn drop_webview_sinks(label: &str) {
+    sinks().retain(|_, list| {
+        list.retain(|(owner, _, _)| owner != label);
+        !list.is_empty()
+    });
+}
+
+fn send_output(pane_id: &str, text: &str) {
+    // Clone out (Channel is a cheap handle) so the lock isn't held across IPC.
+    let targets: Vec<(u64, Channel<String>)> = sinks()
+        .get(pane_id)
+        .map(|list| list.iter().map(|(_, id, ch)| (*id, ch.clone())).collect())
+        .unwrap_or_default();
+    for (sink, channel) in targets {
+        if channel.send(text.to_owned()).is_err() {
+            detach_pane_output(pane_id.to_owned(), sink);
+        }
+    }
+}
 
 type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 
@@ -248,7 +305,7 @@ fn watch_exit(app: AppHandle, pane_id: String, run: u64) {
     });
 }
 
-/// Reader thread -> batching thread -> `pane-output:{id}` events, then `pane-exit:{id}`.
+/// Reader thread -> batching thread -> output channels, then the `pane-exit:{id}` event.
 /// `pane-exit` is emitted only here, once, after all pending output is flushed.
 fn stream_output(
     app: AppHandle,
@@ -274,14 +331,16 @@ fn stream_output(
     });
 
     std::thread::spawn(move || {
-        let output_event = format!("pane-output:{pane_id}");
         let mut pending: Vec<u8> = Vec::new();
         let mut last_flush = Instant::now();
         let mut closed = false;
         loop {
             // Once closed, just drain `pending` in capped events.
             if !closed && pending.len() < MAX_EMIT_BYTES {
-                match rx.recv_timeout(FLUSH_INTERVAL) {
+                // Idle: block until output arrives (waking only for the recorder's periodic flush),
+                // instead of ~60 empty wakeups a second per pane.
+                let wait = if pending.is_empty() { IDLE_WAIT } else { FLUSH_INTERVAL };
+                match rx.recv_timeout(wait) {
                     Ok(chunk) => pending.extend_from_slice(&chunk),
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => closed = true,
@@ -296,7 +355,7 @@ fn stream_output(
                     if let Some(rec) = recorder.as_mut() {
                         rec.write(&text); // buffered; errors stop the recording only
                     }
-                    let _ = app.emit(&output_event, text);
+                    send_output(&pane_id, &text);
                 }
                 last_flush = Instant::now();
             }

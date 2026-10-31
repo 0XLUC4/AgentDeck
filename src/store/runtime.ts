@@ -44,7 +44,8 @@ const runtimes = new Map<string, Runtime>();
 /** Spawn time of the pane's current process, or null before it starts. */
 export const paneStartedAt = (id: string): number | null => runtimes.get(id)?.startedAt ?? null;
 /** Buffered raw terminal output of a pane ("" when unknown). */
-export const paneOutput = (id: string): string => runtimes.get(id)?.buffer.text() ?? "";
+/** Last `chars` characters of a pane's buffered output. */
+export const paneOutputTail = (id: string, chars: number): string => runtimes.get(id)?.buffer.tail(chars) ?? "";
 /** In-flight stop/restart per pane: a second click joins the first instead of racing a second spawn. */
 const stopping = new Map<string, Promise<void>>();
 const restarting = new Map<string, Promise<void>>();
@@ -324,7 +325,7 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
     const state = useDeck.getState();
     const prev = state.panes[e.paneId];
     if (!prev) return;
-    deck.updatePane(e.paneId, (p) => ({ ...p, hooked: true }));
+    deck.updatePane(e.paneId, (p) => (p.hooked ? p : { ...p, hooked: true }));
     tasks.apply(e.paneId, e, prev.taskStartedAt ?? undefined);
     deck.setStatus(e.paneId, e.status, e.lastAction);
     const event = e.status as keyof typeof NOTIFY_TEXT;

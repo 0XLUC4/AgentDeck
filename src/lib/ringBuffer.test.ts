@@ -22,6 +22,13 @@ describe("RingBuffer", () => {
     buf.push("g");
     expect(buf.text()).toBe("g"); // whole chunks are dropped
   });
+  it("drops many chunks in order and reads the tail", () => {
+    const buf = new RingBuffer(4);
+    for (const c of "abcdefghij".repeat(300)) buf.push(c);
+    expect(buf.text()).toBe("ghij");
+    expect(buf.tail(2)).toBe("ij");
+    expect(buf.tail(10)).toBe("ghij");
+  });
   it("clears", () => {
     const buf = new RingBuffer(3);
     buf.push("ab");

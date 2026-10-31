@@ -29,6 +29,47 @@ function InstallState({ known, ok }: { known: boolean; ok: boolean }) {
   );
 }
 
+/** Starts an agent in the active session tab and remembers it as the quick "Add agent" choice. */
+export function spawnAgent(agent: AgentKind, cwd: string, args: string[], worktree: boolean): void {
+  const { activeTabId } = useDeck.getState();
+  useDeck.setState({ lastCwd: cwd });
+  rememberAgent(agent);
+  void createPane(
+    {
+      id: crypto.randomUUID(),
+      agent,
+      title: AGENTS[agent].name,
+      cwd,
+      args,
+      worktree,
+      completedCount: 0,
+      fontSize: useSettings.getState().fontSize,
+    },
+    activeTabId,
+  );
+}
+
+const LAST_AGENT_KEY = "add-agent-last";
+
+/** Agent the quick "Add agent" button starts: the last one added, Claude at first. */
+export function lastAgent(): AgentKind {
+  try {
+    const saved = localStorage.getItem(LAST_AGENT_KEY);
+    if (saved && (AGENT_KINDS as string[]).includes(saved)) return saved as AgentKind;
+  } catch {
+    // Storage unavailable: fall back to the default.
+  }
+  return "claude";
+}
+
+function rememberAgent(agent: AgentKind) {
+  try {
+    localStorage.setItem(LAST_AGENT_KEY, agent);
+  } catch {
+    // Storage unavailable: the quick button just keeps its default.
+  }
+}
+
 /** Modal "Add agent". Native <dialog>: Esc closes, background is inert. */
 export function AgentPicker({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -74,21 +115,7 @@ export function AgentPicker({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     if (!cwd) return setError("Choose a working folder.");
     if (!installed(agent)) return setError(`${AGENTS[agent].name} is not installed.`);
-    const { activeTabId } = useDeck.getState();
-    useDeck.setState({ lastCwd: cwd });
-    void createPane(
-      {
-        id: crypto.randomUUID(),
-        agent,
-        title: AGENTS[agent].name,
-        cwd,
-        args: splitArgs(args),
-        worktree,
-        completedCount: 0,
-        fontSize: useSettings.getState().fontSize,
-      },
-      activeTabId,
-    );
+    spawnAgent(agent, cwd, splitArgs(args), worktree);
     onClose();
   }
 

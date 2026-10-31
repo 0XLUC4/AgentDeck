@@ -81,12 +81,15 @@ interface DeckState {
 /** Pure status transition: starts the task timer, counts completed tasks. */
 export function applyStatus(pane: Pane, status: PaneStatus, lastAction: string | null, now: number): Pane {
   const keepsTimer = status === "working" || status === "waiting";
+  const taskStartedAt = keepsTimer ? (pane.taskStartedAt ?? now) : null;
+  const action = lastAction ?? pane.lastAction;
+  if (status === pane.status && action === pane.lastAction && taskStartedAt === pane.taskStartedAt) return pane;
   return {
     ...pane,
     status,
-    lastAction: lastAction ?? pane.lastAction,
+    lastAction: action,
     statusSince: status === pane.status ? pane.statusSince : now,
-    taskStartedAt: keepsTimer ? (pane.taskStartedAt ?? now) : null,
+    taskStartedAt,
     completedCount: pane.completedCount + (status === "done" && pane.status !== "done" ? 1 : 0),
   };
 }
@@ -224,9 +227,15 @@ export const useDeck = create<DeckState>(() => ({
 const set = useDeck.setState;
 const get = useDeck.getState;
 
+/** Archived sessions kept; the oldest beyond this are dropped when a new one is archived. */
+const MAX_ARCHIVED = 100;
+
 const updatePane = (id: string, fn: (pane: Pane) => Pane) => {
   const pane = get().panes[id];
-  if (pane) set({ panes: { ...get().panes, [id]: fn(pane) } });
+  if (!pane) return;
+  const next = fn(pane);
+  // Unchanged pane: skip the update so subscribers (autosave, runners, headers) don't wake up.
+  if (next !== pane) set({ panes: { ...get().panes, [id]: next } });
 };
 
 const sessionsOf = (workspaceId: string) => get().archived.filter((s) => s.workspaceId === workspaceId);
@@ -302,7 +311,9 @@ export const deck = {
   archiveTab(id: string, now = Date.now()): string[] {
     const tab = get().tabs.find((t) => t.id === id);
     if (!tab) return [];
-    set({ archived: [tabToSession(tab, get().panes, now), ...get().archived.filter((s) => s.id !== id)] });
+    // Oldest beyond the cap are dropped: every save serializes the whole archive with its layouts.
+    const archived = [tabToSession(tab, get().panes, now), ...get().archived.filter((s) => s.id !== id)];
+    set({ archived: archived.slice(0, MAX_ARCHIVED) });
     for (const paneId of tab.paneIds) deck.removePane(paneId);
     deck.removeTab(id);
     return tab.paneIds;

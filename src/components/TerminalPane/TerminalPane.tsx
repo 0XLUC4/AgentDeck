@@ -17,6 +17,8 @@ const THEME = { background: "#100e0c", foreground: "#ebe7e2", cursor: "#f1e7d2",
 
 /** Ctrl+<key> zoom shortcuts, handled before xterm sends them to the process. */
 const ZOOM_KEYS: Record<string, number | "reset"> = { "=": 1, "+": 1, "-": -1, "0": "reset" };
+/** Grace period before a hidden terminal gives its WebGL context back (quick tab flips keep it). */
+const WEBGL_RELEASE_MS = 10_000;
 
 /** Attaches an xterm view to an existing pane's output. Never spawns: safe to mount twice. */
 export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: number }) {
@@ -37,13 +39,36 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose()); // xterm falls back to the DOM renderer
-      term.loadAddon(webgl);
-    } catch (err) {
-      console.warn("WebGL unavailable, using DOM renderer", err);
-    }
+    // WebGL only while on screen: the webview caps live contexts (~16) and silently drops the oldest,
+    // so background sessions give theirs back. Hidden tabs sit off-screen, which ends the intersection.
+    let webgl: WebglAddon | null = null;
+    let webglBroken = false;
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    const enableWebgl = () => {
+      clearTimeout(releaseTimer);
+      if (webgl || webglBroken) return;
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => {
+          addon.dispose(); // xterm falls back to the DOM renderer
+          if (webgl === addon) webgl = null;
+        });
+        term.loadAddon(addon);
+        webgl = addon;
+      } catch (err) {
+        webglBroken = true;
+        console.warn("WebGL unavailable, using DOM renderer", err);
+      }
+    };
+    const releaseWebgl = () => {
+      clearTimeout(releaseTimer);
+      releaseTimer = setTimeout(() => {
+        webgl?.dispose();
+        webgl = null;
+      }, WEBGL_RELEASE_MS);
+    };
+    const visibility = new IntersectionObserver(([entry]) => (entry?.isIntersecting ? enableWebgl() : releaseWebgl()));
+    visibility.observe(host);
 
     term.attachCustomKeyEventHandler((e) => {
       // Ctrl+V / Ctrl+Shift+V: let the webview paste (text, or an image via onPaste) instead of sending ^V.
@@ -60,13 +85,18 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     const owner = () => forwardsInput(false, isDetached(paneId));
     const input = term.onData((data) => owner() && sendInput(paneId, data));
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let fitFrame = 0;
     const refit = () => {
       if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden
       fit.fit();
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => owner() && reportSize(paneId, term.cols, term.rows), 100);
     };
-    const observer = new ResizeObserver(refit);
+    // At most one reflow per frame while a split or the window is dragged.
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(fitFrame);
+      fitFrame = requestAnimationFrame(refit);
+    });
     observer.observe(host);
     viewRef.current = { term, refit };
 
@@ -112,6 +142,9 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
       host.removeEventListener("paste", onPaste, true);
       void unlistenDrop.then((unlisten) => unlisten());
       observer.disconnect();
+      visibility.disconnect();
+      clearTimeout(releaseTimer);
+      cancelAnimationFrame(fitFrame);
       clearTimeout(resizeTimer);
       detach();
       input.dispose();

@@ -36,7 +36,18 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
-        .on_window_event(tray::on_window_event)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                pty::drop_webview_sinks(window.label());
+            }
+            tray::on_window_event(window, event);
+        })
+        // A reload kills the page's output channels; it re-subscribes when it boots.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                pty::drop_webview_sinks(webview.label());
+            }
+        })
         .setup(|app| {
             let hooks = hooks_server::start(app.handle().clone());
             mcp::hub::init(app.handle(), hooks.port);
@@ -52,6 +63,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             pty::spawn_pane,
+            pty::attach_pane_output,
+            pty::detach_pane_output,
             pty::write_to_pane,
             pty::resize_pane,
             pty::kill_pane,

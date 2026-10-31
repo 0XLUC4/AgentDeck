@@ -1,5 +1,5 @@
 // Typed wrappers around Tauri commands and events. Single source of IPC names.
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentInfo,
@@ -56,8 +56,16 @@ export const listWhisperModels = () => invoke<ModelStatus[]>("voice_list_models"
 export const downloadWhisperModel = (model: WhisperModel) => invoke<void>("voice_download_model", { model });
 // event "voice-download" payload { received: number; total: number | null }
 
-export const onPaneOutput = (paneId: string, cb: (data: string) => void): Promise<UnlistenFn> =>
-  listen<string>(`pane-output:${paneId}`, (e) => cb(e.payload));
+/** Streams a pane's output over an IPC channel (cheaper than events for large chunks). */
+export async function onPaneOutput(paneId: string, cb: (data: string) => void): Promise<UnlistenFn> {
+  const channel = new Channel<string>();
+  channel.onmessage = cb;
+  const sink = await invoke<number>("attach_pane_output", { paneId, onOutput: channel });
+  return () => {
+    channel.onmessage = () => undefined;
+    invoke("detach_pane_output", { paneId, sink }).catch((err) => console.warn("detach_pane_output failed", err));
+  };
+}
 export const onPaneExit = (paneId: string, cb: () => void): Promise<UnlistenFn> =>
   listen(`pane-exit:${paneId}`, () => cb());
 export const onAgentStatus = (cb: (e: AgentStatusEvent) => void): Promise<UnlistenFn> =>
@@ -68,6 +76,7 @@ export const onVoiceState = (cb: (state: VoiceState) => void) =>
   listen<VoiceState>("voice-state", (e) => cb(e.payload));
 export const onVoiceTranscript = (cb: (text: string) => void) =>
   listen<string>("voice-transcript", (e) => cb(e.payload));
+export const onVoicePartial = (cb: (text: string) => void) => listen<string>("voice-partial", (e) => cb(e.payload));
 export const onVoiceError = (cb: (message: string) => void) => listen<string>("voice-error", (e) => cb(e.payload));
 export const onVoiceDownload = (cb: (progress: VoiceDownload) => void) =>
   listen<VoiceDownload>("voice-download", (e) => cb(e.payload));

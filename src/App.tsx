@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { ActivityPanel, jumpToNextWaiting, PermissionBanner } from "./app/Activity";
 import { Deck } from "./app/Deck";
 import { Sidebar } from "./app/Sidebar";
@@ -12,9 +12,7 @@ import { BroadcastHost } from "./components/Broadcast/Broadcast";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { startDetachHost } from "./components/Detached/host";
 import { startJournalRecorder } from "./components/Journal/recorder";
-import { LinkWorkspaceDialog } from "./components/LinkWorkspace/LinkWorkspaceDialog";
 import { listenPermissions } from "./components/Permission/permissions";
-import { SettingsDialog } from "./components/Settings/SettingsDialog";
 import { TemplatePickerHost } from "./components/Templates/TemplatePicker";
 import { WallOverlay } from "./components/Wall/Wall";
 import { startBudgetWatch } from "./lib/budget";
@@ -30,6 +28,14 @@ import { startQueueRunner } from "./store/queue";
 import { startReviewRunner } from "./store/review";
 import { deriveStatuses, listenAgentStatus } from "./store/runtime";
 import { settingsReady, useSettings } from "./store/settings";
+
+// Split out of the startup bundle: only parsed the first time they open.
+const SettingsDialog = lazy(() =>
+  import("./components/Settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog })),
+);
+const LinkWorkspaceDialog = lazy(() =>
+  import("./components/LinkWorkspace/LinkWorkspaceDialog").then((m) => ({ default: m.LinkWorkspaceDialog })),
+);
 
 // Module-level so StrictMode's double effects don't restore or subscribe twice.
 const ready = restoreAndAutosave();
@@ -144,10 +150,11 @@ export default function App() {
                 // Every session of every workspace stays mounted (invisible, same size): terminals keep their
                 // state and answer ConPTY's startup cursor query even in the background.
                 // Not `visibility: hidden`: dockview sets `visibility: visible` on sashes and headers, which leaked
-                // them into other sessions. Opacity and inert apply to the whole subtree.
+                // them into other sessions. Opacity and inert apply to the whole subtree. The off-screen translate
+                // makes xterm's IntersectionObserver pause rendering of background terminals (opacity alone doesn't).
                 <div
                   key={tab.id}
-                  className={`absolute inset-0 p-1.5 ${tab.id === activeTabId ? "" : "-z-10 opacity-0"}`}
+                  className={`absolute inset-0 p-1.5 ${tab.id === activeTabId ? "" : "-z-10 -translate-x-[200vw] opacity-0"}`}
                   aria-hidden={tab.id !== activeTabId}
                   inert={tab.id !== activeTabId}
                 >
@@ -161,8 +168,10 @@ export default function App() {
         {activityOpen && <ActivityPanel onClose={() => setActivityOpen(false)} />}
       </div>
       {picking && <AgentPicker onClose={() => setPicking(false)} />}
-      {linking && <LinkWorkspaceDialog onClose={() => setLinking(false)} />}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      <Suspense fallback={null}>
+        {linking && <LinkWorkspaceDialog onClose={() => setLinking(false)} />}
+        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      </Suspense>
       <CommandPalette
         onAddAgent={() => setPicking(true)}
         onLinkWorkspace={() => setLinking(true)}
