@@ -2,9 +2,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { DetachedPane } from "./components/Detached/DetachedPane";
+import { startAppearance } from "./lib/theme";
 import "./index.css";
 
 const paneId = new URLSearchParams(window.location.search).get("pane");
+
+startAppearance();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

@@ -4,7 +4,9 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::ffi::c_void;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use whisper_rs::{
@@ -88,10 +90,13 @@ fn download(url: &str, part: &Path, on_progress: &mut impl FnMut(u64, u64)) -> R
     Ok(())
 }
 
-/// Transcribes 16 kHz mono samples with the model at `model_path`.
-/// `language` is a code like "fr", or "auto" to detect it.
-pub fn transcribe(model_path: &Path, samples: &[f32], language: &str) -> Result<String, String> {
+/// Loads the model ahead of the first dictation so the first press isn't slow.
+pub fn preload(model_path: &Path) -> Result<(), String> {
     let mut loaded = LOADED.lock().map_err(|e| e.to_string())?;
+    load(&mut loaded, model_path)
+}
+
+fn load(loaded: &mut Option<(PathBuf, WhisperState)>, model_path: &Path) -> Result<(), String> {
     if loaded.as_ref().is_none_or(|(path, _)| path != model_path) {
         *loaded = None; // free the previous model before loading another
         let path = model_path.to_str().ok_or("model path is not valid UTF-8")?;
@@ -102,12 +107,66 @@ pub fn transcribe(model_path: &Path, samples: &[f32], language: &str) -> Result<
             .map_err(|e| format!("cannot init whisper: {e}"))?;
         *loaded = Some((model_path.to_path_buf(), state));
     }
+    Ok(())
+}
+
+/// Encoder frames for a clip: Whisper always encodes 30 s (1500 frames, 50/s) unless told
+/// otherwise, which dominates the cost of a short dictation. Margin keeps accuracy.
+fn audio_ctx(secs: f32) -> i32 {
+    ((secs * 50.0) as i32 + 128).clamp(256, 1500)
+}
+
+/// Set to stop an in-flight partial transcription: the final one must not wait behind it.
+static CANCEL_PARTIAL: AtomicBool = AtomicBool::new(false);
+
+// Raw callback on purpose: whisper-rs 0.16's `set_abort_callback_safe` reads its boxed closure back as the wrong type.
+unsafe extern "C" fn partial_cancelled(_: *mut c_void) -> bool {
+    CANCEL_PARTIAL.load(Ordering::Relaxed)
+}
+
+/// A new recording starts: partial transcripts may run again.
+pub fn allow_partials() {
+    CANCEL_PARTIAL.store(false, Ordering::Relaxed);
+}
+
+/// Live preview while the user speaks. Gives up (Err) as soon as the final transcription starts.
+pub fn transcribe_partial(model_path: &Path, samples: &[f32], language: &str) -> Result<String, String> {
+    run(model_path, samples, language, true)
+}
+
+/// Transcribes 16 kHz mono samples with the model at `model_path`.
+/// `language` is a code like "fr", or "auto" to detect it.
+pub fn transcribe(model_path: &Path, samples: &[f32], language: &str) -> Result<String, String> {
+    CANCEL_PARTIAL.store(true, Ordering::Relaxed);
+    run(model_path, samples, language, false)
+}
+
+fn run(model_path: &Path, samples: &[f32], language: &str, partial: bool) -> Result<String, String> {
+    let mut loaded = LOADED.lock().map_err(|e| e.to_string())?;
+    if partial && CANCEL_PARTIAL.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    load(&mut loaded, model_path)?;
     let (_, state) = loaded.as_mut().ok_or("model not loaded")?;
 
+    // whisper.cpp silently returns nothing for clips under 1 s: pad with silence.
+    let mut samples = samples.to_vec();
+    samples.resize(samples.len().max(MIN_SAMPLES), 0.0);
+    let secs = samples.len() as f32 / 16_000.0;
+
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    params.set_n_threads(i32::try_from(threads).unwrap_or(4));
+    // Hyperthreads slow whisper.cpp down: use about the physical cores, capped at 8.
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get() / 2);
+    params.set_n_threads(threads.clamp(2, 8) as i32);
     params.set_language(Some(language));
+    params.set_audio_ctx(audio_ctx(secs));
+    params.set_single_segment(true);
+    // No temperature fallback: retries can re-decode a clip up to 5 times.
+    params.set_temperature_inc(0.0);
+    if partial {
+        // SAFETY: a plain fn reading a static; no user data pointer is involved.
+        unsafe { params.set_abort_callback(Some(partial_cancelled)) };
+    }
     params.set_no_timestamps(true);
     params.set_no_context(true);
     params.set_suppress_blank(true);
@@ -117,14 +176,17 @@ pub fn transcribe(model_path: &Path, samples: &[f32], language: &str) -> Result<
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     state
-        .full(params, samples)
+        .full(params, &samples)
         .map_err(|e| format!("transcription failed: {e}"))?;
     let text: String = state
         .as_iter()
         .filter_map(|segment| segment.to_str_lossy().ok().map(|s| s.into_owned()))
         .collect();
-    Ok(clean(&text, samples.len() as f32 / 16_000.0))
+    Ok(clean(&text, secs))
 }
+
+/// 1.2 s at 16 kHz: just over whisper.cpp's 1 s minimum.
+const MIN_SAMPLES: usize = 19_200;
 
 /// Drops non-speech tags ("[Musique]", "(rires)") and the captions/politeness
 /// lines Whisper invents on silence; trims the rest.
@@ -199,6 +261,13 @@ mod tests {
         }
         assert_eq!(clean(" Merci. ", 1.0), "");
         assert_eq!(clean("Thank you.", 0.8), "");
+    }
+
+    #[test]
+    fn audio_ctx_scales_with_clip() {
+        assert_eq!(audio_ctx(1.2), 256);
+        assert_eq!(audio_ctx(5.0), 378);
+        assert_eq!(audio_ctx(60.0), 1500);
     }
 
     #[test]

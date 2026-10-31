@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { sendPrompt } from "../components/Broadcast/send";
 import { activeWorkspace, deck, useDeck } from "../store/deck";
-import { getVoiceConfig, onVoiceTranscript } from "./ipc";
+import { getVoiceConfig, onVoiceError, onVoiceTranscript } from "./ipc";
 import { type RouteCandidate, routeTranscript } from "./voiceRoute";
 
 const RECENT_KEY = "voice-recent";
@@ -65,6 +65,10 @@ export function useVoiceTarget(): string | null {
  * else goes to the last pane used in the active workspace, never to a hidden pane of another workspace.
  */
 export function listenVoiceTranscripts() {
+  // The pill truncates long errors: show the full message here too.
+  onVoiceError((message) => deck.toast(`Voice: ${message}`)).catch((err) =>
+    console.warn("voice-error listener failed", err),
+  );
   return onVoiceTranscript(async (transcript) => {
     try {
       const { submit } = await getVoiceConfig();

@@ -53,7 +53,7 @@ pub struct AgentInfo {
 }
 
 /// Reports which agent CLIs are available on PATH.
-#[tauri::command]
+#[tauri::command(async)] // PATH scan: off the main thread
 pub fn detect_agents() -> Vec<AgentInfo> {
     [
         AgentKind::Claude,

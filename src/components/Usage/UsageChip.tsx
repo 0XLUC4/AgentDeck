@@ -11,10 +11,12 @@ const REFRESH_MS = 30_000;
 export function UsageChip({ pane }: { pane: Pane }) {
   const [usage, setUsage] = useState<PaneUsage | null>(null);
   const tracked = pane.agent === "claude" || pane.agent === "codex";
-  const { id, cwd, agent, generation, hooked, exited, status } = pane;
+  const { id, cwd, agent, generation, hooked, exited } = pane;
+  // Only a turn starting or ending changes the transcript totals; other status flips (waiting, done, idle) do not.
+  const working = pane.status === "working";
 
-  // Reloads on every status change (a turn just ended) and every 30 s while a hooked agent runs.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: generation/status are refresh triggers
+  // Reloads when a turn starts or ends and every 30 s while a hooked agent runs.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: generation/working are refresh triggers
   useEffect(() => {
     if (!tracked) return;
     let alive = true;
@@ -32,7 +34,7 @@ export function UsageChip({ pane }: { pane: Pane }) {
       alive = false;
       clearInterval(timer);
     };
-  }, [tracked, id, cwd, agent, generation, hooked, exited, status]);
+  }, [tracked, id, cwd, agent, generation, hooked, exited, working]);
 
   if (!tracked || !usage || usage.tokens === 0) return null;
   const models = usage.models.length ? `\nModels: ${usage.models.join(", ")}` : "";

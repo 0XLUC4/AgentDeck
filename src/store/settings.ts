@@ -42,6 +42,16 @@ export interface BudgetSettings {
   interrupt: boolean;
 }
 
+export type ThemeMode = "dark" | "light" | "system";
+
+export interface Appearance {
+  theme: ThemeMode;
+  /** "#rrggbb", or "" for the theme's neutral accent. */
+  accent: string;
+  /** "#rrggbb" tinting the app's surfaces (windows, panels), or "" for neutral grey. */
+  background: string;
+}
+
 export interface Settings {
   fontSize: number;
   fontFamily: string;
@@ -61,6 +71,7 @@ export interface Settings {
   budget: BudgetSettings;
   /** Webhook (ntfy topic URL or similar) also receiving the notifications; "" = off. */
   phoneUrl: string;
+  appearance: Appearance;
 }
 
 export const DEFAULT_FONT_FAMILY = "Cascadia Code, Consolas, monospace";
@@ -79,11 +90,16 @@ export const DEFAULT_SETTINGS: Settings = {
   autoAllow: [],
   budget: { dailyUsd: 0, paneUsd: 0, interrupt: false },
   phoneUrl: "",
+  appearance: { theme: "dark", accent: "", background: "" },
   agents: Object.fromEntries(AGENT_KINDS.map((k) => [k, { args: "", worktree: false }])) as Record<
     AgentKind,
     AgentDefaults
   >,
 };
+
+const THEME_MODES: ThemeMode[] = ["dark", "light", "system"];
+export const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const hexColor = (value: unknown) => (typeof value === "string" && HEX_COLOR.test(value) ? value.toLowerCase() : "");
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
@@ -97,6 +113,7 @@ export function mergeSettings(raw: unknown): Settings {
   const agents = isObject(raw.agents) ? raw.agents : {};
   const sp = isObject(raw.speech) ? raw.speech : {};
   const b = isObject(raw.budget) ? raw.budget : {};
+  const ap = isObject(raw.appearance) ? raw.appearance : {};
   const fontFamily = typeof raw.fontFamily === "string" ? raw.fontFamily.trim() : "";
   return {
     fontSize: typeof raw.fontSize === "number" ? clampFontSize(raw.fontSize) : d.fontSize,
@@ -127,6 +144,11 @@ export function mergeSettings(raw: unknown): Settings {
     ),
     budget: { dailyUsd: usd(b.dailyUsd), paneUsd: usd(b.paneUsd), interrupt: bool(b.interrupt, d.budget.interrupt) },
     phoneUrl: typeof raw.phoneUrl === "string" ? raw.phoneUrl.trim() : "",
+    appearance: {
+      theme: THEME_MODES.includes(ap.theme as ThemeMode) ? (ap.theme as ThemeMode) : d.appearance.theme,
+      accent: hexColor(ap.accent),
+      background: hexColor(ap.background),
+    },
     agents: Object.fromEntries(
       AGENT_KINDS.map((k) => {
         const a = isObject(agents[k]) ? agents[k] : {};

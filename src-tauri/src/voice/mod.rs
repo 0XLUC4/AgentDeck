@@ -5,6 +5,7 @@
 //!
 //! Events: `voice-level` (f32 0..1, ~30/s), `voice-state` ("idle" | "listening" |
 //! "downloading" | "transcribing" | "error"), `voice-download` ({model, received, total}),
+//! `voice-partial` (String, live preview while listening, local engine only),
 //! `voice-transcript` (String), `voice-error` (String).
 
 mod audio;
@@ -24,6 +25,8 @@ use audio::Capture;
 use config::{Engine, VoiceConfig, VoiceConfigView, WhisperModel};
 
 const MIN_CLIP_SECS: f32 = 0.3;
+/// Pause between live preview passes (each pass also takes a while on CPU).
+const PARTIAL_EVERY: Duration = Duration::from_millis(700);
 /// Auto-stop (and transcribe) if the key-up is lost.
 const MAX_RECORDING: Duration = Duration::from_secs(60);
 const HIDE_DELAY: Duration = Duration::from_millis(1500);
@@ -92,7 +95,29 @@ pub fn init(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     {
         eprintln!("voice: cannot register shortcut {shortcut}: {e}");
     }
+    preload(app);
     Ok(())
+}
+
+/// Loads the local model in the background if it's already downloaded (no surprise download).
+fn preload(app: &AppHandle) {
+    let Ok(config) = config_snapshot(app) else {
+        return;
+    };
+    if config.engine != Engine::Local {
+        return;
+    }
+    let Some((path, _)) = models_dir(app)
+        .ok()
+        .and_then(|dir| local::downloaded(&dir, config.model))
+    else {
+        return;
+    };
+    std::thread::spawn(move || {
+        if let Err(e) = local::preload(&path) {
+            eprintln!("voice: preload model: {e}");
+        }
+    });
 }
 
 fn on_shortcut(app: &AppHandle, _: &Shortcut, event: ShortcutEvent) {
@@ -179,6 +204,7 @@ pub fn voice_set_config(app: AppHandle, config: VoiceConfig) -> Result<VoiceConf
         .lock()
         .map_err(|e| e.to_string())? = config.clone();
     config.save(&config_path(&app)?)?;
+    preload(&app);
     Ok(view(config))
 }
 
@@ -252,6 +278,7 @@ fn start(app: &AppHandle) -> Result<(), String> {
     drop(slot);
     set_state(app, "listening");
     show_pill(app);
+    start_partials(app, session);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(MAX_RECORDING);
@@ -260,6 +287,56 @@ fn start(app: &AppHandle) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// Local engine with the model on disk: re-transcribes the audio so far about once a second and emits
+/// `voice-partial`, so the pill shows the words while the user speaks. API engine: no preview (cost, latency).
+fn start_partials(app: &AppHandle, session: u64) {
+    let Ok(config) = config_snapshot(app) else {
+        return;
+    };
+    if config.engine != Engine::Local {
+        return;
+    }
+    let Some((model, _)) = models_dir(app)
+        .ok()
+        .and_then(|dir| local::downloaded(&dir, config.model))
+    else {
+        return; // first use downloads the model on release; no preview this time
+    };
+    local::allow_partials();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(PARTIAL_EVERY);
+            // Ends with the recording: stop() takes the capture out of the slot.
+            let Some(Ok((samples, rate))) = recording_snapshot(&app, session) else {
+                return;
+            };
+            if (samples.len() as f32) < rate as f32 * MIN_CLIP_SECS * 3.0 {
+                continue;
+            }
+            // Whisper sees 30 s at most anyway; this also bounds each pass on long dictations.
+            let tail = &samples[samples.len().saturating_sub(rate as usize * 30)..];
+            let pcm = audio::resample(tail, rate, audio::TARGET_RATE);
+            if let Ok(text) = local::transcribe_partial(&model, &pcm, &config.language)
+                && !text.is_empty()
+                && recording_snapshot(&app, session).is_some()
+            {
+                let _ = app.emit("voice-partial", text);
+            }
+        }
+    });
+}
+
+/// Audio recorded so far, if `session` is still the running recording.
+fn recording_snapshot(app: &AppHandle, session: u64) -> Option<Result<audio::Recording, String>> {
+    let voice = app.state::<Voice>();
+    let slot = voice.capture.lock().ok()?;
+    match &*slot {
+        Some((id, capture)) if *id == session => Some(capture.snapshot()),
+        _ => None,
+    }
 }
 
 /// Stops the running capture (only if it is `session`, when given) and transcribes it.
@@ -356,7 +433,10 @@ fn transcribe_api(config: &VoiceConfig, wav: Vec<u8>) -> Result<String, String> 
     if config.language != "auto" {
         form = form.text("language", config.language.clone());
     }
-    let mut request = reqwest::blocking::Client::new()
+    // Reused so later dictations skip the TCP + TLS handshake.
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    let mut request = CLIENT
+        .get_or_init(reqwest::blocking::Client::new)
         .post(&config.api_url)
         .timeout(Duration::from_secs(60))
         .multipart(form);

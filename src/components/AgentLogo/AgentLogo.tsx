@@ -1,9 +1,13 @@
 import { AGENTS } from "../../lib/agents";
 import type { AgentKind } from "../../lib/types";
 
-/** Brand mark of an agent, inline SVG in its brand color. Decorative: the agent name is always shown next to it. */
-export function AgentLogo({ kind, size = 16 }: { kind: AgentKind; size?: number }) {
-  const { mark: Mark, color } = AGENTS[kind];
+/**
+ * Brand mark of an agent, inline SVG in its brand color. Decorative: the agent name is always shown next to it.
+ * `color` overrides the brand color, e.g. "currentColor" on a colored button where the brand hue could vanish.
+ */
+export function AgentLogo({ kind, size = 16, color }: { kind: AgentKind; size?: number; color?: string }) {
+  const { mark: Mark, color: brand } = AGENTS[kind];
+  color ??= brand;
   if (typeof Mark !== "string") {
     return <Mark size={size} color={color} strokeWidth={1.5} aria-hidden="true" className="shrink-0" />;
   }

@@ -57,4 +57,18 @@ describe("mergeSettings", () => {
     expect(mergeSettings({ fontSize: 14.6 }).fontSize).toBe(15);
     expect(mergeSettings({ fontSize: Number.NaN }).fontSize).toBe(DEFAULT_SETTINGS.fontSize);
   });
+  it("validates appearance", () => {
+    expect(
+      mergeSettings({ appearance: { theme: "light", accent: "#4F8FF7", background: "#1E2A44" } }).appearance,
+    ).toEqual({
+      theme: "light",
+      accent: "#4f8ff7",
+      background: "#1e2a44",
+    });
+    expect(mergeSettings({ appearance: { theme: "neon", accent: "red", background: 3 } }).appearance).toEqual({
+      theme: "dark",
+      accent: "",
+      background: "",
+    });
+  });
 });

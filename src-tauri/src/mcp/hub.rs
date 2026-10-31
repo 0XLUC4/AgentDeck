@@ -216,7 +216,7 @@ pub fn hub_test(name: String) -> Result<usize, String> {
 
 /// User-scope servers from `~/.claude.json`, to import. claude.ai connectors are not in it: their
 /// OAuth stays inside Claude, so they cannot be shared anyway.
-#[tauri::command]
+#[tauri::command(async)] // ~/.claude.json can be several MB
 pub fn hub_claude_servers() -> Vec<HubServer> {
     let config = crate::hooks_server::home_dir()
         .and_then(|home| std::fs::read_to_string(home.join(".claude.json")).ok())

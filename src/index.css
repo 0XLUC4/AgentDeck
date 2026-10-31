@@ -38,6 +38,38 @@
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
 }
 
+:root {
+  color-scheme: dark;
+}
+
+/* Light theme (Settings > Appearance, src/lib/theme.ts): same tokens, inverted greys, deeper status hues. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-gutter: oklch(0.925 0 0);
+  --color-base: oklch(0.985 0 0);
+  --color-panel: oklch(0.965 0 0);
+  --color-raised: oklch(0.93 0 0);
+  --color-hover: oklch(0.9 0 0);
+  --color-line: oklch(0.87 0 0);
+  --color-line-strong: oklch(0.78 0 0);
+  --color-fg: oklch(0.21 0 0);
+  --color-muted: oklch(0.4 0 0);
+  --color-subtle: oklch(0.53 0 0);
+  --color-accent: oklch(0.25 0 0);
+  --color-accent-hover: oklch(0.15 0 0);
+  --color-on-accent: oklch(0.98 0 0);
+
+  --color-ok: oklch(0.56 0.15 150);
+  --color-busy: oklch(0.55 0.16 245);
+  --color-wait: oklch(0.62 0.16 65);
+  --color-bad: oklch(0.55 0.2 25);
+  --color-close: oklch(0.52 0.21 27);
+
+  --color-agent-codex: oklch(0.3 0 0);
+  --color-agent-grok: oklch(0.22 0 0);
+  --color-agent-shell: oklch(0.4 0 0);
+}
+
 html,
 body,
 #root {
@@ -50,7 +82,7 @@ body {
   color: var(--color-fg);
   font-family: var(--font-sans);
   font-size: 13px;
-  color-scheme: dark;
+  color-scheme: inherit; /* from :root, so the light theme switches native scrollbars and inputs */
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
@@ -63,6 +95,10 @@ body {
 
 ::selection {
   background: oklch(0.4 0 0);
+}
+
+:root[data-theme="light"] ::selection {
+  background: oklch(0.85 0 0);
 }
 
 /* Waiting for the user: the status dot pulses (the only looping animation in the app). */

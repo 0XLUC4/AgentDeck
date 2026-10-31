@@ -12,6 +12,7 @@ import {
   type LucideIcon,
   Mic,
   Network,
+  Palette,
   SlidersHorizontal,
   Trash2,
   X,
@@ -26,6 +27,7 @@ import { HistorySettings } from "../History/HistorySettings";
 import { IconButton } from "../IconButton/IconButton";
 import { TemplatesSection } from "../Templates/TemplatesSection";
 import { AutostartRow, UpdateRow } from "./AppControls";
+import { AppearanceSection } from "./AppearanceSection";
 import { button, ErrorText, errorMessage, field, Row, Section, Toggle } from "./controls";
 import { McpHubSection } from "./McpHubSection";
 import { SpeechRows } from "./SpeechRows";
@@ -34,10 +36,11 @@ import { VoiceSection } from "./VoiceSection";
 /** Runs a save and reports it in the dialog header ("Saved" or the error). */
 export type Save = (task: Promise<unknown>) => void;
 
-type SectionId = "general" | "notifications" | "voice" | "agents" | "mcp" | "templates" | "about";
+type SectionId = "general" | "appearance" | "notifications" | "voice" | "agents" | "mcp" | "templates" | "about";
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: SlidersHorizontal },
+  { id: "appearance", label: "Appearance", icon: Palette },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "agents", label: "Agents", icon: Bot },
@@ -447,6 +450,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-6">
             {error && <ErrorText>{error}</ErrorText>}
             {section === "general" && <General s={settings} save={save} />}
+            {section === "appearance" && <AppearanceSection save={save} />}
             {section === "notifications" && <Notifications s={settings} save={save} />}
             {section === "voice" && <VoiceSection save={save} />}
             {section === "agents" && <Agents s={settings} save={save} />}

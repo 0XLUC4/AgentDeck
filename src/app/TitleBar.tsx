@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import appIcon from "../../src-tauri/icons/64x64.png";
 import { openBroadcast } from "../components/Broadcast/Broadcast";
 import { HistoryButton } from "../components/History/HistoryDialog";
 import { IconButton } from "../components/IconButton/IconButton";
@@ -37,22 +38,9 @@ function confirmBulk(question: (count: number) => string, action: () => Promise<
 export const confirmStopAll = () => confirmBulk((n) => `Stop the ${n} agent(s) in this session?`, stopAll);
 export const confirmRestartAll = () => confirmBulk((n) => `Restart the ${n} agent(s) in this session?`, restartAll);
 
-/** Logo: three stacked cards, the front one in the accent color. */
+/** Logo: the app icon itself, so it never follows the theme or accent. */
 function AppMark() {
-  return (
-    <svg viewBox="0 0 20 20" className="pointer-events-none size-[18px] shrink-0" aria-hidden="true">
-      <rect x="5" y="2" width="12" height="9" rx="2" fill="var(--color-line-strong)" />
-      <rect x="3.5" y="5" width="13" height="10" rx="2.2" fill="var(--color-subtle)" />
-      <rect x="2" y="8.5" width="14" height="9.5" rx="2.4" fill="var(--color-accent)" />
-      <path
-        d="M5 12.2l2 1.6-2 1.6"
-        stroke="var(--color-on-accent)"
-        strokeWidth="1.4"
-        fill="none"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
+  return <img src={appIcon} alt="" className="pointer-events-none size-[18px] shrink-0" draggable={false} />;
 }
 
 function WindowControls() {

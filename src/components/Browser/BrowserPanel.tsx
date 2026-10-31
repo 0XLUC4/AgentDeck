@@ -35,9 +35,24 @@ export function BrowserPanel({ params }: IDockviewPanelProps<{ paneId: string }>
         last = ""; // not created yet (the agent is starting): retry on the next tick
       });
     };
-    follow();
-    const timer = setInterval(follow, FOLLOW_MS);
+    // Poll only while the panel is on screen (background sessions sit off-screen): hide once, then idle.
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const onScreen = new IntersectionObserver(([entry]) => {
+      clearInterval(timer);
+      timer = undefined;
+      if (entry?.isIntersecting) {
+        follow();
+        timer = setInterval(follow, FOLLOW_MS);
+      } else if (last !== "hidden") {
+        last = "hidden";
+        browserBounds(paneId, 0, 0, 0, 0, false).catch(() => {
+          last = "";
+        });
+      }
+    });
+    if (body.current) onScreen.observe(body.current);
     return () => {
+      onScreen.disconnect();
       clearInterval(timer);
       browserBounds(paneId, 0, 0, 0, 0, false).catch(() => undefined);
     };
@@ -59,6 +74,7 @@ export function BrowserHeader({ paneId }: { paneId: string }) {
   useEffect(() => {
     if (editing) return;
     const read = () =>
+      !document.hidden &&
       browserUrl(paneId)
         .then(setUrl)
         .catch(() => undefined);

@@ -22,6 +22,8 @@ pub type Recording = (Vec<f32>, u32);
 pub struct Capture {
     stop: Sender<()>,
     thread: JoinHandle<Result<Recording, String>>,
+    buffer: Shared,
+    rate: u32,
 }
 
 impl Capture {
@@ -30,11 +32,24 @@ impl Capture {
     pub fn start(on_level: impl Fn(f32) + Send + 'static) -> Result<Self, String> {
         let (stop, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let thread = std::thread::spawn(move || run(ready_tx, stop_rx, on_level));
-        ready_rx
+        let buffer: Shared = Arc::default();
+        let shared = buffer.clone();
+        let thread = std::thread::spawn(move || run(ready_tx, stop_rx, shared, on_level));
+        let rate = ready_rx
             .recv()
             .map_err(|_| "capture thread exited early".to_string())??;
-        Ok(Self { stop, thread })
+        Ok(Self {
+            stop,
+            thread,
+            buffer,
+            rate,
+        })
+    }
+
+    /// Copy of everything recorded so far (for live partial transcripts).
+    pub fn snapshot(&self) -> Result<Recording, String> {
+        let samples = self.buffer.lock().map_err(|e| e.to_string())?.clone();
+        Ok((samples, self.rate))
     }
 
     /// Stops recording and returns the mono samples with their sample rate.
@@ -47,19 +62,24 @@ impl Capture {
 }
 
 fn run(
-    ready: SyncSender<Result<(), String>>,
+    ready: SyncSender<Result<u32, String>>,
     stop: Receiver<()>,
+    buffer: Shared,
     on_level: impl Fn(f32),
 ) -> Result<Recording, String> {
-    let buffer: Shared = Arc::default();
-    let (stream, rate) = match open_stream(buffer.clone()) {
+    // Windows often refuses the mic for a moment right after another app released it: retry once.
+    let opened = open_stream(buffer.clone()).or_else(|_| {
+        std::thread::sleep(Duration::from_millis(250));
+        open_stream(buffer.clone())
+    });
+    let (stream, rate) = match opened {
         Ok(opened) => opened,
         Err(e) => {
             let _ = ready.send(Err(e.clone()));
             return Err(e);
         }
     };
-    let _ = ready.send(Ok(()));
+    let _ = ready.send(Ok(rate));
 
     let mut seen = 0;
     // Stop message or disconnected sender both end the capture.

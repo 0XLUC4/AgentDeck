@@ -6,7 +6,7 @@ import {
   themeDark,
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { BrowserHeader, BrowserPanel, browserPanelId, paneOfBrowserPanel } from "../components/Browser/BrowserPanel";
 import { EmptyPaneHeader, PaneHeader } from "../components/TerminalPane/PaneHeader";
 import { PanePanel } from "../components/TerminalPane/PanePanel";
@@ -102,7 +102,8 @@ function AgentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
 }
 
 /** One dockview grid per session tab. The store's paneIds are the source of truth. */
-export function Deck({ tab }: { tab: Tab }) {
+// memo: a layout change or rename in one session must not re-render every other session's grid.
+export const Deck = memo(function Deck({ tab }: { tab: Tab }) {
   const [api, setApi] = useState<DockviewApi | null>(null);
   // Joined to a string so the sync below only reruns when the set of browsers changes.
   const browsers = useDeck((s) => tab.paneIds.filter((id) => s.panes[id]?.browser).join(","));
@@ -192,4 +193,4 @@ export function Deck({ tab }: { tab: Tab }) {
       }}
     />
   );
-}
+});

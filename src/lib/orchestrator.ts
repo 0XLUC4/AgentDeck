@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { sendPrompt } from "../components/Broadcast/send";
 import { activeTab, activeWorkspace, activityKey, deck, type Pane, type Tab, useDeck } from "../store/deck";
-import { closePane, createPane, interruptPane, paneOutput } from "../store/runtime";
+import { closePane, createPane, interruptPane, paneOutputTail } from "../store/runtime";
 import { useSettings } from "../store/settings";
 import { useTasks } from "../store/tasks";
 import { paneGitDir } from "./checkpoints";
@@ -235,7 +235,7 @@ export async function handleMcpRequest(req: Pick<McpRequest, "orchestratorId" | 
       return { statuses: Object.fromEntries(ids.map((id) => [id, target(scope, id).status])) };
     }
     case "read_output":
-      return { raw: paneOutput(target(scope, str(args.paneId)).id).slice(-OUTPUT_TAIL_CHARS) };
+      return { raw: paneOutputTail(target(scope, str(args.paneId)).id, OUTPUT_TAIL_CHARS) };
     case "interrupt": {
       const pane = target(scope, str(args.paneId));
       assertCanType(pane);
