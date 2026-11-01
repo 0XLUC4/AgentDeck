@@ -147,7 +147,17 @@ body {
   --dv-icon-hover-background-color: var(--color-hover);
   --dv-tabs-container-scrollbar-color: var(--color-line-strong);
   --dv-border-radius: 14px;
-  background: var(--color-gutter);
+  background: transparent;
+}
+
+/* Nothing painted behind the panes: dockview's own fill showed as square corners around the rounded panes. */
+.dockview-theme-agentdeck .dv-dockview {
+  background: transparent;
+}
+
+/* Fixed layout: pane sizes can't be dragged. */
+.dockview-theme-agentdeck .dv-sash {
+  pointer-events: none;
 }
 
 .dockview-theme-agentdeck .dv-groupview {

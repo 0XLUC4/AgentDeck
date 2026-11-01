@@ -25,7 +25,7 @@ import { useVoiceTarget } from "../../lib/voiceListener";
 import type { Pane } from "../../store/deck";
 import { deck, FONT_SIZE, folderName, useDeck } from "../../store/deck";
 import { useReviews } from "../../store/review";
-import { closePane, focusPane, interruptPane, restartPane } from "../../store/runtime";
+import { closePane, focusPane, interruptPane, isBusy, restartPane } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
 import { browserPanelId, removeBrowser } from "../Browser/BrowserPanel";
 import { toggleDetached, useDetached } from "../Detached/host";
@@ -51,7 +51,7 @@ interface Props {
 
 /** Closes the pane, asking first if the agent is still working. */
 export function confirmClose(pane: Pane) {
-  if (pane.status !== "working" || window.confirm(`${AGENTS[pane.agent].name} is still working. Close anyway?`)) {
+  if (!isBusy(pane.id) || window.confirm(`${AGENTS[pane.agent].name} is still working. Close anyway?`)) {
     void closePane(pane.id);
   }
 }
