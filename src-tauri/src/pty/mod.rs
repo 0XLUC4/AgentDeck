@@ -376,10 +376,11 @@ fn stream_output(
 }
 
 /// Session variables set by a parent Claude Code process. User config like CLAUDE_CONFIG_DIR is kept.
+/// AI_AGENT makes a child Claude Code think an agent drives it, so it drops the fullscreen TUI.
 fn is_parent_claude_var(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
     key.starts_with("CLAUDE_CODE_")
-        || matches!(key.as_str(), "CLAUDECODE" | "CLAUDE_PID" | "CLAUDE_EFFORT")
+        || matches!(key.as_str(), "CLAUDECODE" | "CLAUDE_PID" | "CLAUDE_EFFORT" | "AI_AGENT")
 }
 
 /// Pane ids end up in hook URLs and args, and agents run through `cmd.exe /c`
@@ -464,6 +465,7 @@ mod tests {
         assert!(v("CLAUDE_CODE_MESSAGING_TOKEN"));
         assert!(v("CLAUDECODE"));
         assert!(v("claude_pid"));
+        assert!(v("AI_AGENT"));
         assert!(!v("CLAUDE_CONFIG_DIR"));
         assert!(!v("PATH"));
     }

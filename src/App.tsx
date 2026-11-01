@@ -1,13 +1,13 @@
-import { Plus } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { ActivityPanel, jumpToNextWaiting, PermissionBanner } from "./app/Activity";
 import { Deck } from "./app/Deck";
 import { Sidebar } from "./app/Sidebar";
-import { TabBar } from "./app/TabBar";
+import { AddAgentButton, TabBar } from "./app/TabBar";
 import { TitleBar } from "./app/TitleBar";
 import { Toasts } from "./app/Toasts";
 import { AgentLogo } from "./components/AgentLogo/AgentLogo";
 import { AgentPicker } from "./components/AgentPicker/AgentPicker";
+import { AssetsHost } from "./components/Assets/AssetsHost";
 import { BroadcastHost } from "./components/Broadcast/Broadcast";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { startDetachHost } from "./components/Detached/host";
@@ -75,14 +75,7 @@ function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
             . Each agent opens in its own terminal; drag the headers to rearrange.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onAddAgent}
-          className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-4 font-medium text-on-accent transition-colors duration-150 hover:bg-accent-hover"
-        >
-          <Plus size={16} strokeWidth={1.5} aria-hidden="true" />
-          Add agent
-        </button>
+        <AddAgentButton onOpenPicker={onAddAgent} className="" />
       </div>
     </div>
   );
@@ -181,6 +174,7 @@ export default function App() {
       />
       {!activityOpen && <PermissionBanner />}
       <BroadcastHost />
+      <AssetsHost />
       <TemplatePickerHost />
       <Toasts />
     </div>

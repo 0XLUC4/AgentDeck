@@ -36,6 +36,11 @@
   --color-agent-shell: oklch(0.76 0 0);
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+
+  /* Rounder controls, in step with the 14px panes. */
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
 }
 
 :root {
@@ -141,14 +146,36 @@ body {
   --dv-sash-color: transparent;
   --dv-icon-hover-background-color: var(--color-hover);
   --dv-tabs-container-scrollbar-color: var(--color-line-strong);
-  --dv-border-radius: 8px;
+  --dv-border-radius: 14px;
   background: var(--color-gutter);
 }
 
 .dockview-theme-agentdeck .dv-groupview {
-  border-radius: 8px;
+  border-radius: 14px;
   overflow: hidden;
   border: 1px solid var(--color-line);
+  transition:
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+/* Agent status as the pane outline (data-status is set by PanePanel): green while working, grey once done,
+   amber while it waits for the user. */
+.dockview-theme-agentdeck .dv-groupview:has([data-status="working"]) {
+  border-color: var(--color-ok);
+  box-shadow:
+    0 0 0 1px var(--color-ok),
+    0 0 12px color-mix(in oklch, var(--color-ok) 25%, transparent);
+}
+
+.dockview-theme-agentdeck .dv-groupview:has([data-status="done"]) {
+  border-color: var(--color-subtle);
+  box-shadow: 0 0 0 1px var(--color-subtle);
+}
+
+.dockview-theme-agentdeck .dv-groupview:has([data-status="waiting"]) {
+  border-color: var(--color-wait);
+  box-shadow: 0 0 0 1px var(--color-wait);
 }
 
 .dockview-theme-agentdeck .dv-tabs-and-actions-container {

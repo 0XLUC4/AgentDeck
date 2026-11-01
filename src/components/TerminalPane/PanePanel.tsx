@@ -24,6 +24,7 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
     <section
       className={`flex h-full flex-col bg-base`}
       data-pane-id={pane.id}
+      data-status={pane.status}
       onFocusCapture={() => focusPane(pane.id)}
       onMouseDown={() => focusPane(pane.id)}
       aria-label={`${AGENTS[pane.agent].name}: ${pane.title}`}

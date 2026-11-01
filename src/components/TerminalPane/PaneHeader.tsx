@@ -34,7 +34,7 @@ import { OrchestratorButton } from "../Orchestrator/OrchestratorButton";
 import { QueueButton } from "../Queue/QueueButton";
 import { NotesButton } from "../Skills/NotesButton";
 import { SkillsButton } from "../Skills/SkillsButton";
-import { StatusBadge } from "../StatusBadge/StatusBadge";
+import { STATUS } from "../StatusBadge/StatusBadge";
 import { UsageChip } from "../Usage/UsageChip";
 
 // Diff viewer: loaded on first open, not at startup.
@@ -120,7 +120,8 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
           {!pane.title || pane.title === folderName(pane.cwd) ? agent.name : pane.title}
         </span>
       )}
-      <StatusBadge status={pane.status} />
+      {/* Status shows as the pane outline (index.css); screen readers get it here. */}
+      <span className="sr-only">Status: {STATUS[pane.status].label}</span>
       {voiceTarget && (
         <Mic
           size={12}
