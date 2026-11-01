@@ -83,11 +83,21 @@ describe("sessions archive", () => {
     useDeck.setState({
       workspaces: [W1],
       panes: {},
-      tabs: [{ id: "t1", name: "Projet", workspaceId: "w1", paneIds: [], layout: null }],
+      tabs: [
+        { id: "t1", name: "Projet", workspaceId: "w1", paneIds: [], layout: null },
+        { id: "t2", name: "Other", workspaceId: "w1", paneIds: [], layout: null },
+      ],
       activeTabId: "t1",
       archived: [],
     }),
   );
+
+  it("never archives the last open session of a workspace", () => {
+    deck.archiveTab("t1");
+    expect(deck.archiveTab("t2")).toEqual([]);
+    expect(useDeck.getState().tabs.map((t) => t.id)).toEqual(["t2"]);
+    expect(useDeck.getState().archived).toHaveLength(1);
+  });
 
   it("archives a tab with its panes and reopens it", () => {
     deck.addPane(pane({ title: "fix bug", fontSize: 18 }), "t1");

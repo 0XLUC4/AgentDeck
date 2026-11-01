@@ -1,27 +1,29 @@
 import {
   Archive,
   ArchiveRestore,
+  Box,
   ChevronRight,
   Folder,
   FolderOpen,
   FolderPlus,
   GitBranch,
   LayoutTemplate,
+  Network,
   Pencil,
   Plus,
   Trash2,
   Unlink,
 } from "lucide-react";
 import { useState } from "react";
+import { openAssets, openGraph } from "../components/Assets/AssetsHost";
 import { IconButton } from "../components/IconButton/IconButton";
-import { StatusDot } from "../components/StatusBadge/StatusBadge";
 import { openTemplatePickerFor } from "../components/Templates/TemplatePicker";
 import {
   activeWorkspace,
   activityKey,
+  canArchive,
   deck,
   type SavedSession,
-  sessionStatus,
   type Tab,
   useDeck,
   type Workspace,
@@ -66,7 +68,7 @@ function RenameField({
 const rowBase = "group flex h-8 items-center gap-2 rounded-md pr-1 transition-colors duration-150";
 
 function OpenSessionRow({ tab, active }: { tab: Tab; active: boolean }) {
-  const status = useDeck((s) => sessionStatus(tab.paneIds, s.panes));
+  const archivable = useDeck((s) => canArchive(s.tabs, tab.id));
   return (
     <li className={`${rowBase} pl-7 ${active ? "bg-raised text-fg" : "text-muted hover:bg-hover hover:text-fg"}`}>
       <button
@@ -75,17 +77,18 @@ function OpenSessionRow({ tab, active }: { tab: Tab; active: boolean }) {
         aria-current={active ? "page" : undefined}
         onClick={() => useDeck.setState({ activeTabId: tab.id })}
       >
-        {status ? <StatusDot status={status} /> : <span className="size-2 rounded-full border border-line-strong" />}
         <span className="truncate">{tab.name}</span>
         <span className="ml-auto shrink-0 text-xs tabular-nums text-subtle">{tab.paneIds.length || ""}</span>
       </button>
-      <IconButton
-        icon={Archive}
-        size="sm"
-        label={`Close and archive ${tab.name}`}
-        className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
-        onClick={() => closeSession(tab.id)}
-      />
+      {archivable && (
+        <IconButton
+          icon={Archive}
+          size="sm"
+          label={`Close and archive ${tab.name}`}
+          className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+          onClick={() => closeSession(tab.id)}
+        />
+      )}
     </li>
   );
 }
@@ -226,6 +229,24 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
                 setExpanded(true);
               }}
             />
+            {ws.path && (
+              <IconButton
+                icon={Box}
+                size="sm"
+                label={`3D assets of ${ws.name}`}
+                hint="Assets: preview 3D models and ask an agent to change them"
+                onClick={() => openAssets(ws.id)}
+              />
+            )}
+            {ws.path && (
+              <IconButton
+                icon={Network}
+                size="sm"
+                label={`Notes graph of ${ws.name}`}
+                hint="Graph: map of the project's notes and their links"
+                onClick={() => openGraph(ws.id)}
+              />
+            )}
             <IconButton icon={Pencil} size="sm" label={`Rename ${ws.name}`} onClick={() => setRenaming(true)} />
             <IconButton
               icon={Unlink}

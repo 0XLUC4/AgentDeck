@@ -3,11 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { AgentLogo } from "../components/AgentLogo/AgentLogo";
 import { lastAgent, spawnAgent } from "../components/AgentPicker/AgentPicker";
 import { IconButton } from "../components/IconButton/IconButton";
-import { StatusDot } from "../components/StatusBadge/StatusBadge";
 import { AGENT_KINDS, AGENTS } from "../lib/agents";
 import { splitArgs } from "../lib/splitArgs";
 import type { AgentKind } from "../lib/types";
-import { activeWorkspace, deck, sessionStatus, type Tab, useDeck } from "../store/deck";
+import { activeWorkspace, canArchive, deck, type Tab, useDeck } from "../store/deck";
 import { archiveSession } from "../store/runtime";
 import { useSettings } from "../store/settings";
 
@@ -16,17 +15,17 @@ const isWorking = (paneIds: string[]) => paneIds.some((id) => useDeck.getState()
 /** Closes a session tab into the archive, asking first if agents are still working. */
 export function closeSession(tabId: string) {
   const tab = useDeck.getState().tabs.find((t) => t.id === tabId);
-  if (!tab) return;
+  if (!tab || !canArchive(useDeck.getState().tabs, tabId)) return;
   if (isWorking(tab.paneIds) && !window.confirm(`Agents in "${tab.name}" are still working. Archive anyway?`)) return;
   archiveSession(tabId);
 }
 
 function SessionTab({ tab, active, onRename }: { tab: Tab; active: boolean; onRename: () => void }) {
-  const status = useDeck((s) => sessionStatus(tab.paneIds, s.panes));
+  const archivable = useDeck((s) => canArchive(s.tabs, tab.id));
   return (
     <div
-      className={`group relative flex h-8 shrink-0 items-center rounded-md pr-0.5 transition-colors duration-150 ${
-        active ? "bg-raised text-fg" : "text-muted hover:bg-hover hover:text-fg"
+      className={`group relative flex h-full shrink-0 items-center border-b-2 pr-0.5 transition-colors duration-150 ${
+        active ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg"
       }`}
     >
       <button
@@ -41,17 +40,18 @@ function SessionTab({ tab, active, onRename }: { tab: Tab; active: boolean; onRe
           if (e.key === "F2") onRename();
         }}
       >
-        {status && <StatusDot status={status} />}
         <span className="max-w-48 truncate">{tab.name}</span>
       </button>
-      <IconButton
-        icon={X}
-        size="sm"
-        label={`Close and archive ${tab.name}`}
-        hint="Close (the session stays in the sidebar and can be reopened)"
-        className={active ? "" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"}
-        onClick={() => closeSession(tab.id)}
-      />
+      {archivable && (
+        <IconButton
+          icon={X}
+          size="sm"
+          label={`Close and archive ${tab.name}`}
+          hint="Close (the session stays in the sidebar and can be reopened)"
+          className={active ? "" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"}
+          onClick={() => closeSession(tab.id)}
+        />
+      )}
     </div>
   );
 }
@@ -66,7 +66,7 @@ export function TabBar({ onAddAgent }: { onAddAgent: () => void }) {
 
   return (
     <nav className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-2" aria-label="Sessions">
-      <div role="tablist" className="scroll-thin flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div role="tablist" className="scroll-thin -mb-px flex min-w-0 items-center gap-1 self-stretch overflow-x-auto">
         {tabs.map((tab) =>
           editing === tab.id ? (
             <input
@@ -104,7 +104,13 @@ const primary =
  * Workspace with a folder: one click starts the last used agent there (with its Settings defaults), the arrow picks
  * another one, both without a dialog, so agents can be added in a row. No folder yet: opens the full picker.
  */
-function AddAgentButton({ onOpenPicker }: { onOpenPicker: () => void }) {
+export function AddAgentButton({
+  onOpenPicker,
+  className = "ml-auto",
+}: {
+  onOpenPicker: () => void;
+  className?: string;
+}) {
   const path = useDeck((s) => activeWorkspace(s).path);
   const [agent, setAgent] = useState<AgentKind>(lastAgent);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -125,7 +131,7 @@ function AddAgentButton({ onOpenPicker }: { onOpenPicker: () => void }) {
 
   if (!path) {
     return (
-      <button type="button" onClick={onOpenPicker} className={`${primary} ml-auto rounded-md px-3`}>
+      <button type="button" onClick={onOpenPicker} className={`${primary} ${className} rounded-md px-3`}>
         <Plus size={15} strokeWidth={1.5} aria-hidden="true" />
         Add agent
       </button>
@@ -140,7 +146,7 @@ function AddAgentButton({ onOpenPicker }: { onOpenPicker: () => void }) {
   };
 
   return (
-    <div ref={menuRef} className="relative ml-auto flex shrink-0">
+    <div ref={menuRef} className={`relative flex shrink-0 ${className}`}>
       <button
         type="button"
         onClick={() => add(agent)}

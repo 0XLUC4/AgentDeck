@@ -92,8 +92,12 @@ fn download(url: &str, part: &Path, on_progress: &mut impl FnMut(u64, u64)) -> R
 
 /// Loads the model ahead of the first dictation so the first press isn't slow.
 pub fn preload(model_path: &Path) -> Result<(), String> {
-    let mut loaded = LOADED.lock().map_err(|e| e.to_string())?;
-    load(&mut loaded, model_path)
+    load(&mut *LOADED.lock().map_err(|e| e.to_string())?, model_path)?;
+    // One pass on silence: the first inference allocates buffers (and compiles GPU kernels with
+    // the `gpu` feature), which would otherwise land on the user's first dictation.
+    // Best effort: a dictation started meanwhile cancels it.
+    let _ = run(model_path, &[], "en", true);
+    Ok(())
 }
 
 fn load(loaded: &mut Option<(PathBuf, WhisperState)>, model_path: &Path) -> Result<(), String> {

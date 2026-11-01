@@ -192,3 +192,24 @@ export const agentFileWrite = (agent: AgentKind, cwd: string, path: string, text
 /** Saves image bytes to a temp file; resolves to its path. */
 export const savePasteImage = (bytes: Uint8Array, ext: string) =>
   invoke<string>("save_paste_image", bytes, { headers: { "x-ext": ext } });
+
+// 3D assets of a workspace (src-tauri/src/assets.rs).
+export interface AssetFile {
+  path: string;
+  /** Relative to the workspace folder. */
+  rel: string;
+  ext: string;
+  size: number;
+}
+export const assetsList = (cwd: string) => invoke<AssetFile[]>("assets_list", { cwd });
+/** Path the preview loads (via the asset protocol); a .blend gives its GLB export (needs Blender installed). */
+export const assetSource = (cwd: string, path: string) => invoke<string>("asset_source", { cwd, path });
+
+// Notes graph of a workspace (src-tauri/src/notes_graph.rs).
+export interface NotesGraph {
+  /** `id` is the note path relative to the workspace, with `/` separators. */
+  nodes: { id: string; title: string }[];
+  edges: [string, string][];
+}
+export const notesGraph = (cwd: string) => invoke<NotesGraph>("notes_graph", { cwd });
+export const noteRead = (cwd: string, id: string) => invoke<string>("note_read", { cwd, id });

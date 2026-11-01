@@ -97,6 +97,12 @@ export function applyStatus(pane: Pane, status: PaneStatus, lastAction: string |
 const URGENCY: PaneStatus[] = ["waiting", "error", "working", "done", "idle"];
 
 /** The status a session shows in lists: its most urgent pane's, or null when it has no pane. */
+/** A session can be archived while its workspace has another open one. */
+export function canArchive(tabs: Tab[], tabId: string): boolean {
+  const workspaceId = tabs.find((t) => t.id === tabId)?.workspaceId;
+  return tabs.filter((t) => t.workspaceId === workspaceId).length > 1;
+}
+
 export function sessionStatus(paneIds: string[], panes: Record<string, Pane>): PaneStatus | null {
   const statuses = new Set(paneIds.flatMap((id) => (panes[id] ? [panes[id].status] : [])));
   return URGENCY.find((s) => statuses.has(s)) ?? null;
@@ -308,9 +314,10 @@ export const deck = {
     set({ tabs, activeTabId: pickActive(tabs, removed.workspaceId) });
   },
   /** Moves a tab (layout + pane specs) to the archive. The caller kills its PTYs. Returns the pane ids. */
+  /** Archives a session; never the last open one of its workspace (that would just recreate an empty one). */
   archiveTab(id: string, now = Date.now()): string[] {
     const tab = get().tabs.find((t) => t.id === id);
-    if (!tab) return [];
+    if (!tab || !canArchive(get().tabs, id)) return [];
     // Oldest beyond the cap are dropped: every save serializes the whole archive with its layouts.
     const archived = [tabToSession(tab, get().panes, now), ...get().archived.filter((s) => s.id !== id)];
     set({ archived: archived.slice(0, MAX_ARCHIVED) });

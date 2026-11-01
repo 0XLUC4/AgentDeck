@@ -1,9 +1,11 @@
 mod agents;
+mod assets;
 mod browser;
 mod git;
 mod history;
 mod hooks_server;
 mod mcp;
+mod notes_graph;
 mod notify;
 mod pty;
 mod skills;
@@ -127,6 +129,10 @@ pub fn run() {
             skills::notes_list,
             skills::agent_file_read,
             skills::agent_file_write,
+            assets::assets_list,
+            assets::asset_source,
+            notes_graph::notes_graph,
+            notes_graph::note_read,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

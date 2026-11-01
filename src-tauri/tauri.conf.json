@@ -40,7 +40,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; connect-src ipc: http://ipc.localhost data: blob: asset: http://asset.localhost",
+      "assetProtocol": { "enable": true, "scope": [] },
       "devCsp": null
     }
   },
