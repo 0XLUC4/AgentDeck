@@ -1,6 +1,6 @@
 [package]
 name = "agentdeck"
-version = "0.1.12"
+version = "0.1.13"
 description = "Multi-agent terminal dashboard"
 authors = ["Luca"]
 edition = "2024"
