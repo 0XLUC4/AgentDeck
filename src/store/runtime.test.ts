@@ -21,7 +21,7 @@ vi.mock("../lib/ipc", () => ({
 }));
 vi.mock("../lib/notify", () => ({ notify: vi.fn() }));
 
-const { closePane, createPane, focusPane, reportSize, restartPane } = await import("./runtime");
+const { closePane, createPane, focusPane, isBusy, reportSize, restartPane } = await import("./runtime");
 const { deck, useDeck } = await import("./deck");
 const deckSetDone = (id: string) => deck.setStatus(id, "done", null);
 
@@ -116,5 +116,13 @@ describe("runtime", () => {
     const pane = useDeck.getState().panes.p5;
     expect(pane.status).not.toBe("error");
     expect(pane.exited).toBe(false);
+  });
+});
+
+describe("isBusy", () => {
+  it("ignores a pane stuck on working with no recent output", async () => {
+    await createPane(spec("busy1"), useDeck.getState().activeTabId);
+    deck.setStatus("busy1", "working", null);
+    expect(isBusy("busy1")).toBe(false);
   });
 });

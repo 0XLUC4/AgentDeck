@@ -7,16 +7,18 @@ import { AGENT_KINDS, AGENTS } from "../lib/agents";
 import { splitArgs } from "../lib/splitArgs";
 import type { AgentKind } from "../lib/types";
 import { activeWorkspace, canArchive, deck, type Tab, useDeck } from "../store/deck";
-import { archiveSession } from "../store/runtime";
+import { archiveSession, isBusy } from "../store/runtime";
 import { useSettings } from "../store/settings";
-
-const isWorking = (paneIds: string[]) => paneIds.some((id) => useDeck.getState().panes[id]?.status === "working");
 
 /** Closes a session tab into the archive, asking first if agents are still working. */
 export function closeSession(tabId: string) {
   const tab = useDeck.getState().tabs.find((t) => t.id === tabId);
   if (!tab || !canArchive(useDeck.getState().tabs, tabId)) return;
-  if (isWorking(tab.paneIds) && !window.confirm(`Agents in "${tab.name}" are still working. Archive anyway?`)) return;
+  if (
+    tab.paneIds.some((id) => isBusy(id)) &&
+    !window.confirm(`Agents in "${tab.name}" are still working. Archive anyway?`)
+  )
+    return;
   archiveSession(tabId);
 }
 

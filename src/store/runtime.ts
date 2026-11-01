@@ -307,6 +307,15 @@ export function focusPane(id: string): void {
   setActivePane(id).catch((err) => console.warn("set_active_pane failed", err));
 }
 
+/**
+ * Worth a confirmation before closing: marked working and still printing. An agent interrupted with Esc gets no
+ * Stop hook and stays "working" while silent; a busy one keeps animating its spinner.
+ */
+export function isBusy(id: string, now = Date.now()): boolean {
+  const rt = runtimes.get(id);
+  return useDeck.getState().panes[id]?.status === "working" && !!rt && now - rt.lastOutputAt < ACTIVITY_WINDOW_MS;
+}
+
 /** Panes without hooks: working if output arrived recently, idle otherwise. Called every second. */
 export function deriveStatuses(now = Date.now()): void {
   for (const pane of Object.values(useDeck.getState().panes)) {
