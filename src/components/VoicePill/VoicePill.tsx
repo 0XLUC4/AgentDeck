@@ -82,6 +82,23 @@ function Dots() {
   );
 }
 
+/** Shown once the transcript went out: a green disc whose tick draws itself (CSS in index.css). */
+function CheckMark() {
+  return (
+    <svg className="voice-check size-6 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="#22c55e" />
+      <path
+        d="M7 12.5l3.2 3.2L17 9"
+        fill="none"
+        stroke="white"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function VoicePill() {
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState("");
@@ -154,6 +171,7 @@ export function VoicePill() {
             {label}
           </span>
         )}
+        {state === "idle" && transcript && <CheckMark />}
         {state === "idle" && (
           <span data-tauri-drag-region className="truncate text-sm text-white/70">
             {label}

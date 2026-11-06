@@ -1,17 +1,36 @@
 //! Pre-accepts each agent's "trust this folder" prompt for folders opened in AgentDeck
 //! (opt-in setting). Every edit keeps the rest of the agent's config untouched.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use serde_json::{Map, Value};
 
 use crate::agents::AgentKind;
 
+/// (agent, cwd) pairs already trusted this run: skips re-reading `~/.claude.json` (often MBs) on every spawn.
+static TRUSTED: LazyLock<Mutex<HashSet<(AgentKind, String)>>> = LazyLock::new(Mutex::default);
+
 /// Marks `cwd` as trusted in the agent's own config. Failures are logged, never fatal:
 /// the agent then just shows its usual prompt.
 pub fn trust_folder(agent: AgentKind, cwd: &str) {
-    let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) else {
+    let key = (agent, cwd.to_owned());
+    let mut trusted = TRUSTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if trusted.contains(&key) {
         return;
+    }
+    if trust_folder_uncached(agent, cwd) {
+        trusted.insert(key);
+    }
+}
+
+/// Returns whether the folder is now trusted.
+fn trust_folder_uncached(agent: AgentKind, cwd: &str) -> bool {
+    let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) else {
+        return false;
     };
     let home = PathBuf::from(home);
     let (given, canonical) = spellings(cwd);
@@ -42,9 +61,10 @@ pub fn trust_folder(agent: AgentKind, cwd: &str) {
         // Grok: no documented file format; pty sets GROK_FOLDER_TRUST=0 instead.
         AgentKind::Grok | AgentKind::Shell => Ok(()),
     };
-    if let Err(e) = result {
+    if let Err(e) = &result {
         eprintln!("trust: could not trust {cwd} for {agent:?}: {e}");
     }
+    result.is_ok()
 }
 
 /// The absolute path as given, and its canonical form (no `\\?\` prefix) when it exists.
