@@ -160,7 +160,7 @@ body {
   inset: 0;
   z-index: 20;
   pointer-events: none;
-  border: 1px solid var(--color-accent);
+  border: 2px solid var(--color-accent);
 }
 
 .pane-outline-top {
