@@ -414,6 +414,7 @@ struct Pipe {
     stdin: Arc<Mutex<ChildStdin>>,
     waiting: Arc<Mutex<HashMap<u64, Sender<Value>>>>,
     stderr: Arc<Mutex<String>>,
+    alive: Arc<AtomicBool>,
 }
 
 impl Pipe {
@@ -435,15 +436,17 @@ impl Pipe {
             stdin: Arc::new(Mutex::new(stdin)),
             waiting: Arc::default(),
             stderr: Arc::default(),
+            alive: alive.clone(),
         };
         let tail = pipe.stderr.clone();
         std::thread::spawn(move || keep_tail(stderr, &tail));
         let (stdin, waiting) = (pipe.stdin.clone(), pipe.waiting.clone());
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
+            // Bytes, not `lines()`: one non-UTF-8 log line would otherwise end the reader and the server.
+            for line in BufReader::new(stdout).split(b'\n') {
                 let Ok(line) = line else { break };
                 // Some servers log on stdout: anything that is not JSON-RPC is skipped.
-                let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+                let Ok(msg) = serde_json::from_slice::<Value>(&line) else {
                     continue;
                 };
                 match (msg.get("id"), msg.get("method")) {
@@ -461,15 +464,23 @@ impl Pipe {
                     _ => {} // notifications (progress, logs, list_changed) are dropped
                 }
             }
+            // Under the lock so a request cannot register after the clear and wait for nothing.
+            let mut waiting = lock(&waiting);
             alive.store(false, Ordering::Relaxed);
-            lock(&waiting).clear(); // wakes pending requests with an error
+            waiting.clear(); // wakes pending requests with an error
         });
         Ok(pipe)
     }
 
     fn request(&self, id: u64, msg: &Value, timeout: Duration) -> Result<Value, String> {
         let (tx, rx) = channel();
-        lock(&self.waiting).insert(id, tx);
+        {
+            let mut waiting = lock(&self.waiting);
+            if !self.alive.load(Ordering::Relaxed) {
+                return Err("the MCP server stopped".into());
+            }
+            waiting.insert(id, tx);
+        }
         let reply = write_line(&self.stdin, msg).and_then(|()| {
             rx.recv_timeout(timeout).map_err(|e| match e {
                 RecvTimeoutError::Timeout => "the MCP server did not answer in time".to_owned(),
@@ -752,5 +763,49 @@ mod tests {
         assert_eq!(up.init["serverInfo"]["name"], "t");
         let reply = up.request("tools/list", None, INIT_TIMEOUT).unwrap();
         assert_eq!(reply["result"]["tools"].as_array().unwrap().len(), 2);
+    }
+
+    /// Two agents with the same id, a slow and a fast request, junk and a server request on stdout,
+    /// then a crash mid-request and a restart. No `"`, `%` in the script (cmd.exe line).
+    #[test]
+    fn concurrent_agents_share_one_server() {
+        let script = r#"const w=m=>process.stdout.write(JSON.stringify(m)+'\n'); require('readline').createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(m.id===undefined||!m.method)return;if(m.method==='initialize')return w({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2025-06-18',capabilities:{},serverInfo:{name:'c',version:'1'}}});if(m.method==='die')process.exit(1);process.stdout.write(Buffer.from([255,10]));w({jsonrpc:'2.0',id:'s'+m.id,method:'roots/list'});setTimeout(()=>w({jsonrpc:'2.0',id:m.id,result:m.params}),m.params.delay)})"#;
+        let name = "hub-concurrency-test";
+        lock(&SERVERS).push(HubServer {
+            name: name.into(),
+            command: "node".into(),
+            args: vec!["-e".into(), script.into()],
+            env: HashMap::from([("PATH".into(), short_path())]),
+            ..Default::default()
+        });
+        let call = |delay: u64, tag: &str| {
+            let msg = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": { "delay": delay, "tag": tag } });
+            handle(name, &msg).unwrap()
+        };
+        assert_eq!(call(0, "warm")["result"]["tag"], "warm"); // starts the server
+        let started = std::time::Instant::now();
+        let slow = std::thread::spawn(move || (call(1500, "slow"), started.elapsed()));
+        std::thread::sleep(Duration::from_millis(100));
+        let fast = call(0, "fast");
+        let fast_time = started.elapsed();
+        let (slow, slow_time) = slow.join().unwrap();
+        assert_eq!(
+            (&fast["id"], &fast["result"]["tag"]),
+            (&json!(1), &json!("fast"))
+        );
+        assert_eq!(
+            (&slow["id"], &slow["result"]["tag"]),
+            (&json!(1), &json!("slow"))
+        );
+        assert!(
+            fast_time < Duration::from_millis(1000),
+            "fast waited on slow"
+        );
+        assert!(slow_time >= Duration::from_millis(1500));
+
+        let die = json!({ "jsonrpc": "2.0", "id": 9, "method": "die" });
+        assert!(handle(name, &die).unwrap()["error"].is_object());
+        assert_eq!(call(0, "again")["result"]["tag"], "again"); // restarted
+        lock(&RUNNING).remove(name);
     }
 }

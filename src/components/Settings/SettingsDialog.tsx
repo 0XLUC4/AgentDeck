@@ -169,7 +169,6 @@ function Notifications({ s, save }: { s: Settings; save: Save }) {
       </Row>
       <SpeechRows s={s} save={save} />
       <PhoneRow s={s} save={save} />
-      <BudgetRows s={s} save={save} />
     </Section>
   );
 }
@@ -313,6 +312,18 @@ function Agents({ s, save }: { s: Settings; save: Save }) {
           onCommit={(v) => save(updateSettings({ basePort: v }))}
         />
       </Row>
+      <Row
+        label="Continue after a rate limit"
+        hint={'Sends "continue" to an agent stopped by a rate limit, after this many minutes'}
+      >
+        <NumberField
+          label="Minutes before continuing after a rate limit"
+          value={s.retryRateLimitMinutes}
+          max={600}
+          onCommit={(v) => save(updateSettings({ retryRateLimitMinutes: v }))}
+        />
+      </Row>
+      <BudgetRows s={s} save={save} />
       <AutoAllowRows s={s} save={save} />
       <p className="pb-2 text-xs text-subtle">Values prefilled in "Add agent".</p>
       {AGENT_KINDS.map((kind) => {

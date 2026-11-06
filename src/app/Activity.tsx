@@ -172,7 +172,11 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
       <div className="relative flex min-h-0 flex-1 flex-col border-t border-line">
         {detail && <TaskDetail item={detail} onJump={() => jumpTo(detail)} onClose={() => setDetailId(null)} />}
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-          {groups.length === 0 && <p className="px-3 py-4 text-xs text-subtle">No agents running.</p>}
+          {groups.length === 0 && (
+            <p className="px-3 py-4 text-xs text-subtle">
+              No agents running. Add one with the + in the session bar, or Ctrl+K.
+            </p>
+          )}
           {groups.map((group) => (
             <section key={group.key} aria-label={GROUP_LABEL[group.key]}>
               <h3 className="flex items-center border-b border-line px-3 pt-3 pb-1 text-xs text-subtle">

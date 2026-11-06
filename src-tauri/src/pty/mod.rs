@@ -197,6 +197,12 @@ pub fn spawn_pane(
     if let Some((key, value)) = crate::mcp::hub::agent_env(agent) {
         cmd.env(key, value);
     }
+    if agent == AgentKind::Gemini
+        && let Ok(data) = app.path().app_data_dir()
+        && let Some((key, path)) = agents::gemini_env(&data, &state.hooks)
+    {
+        cmd.env(key, path);
+    }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     #[cfg(windows)]

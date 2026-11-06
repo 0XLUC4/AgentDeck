@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, Ref } from "react";
 
 interface Props extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> {
   icon: LucideIcon;
@@ -9,6 +9,7 @@ interface Props extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"
   hint?: string;
   tone?: "default" | "danger";
   size?: "sm" | "md";
+  ref?: Ref<HTMLButtonElement>;
 }
 
 const TONE = {

@@ -21,6 +21,10 @@ export interface PaneSpec {
   browser?: boolean;
   /** Claude conversation to continue on the next spawn (restore, reopened session). */
   resumeId?: string;
+  /** Color tag ("#rrggbb") to tell same-agent panes apart. */
+  color?: string;
+  /** PORT given to the agent (settings.basePort + n): kept so an adopted process keeps its slot. */
+  port?: number;
 }
 
 export interface Pane extends PaneSpec {
@@ -165,6 +169,8 @@ export const toSpec = ({
   orchestrator,
   browser,
   resumeId,
+  color,
+  port,
 }: Pane): PaneSpec => ({
   id,
   agent,
@@ -177,6 +183,8 @@ export const toSpec = ({
   ...(orchestrator ? { orchestrator } : {}),
   ...(browser ? { browser } : {}),
   ...(resumeId ? { resumeId } : {}),
+  ...(color ? { color } : {}),
+  ...(port ? { port } : {}),
 });
 
 export const newTab = (name: string, workspaceId: string, layout: SerializedDockview | null = null): Tab => ({
