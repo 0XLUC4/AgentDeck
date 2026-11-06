@@ -52,19 +52,24 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
         addon.onContextLoss(() => {
           addon.dispose(); // xterm falls back to the DOM renderer
           if (webgl === addon) webgl = null;
+          repaintAll();
         });
         term.loadAddon(addon);
         webgl = addon;
+        // A fresh renderer only paints what is written next: redraw the screen already there.
+        repaintAll();
       } catch (err) {
         webglBroken = true;
         console.warn("WebGL unavailable, using DOM renderer", err);
       }
     };
+    const repaintAll = () => term.refresh(0, term.rows - 1);
     const releaseWebgl = () => {
       clearTimeout(releaseTimer);
       releaseTimer = setTimeout(() => {
         webgl?.dispose();
         webgl = null;
+        repaintAll();
       }, WEBGL_RELEASE_MS);
     };
     // Off-screen tabs skip reflows (window drags would otherwise resize every terminal); refit on return.
@@ -74,6 +79,7 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
       if (onScreen) {
         enableWebgl();
         refit();
+        repaintAll();
       } else releaseWebgl();
     });
     visibility.observe(host);

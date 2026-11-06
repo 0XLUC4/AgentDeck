@@ -69,14 +69,14 @@ function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-gutter p-6">
       <div className="flex max-w-sm flex-col items-center gap-5 text-center">
         <div className="flex gap-3 opacity-80" aria-hidden="true">
-          {(["claude", "codex", "gemini", "grok", "shell"] as const).map((kind) => (
+          {(["claude", "codex", "gemini", "grok", "opencode", "shell"] as const).map((kind) => (
             <AgentLogo key={kind} kind={kind} size={20} />
           ))}
         </div>
         <div className="flex flex-col gap-1.5">
           <h2 className="text-[15px] font-medium text-fg">Empty session</h2>
           <p className="text-muted">
-            Start Claude Code, Codex, Gemini CLI, Grok Build or a shell
+            Start Claude Code, Codex, Gemini CLI, Grok Build, OpenCode or a shell
             {workspace.path ? (
               <>
                 {" "}

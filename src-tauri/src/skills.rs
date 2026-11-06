@@ -40,16 +40,25 @@ fn config_dir(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Codex => Ok(".codex"),
         AgentKind::Gemini => Ok(".gemini"),
         AgentKind::Grok => Ok(".grok"),
+        AgentKind::OpenCode => Ok(".opencode"),
         AgentKind::Shell => Err("a shell has no skills or notes".into()),
     }
 }
 
 /// Skill folders the agent reads, per scope; the first of each scope is where installs go.
+/// The agent's config folder under home: `~/.claude` etc., but `~/.config/opencode` for OpenCode.
+fn user_dir(agent: AgentKind, home: &Path) -> Result<PathBuf, String> {
+    Ok(match agent {
+        AgentKind::OpenCode => home.join(".config").join("opencode"),
+        _ => home.join(config_dir(agent)?),
+    })
+}
+
 fn skill_roots(agent: AgentKind, cwd: &Path) -> Result<Vec<(&'static str, PathBuf)>, String> {
     let home = home()?;
     let dir = config_dir(agent)?;
     let mut roots = vec![
-        ("user", home.join(dir).join("skills")),
+        ("user", user_dir(agent, &home)?.join("skills")),
         ("project", cwd.join(dir).join("skills")),
     ];
     // Codex and Gemini also read the shared `.agents/skills` folders.
@@ -170,14 +179,16 @@ fn markdown_files(dir: &Path, label: &str, out: &mut Vec<NoteFile>) {
 // shortcut: Grok's per-workspace memory folder is a hash we can't derive, so only its global memory is listed.
 fn list_notes(agent: AgentKind, cwd: &Path) -> Result<Vec<NoteFile>, String> {
     let home = home()?;
-    let dir = config_dir(agent)?;
     let file = match agent {
         AgentKind::Claude => "CLAUDE.md",
         AgentKind::Gemini => "GEMINI.md",
         _ => "AGENTS.md",
     };
     let mut notes: Vec<NoteFile> = [
-        ("Instructions (all projects)", home.join(dir).join(file)),
+        (
+            "Instructions (all projects)",
+            user_dir(agent, &home)?.join(file),
+        ),
         ("Instructions (project)", cwd.join(file)),
     ]
     .into_iter()

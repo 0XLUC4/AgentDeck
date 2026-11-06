@@ -33,6 +33,7 @@
   --color-agent-codex: oklch(0.86 0 0);
   --color-agent-gemini: #8e75b2;
   --color-agent-grok: oklch(0.9 0 0);
+  --color-agent-opencode: oklch(0.84 0 0);
   --color-agent-shell: oklch(0.76 0 0);
 
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
@@ -72,6 +73,7 @@
 
   --color-agent-codex: oklch(0.3 0 0);
   --color-agent-grok: oklch(0.22 0 0);
+  --color-agent-opencode: oklch(0.3 0 0);
   --color-agent-shell: oklch(0.4 0 0);
 }
 
@@ -154,13 +156,15 @@ body {
   }
 }
 
-/* Working agent (WorkingOutline.tsx): one clean white line around the whole pane, in two halves. */
+/* Working agent (WorkingOutline.tsx): a soft line around the whole pane (two halves that meet) and a light
+   sweeping along the top. Only transform animates (composited). */
 .pane-outline {
   position: absolute;
   inset: 0;
   z-index: 20;
   pointer-events: none;
-  border: 2px solid color-mix(in oklch, var(--color-accent) 45%, transparent);
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--color-accent) 28%, transparent);
 }
 
 .pane-outline-top {
@@ -168,9 +172,35 @@ body {
   border-radius: 13px 13px 0 0;
 }
 
+.pane-outline-top::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 1.5px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklch, var(--color-accent) 75%, transparent),
+    transparent
+  );
+  animation: pane-sweep 2.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform;
+}
+
 .pane-outline-body {
   border-top: 0;
   border-radius: 0 0 13px 13px;
+}
+
+@keyframes pane-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
 }
 
 /* Pane you are talking to (VoiceGlow.tsx): a comet of light runs around the border while you speak, the glow
@@ -251,6 +281,9 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .pane-outline-top::after {
+    display: none;
+  }
   .voice-glow::before {
     animation: none;
   }
@@ -295,7 +328,8 @@ body {
 .dockview-theme-agentdeck .dv-groupview {
   border-radius: 14px;
   overflow: hidden;
-  border: 1px solid var(--color-line);
+  /* No resting border: next to the gap it read as a line between panes. States below color it. */
+  border: 1px solid transparent;
   transition:
     border-color 150ms,
     box-shadow 150ms;

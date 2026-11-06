@@ -1,27 +1,30 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   AppWindow,
+  CloudDownload,
   Code2,
   Folder,
   FolderOpen,
   GitBranch,
+  Lock,
   type LucideIcon,
   RefreshCw,
   TriangleAlert,
   X,
 } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
-import { inspectFolder, listOpenProjects } from "../../lib/ipc";
-import type { FolderInfo, OpenProject } from "../../lib/types";
+import { ghListRepos, gitClone, inspectFolder, listOpenProjects } from "../../lib/ipc";
+import type { FolderInfo, GhRepo, OpenProject } from "../../lib/types";
 import { deck, folderName, useDeck, workspaceForPath } from "../../store/deck";
 import { IconButton } from "../IconButton/IconButton";
 
-type Source = "apps" | "git" | "folder";
+type Source = "apps" | "git" | "folder" | "clone";
 
 const SOURCES: { id: Source; label: string; icon: LucideIcon }[] = [
   { id: "apps", label: "Open app", icon: AppWindow },
   { id: "git", label: "Git project", icon: GitBranch },
   { id: "folder", label: "Existing folder", icon: Folder },
+  { id: "clone", label: "Clone from GitHub", icon: CloudDownload },
 ];
 
 /** What will be linked. `git` is undefined when unknown or not a repository. */
@@ -236,6 +239,139 @@ function FolderSource({
   );
 }
 
+const FIELD =
+  "h-9 rounded-md border border-line bg-base px-2.5 text-fg outline-none transition-colors duration-150 placeholder:text-subtle hover:border-line-strong focus:border-accent disabled:opacity-50";
+const OUTLINE_BTN =
+  "inline-flex h-9 w-fit shrink-0 items-center gap-2 rounded-md border border-line px-3 text-fg transition-colors duration-150 hover:bg-hover disabled:opacity-50";
+
+/** Lists the user's GitHub repos (gh CLI), clones the chosen one under a picked folder, then offers it for linking. */
+function CloneSource({ choice, onPick }: { choice: Choice | null; onPick: (c: Choice | null) => void }) {
+  const [repos, setRepos] = useState<GhRepo[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [repo, setRepo] = useState("");
+  const [parent, setParent] = useState<string | null>(null);
+  const [cloning, setCloning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    ghListRepos().then(setRepos, (err) => {
+      setRepos([]);
+      setListError(errorMessage(err));
+    });
+  }, []);
+
+  const query = repo.trim().toLowerCase();
+  const shown = (repos ?? []).filter((r) => r.nameWithOwner.toLowerCase().includes(query)).slice(0, 50);
+
+  async function browse() {
+    try {
+      const dir = await openDialog({ directory: true, title: "Clone into folder" });
+      if (typeof dir === "string") setParent(dir);
+    } catch (err) {
+      setError(`Could not pick folder: ${errorMessage(err)}`);
+    }
+  }
+
+  async function clone() {
+    if (!parent || !repo.trim()) return;
+    setCloning(true);
+    setError(null);
+    onPick(null);
+    try {
+      const path = await gitClone(repo.trim(), parent);
+      const info = await inspectFolder(path).catch(() => null);
+      onPick({
+        path,
+        name: info?.name ?? folderName(path),
+        git: { branch: info?.branch ?? null, remote: info?.remote ?? null },
+      });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setCloning(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <input
+        value={repo}
+        onChange={(e) => setRepo(e.target.value)}
+        disabled={cloning}
+        aria-label="Repository"
+        placeholder="Search your repos, or type owner/name or a git URL"
+        className={FIELD}
+      />
+      <div className="scroll-thin max-h-40 overflow-y-auto" aria-busy={repos === null}>
+        {repos === null ? (
+          <p className="py-3 text-xs text-subtle">Loading your repositories…</p>
+        ) : listError ? (
+          <p role="alert" className="flex items-start gap-2 py-2 text-xs text-muted">
+            <TriangleAlert size={14} strokeWidth={1.5} className="mt-px shrink-0 text-wait" aria-hidden="true" />
+            <span>Repository list unavailable ({listError}). You can still type owner/name or a git URL.</span>
+          </p>
+        ) : shown.length === 0 ? (
+          <p className="py-3 text-xs text-subtle">No matching repository.</p>
+        ) : (
+          <ul className="flex flex-col">
+            {shown.map((r) => (
+              <li key={r.nameWithOwner}>
+                <button
+                  type="button"
+                  aria-pressed={repo === r.nameWithOwner}
+                  disabled={cloning}
+                  onClick={() => setRepo(r.nameWithOwner)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover aria-pressed:bg-raised"
+                >
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate font-medium text-fg">{r.nameWithOwner}</span>
+                    {r.description && <span className="truncate text-xs text-subtle">{r.description}</span>}
+                  </span>
+                  {r.isPrivate && (
+                    <Lock size={13} strokeWidth={1.5} className="shrink-0 text-subtle" aria-label="Private" />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={browse} disabled={cloning} className={OUTLINE_BTN}>
+          <FolderOpen size={16} strokeWidth={1.5} aria-hidden="true" />
+          {parent ? "Change folder…" : "Clone into…"}
+        </button>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted" title={parent ?? undefined}>
+          {parent ?? "No destination folder"}
+        </span>
+        <button
+          type="button"
+          onClick={() => void clone()}
+          disabled={cloning || !parent || !repo.trim()}
+          className={OUTLINE_BTN}
+        >
+          <CloudDownload size={16} strokeWidth={1.5} aria-hidden="true" />
+          {cloning ? "Cloning…" : "Clone"}
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="text-xs whitespace-pre-wrap text-bad">
+          {error}
+        </p>
+      )}
+      {choice && (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-ok">Cloned. Link it below.</span>
+          <span className="truncate font-mono text-xs text-muted" title={choice.path}>
+            {choice.path}
+          </span>
+          {choice.git && <GitLine branch={choice.git.branch} remote={choice.git.remote} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** "Link workspace": pick a project from an open app, a Git repository or any folder, then name it. */
 export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -294,7 +430,7 @@ export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
           <IconButton icon={X} label="Close" onClick={onClose} />
         </div>
 
-        <div role="tablist" aria-label="Source" className="grid grid-cols-3 gap-1 rounded-lg bg-base p-1">
+        <div role="tablist" aria-label="Source" className="grid grid-cols-4 gap-1 rounded-lg bg-base p-1">
           {SOURCES.map(({ id, label, icon: Icon }, i) => (
             <button
               key={id}
@@ -321,7 +457,8 @@ export function LinkWorkspaceDialog({ onClose }: { onClose: () => void }) {
 
         <div id="link-ws-panel" role="tabpanel" aria-labelledby={`link-ws-tab-${source}`} className="min-h-28">
           {source === "apps" && <OpenApps selected={choice?.path ?? null} onPick={pick} />}
-          {source !== "apps" && (
+          {source === "clone" && <CloneSource choice={choice} onPick={pick} />}
+          {(source === "git" || source === "folder") && (
             <FolderSource key={source} requireGit={source === "git"} choice={choice} onPick={pick} />
           )}
         </div>

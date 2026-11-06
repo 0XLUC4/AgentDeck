@@ -50,7 +50,7 @@ interface Runtime {
   repaintUntil?: number;
 }
 
-/** A TUI repaints right after a click or a resize: that output must not light the pane up as busy. */
+/** A TUI repaints right after a click, a resize or a keystroke: that output must not light the pane up as busy. */
 const REPAINT_MS = 600;
 
 const runtimes = new Map<string, Runtime>();
@@ -369,6 +369,9 @@ export function sendInput(id: string, data: string): void {
     if (data === "r" || data === "R") void restartPane(id);
     return;
   }
+  // The echo of what the user types is not the agent working.
+  const rt = runtimes.get(id);
+  if (rt) rt.repaintUntil = Date.now() + REPAINT_MS;
   writeToPane(id, data).catch((err) => console.warn("write_to_pane failed", err));
 }
 

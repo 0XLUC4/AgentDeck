@@ -56,6 +56,16 @@ pub struct GitStatus {
     pub files: Vec<FileChange>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Upstream {
+    /// e.g. `origin/main`; `None` when the branch has no upstream (or HEAD is detached).
+    pub name: Option<String>,
+    /// Counts vs the upstream as of the last fetch.
+    pub ahead: u32,
+    pub behind: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Checkpoint {
@@ -486,6 +496,156 @@ fn gh(root: &Path, args: &[&str]) -> Result<String, String> {
     ))
 }
 
+/// Parses `%(upstream:track,nobracket)`: "ahead 1, behind 2", "ahead 1", "gone" or "".
+fn parse_track(track: &str) -> (u32, u32) {
+    let (mut ahead, mut behind) = (0, 0);
+    for part in track.split(", ") {
+        match part.split_once(' ') {
+            Some(("ahead", n)) => ahead = n.parse().unwrap_or(0),
+            Some(("behind", n)) => behind = n.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    (ahead, behind)
+}
+
+/// Upstream of the current branch and the counts since the last fetch.
+fn upstream(cwd: &str) -> Result<Upstream, String> {
+    let root = repo_root(cwd)?;
+    let Some(branch) = current_branch(&root) else {
+        return Ok(Upstream::default());
+    };
+    let out = run_trim(
+        &root,
+        &[
+            "for-each-ref",
+            "--format=%(upstream:short)%00%(upstream:track,nobracket)",
+            &format!("refs/heads/{branch}"),
+        ],
+    )?;
+    let (name, track) = out.split_once('\0').unwrap_or((&out, ""));
+    let (ahead, behind) = parse_track(track);
+    Ok(Upstream {
+        name: (!name.is_empty()).then(|| name.to_string()),
+        ahead,
+        behind,
+    })
+}
+
+fn pull(cwd: &str) -> Result<String, String> {
+    let root = repo_root(cwd)?;
+    let out = run_trim(&root, &["pull", "--ff-only"])?;
+    Ok(out.lines().last().unwrap_or("Pulled.").trim().to_string())
+}
+
+/// `git push`, or `git push -u origin <branch>` when the branch has no upstream yet.
+fn push(cwd: &str) -> Result<String, String> {
+    let root = repo_root(cwd)?;
+    let branch = current_branch(&root).ok_or("detached HEAD: check out a branch to push")?;
+    match upstream(cwd)?.name {
+        Some(up) => {
+            run(&root, &["push"], None)?;
+            Ok(format!("Pushed {branch} to {up}."))
+        }
+        None => {
+            run(&root, &["push", "-u", "origin", &branch], None)?;
+            Ok(format!(
+                "Pushed {branch} to origin/{branch} (upstream set)."
+            ))
+        }
+    }
+}
+
+/// Fails with a clear hint when the GitHub CLI is missing or logged out.
+fn gh_ready(dir: &Path) -> Result<(), String> {
+    gh(dir, &["auth", "status"]).map(drop).map_err(|e| {
+        if e.starts_with("cannot run gh") {
+            e
+        } else {
+            "the GitHub CLI is not logged in: run `gh auth login` in a terminal".into()
+        }
+    })
+}
+
+/// The user's GitHub repositories (`gh repo list` JSON, passed through).
+fn gh_repo_list() -> Result<serde_json::Value, String> {
+    let dir = std::env::temp_dir();
+    gh_ready(&dir)?;
+    let out = gh(
+        &dir,
+        &[
+            "repo",
+            "list",
+            "--limit",
+            "100",
+            "--json",
+            "nameWithOwner,description,isPrivate,updatedAt",
+        ],
+    )?;
+    serde_json::from_str(&out).map_err(|e| format!("bad gh output: {e}"))
+}
+
+fn is_name_part(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(['-', '.'])
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+/// Validates `owner/name` or an https/ssh git URL; returns (is_url, target folder name).
+fn clone_target(repo: &str) -> Result<(bool, String), String> {
+    let bad = || format!("not a GitHub repository (owner/name) or git URL: {repo}");
+    if repo.is_empty()
+        || repo.len() > 512
+        || repo.contains(|c: char| c.is_whitespace() || c.is_control())
+    {
+        return Err(bad());
+    }
+    let is_url = ["https://", "ssh://", "git@"]
+        .iter()
+        .any(|p| repo.starts_with(p));
+    if !is_url {
+        let (owner, name) = repo.split_once('/').ok_or_else(bad)?;
+        if !is_name_part(owner) || !is_name_part(name) {
+            return Err(bad());
+        }
+    }
+    let last = repo
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or("");
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if !is_name_part(name) {
+        return Err(bad());
+    }
+    Ok((is_url, name.to_string()))
+}
+
+/// Clones `repo` into `<parent>/<repo name>`; returns the new folder's path.
+fn clone_repo(repo: &str, parent: &str) -> Result<String, String> {
+    let repo = repo.trim();
+    let (is_url, name) = clone_target(repo)?;
+    let parent = Path::new(parent);
+    if !parent.is_dir() {
+        return Err(format!(
+            "destination folder not found: {}",
+            parent.display()
+        ));
+    }
+    let dest = parent.join(&name);
+    if dest.exists() {
+        return Err(format!("{} already exists", dest.display()));
+    }
+    if is_url {
+        run(parent, &["clone", "--", repo, &name], None)?;
+    } else {
+        gh_ready(parent)?;
+        gh(parent, &["repo", "clone", repo, &name])?;
+    }
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 fn remove_worktree(cwd: &str) -> Result<(), String> {
     let root = repo_root(cwd)?;
     let (branch, main) = agent_worktree(&root)?;
@@ -696,6 +856,37 @@ pub fn git_create_pr(cwd: String, title: String, body: String) -> Result<String,
 }
 
 #[tauri::command(async)]
+pub fn git_upstream(cwd: String) -> Result<Upstream, String> {
+    upstream(&cwd)
+}
+
+/// `git pull --ff-only`; returns git's last output line.
+#[tauri::command(async)]
+pub fn git_pull(cwd: String) -> Result<String, String> {
+    let res = pull(&cwd);
+    invalidate_status();
+    res
+}
+
+#[tauri::command(async)]
+pub fn git_push(cwd: String) -> Result<String, String> {
+    let res = push(&cwd);
+    invalidate_status();
+    res
+}
+
+#[tauri::command(async)]
+pub fn gh_list_repos() -> Result<serde_json::Value, String> {
+    gh_repo_list()
+}
+
+/// Clones a GitHub repo (`owner/name`, via gh) or a git URL into `parent`; returns the new folder.
+#[tauri::command(async)]
+pub fn git_clone(repo: String, parent: String) -> Result<String, String> {
+    clone_repo(&repo, &parent)
+}
+
+#[tauri::command(async)]
 pub fn git_remove_worktree(cwd: String) -> Result<(), String> {
     let res = remove_worktree(&cwd);
     invalidate_status();
@@ -808,6 +999,78 @@ mod tests {
         assert_eq!(n["img.png"], (None, None));
         assert!(is_hex_sha(EMPTY_TREE) && !is_hex_sha("HEAD") && !is_hex_sha("--x"));
         assert!(check_pane_id("abc-123").is_ok() && check_pane_id("../x").is_err());
+    }
+
+    #[test]
+    fn track_and_clone_target() {
+        assert_eq!(parse_track("ahead 1, behind 2"), (1, 2));
+        assert_eq!(parse_track("behind 3"), (0, 3));
+        assert_eq!(parse_track("gone"), (0, 0));
+        assert_eq!(parse_track(""), (0, 0));
+        assert_eq!(
+            clone_target("me/my.repo").unwrap(),
+            (false, "my.repo".into())
+        );
+        assert_eq!(
+            clone_target("https://github.com/me/r.git").unwrap(),
+            (true, "r".into())
+        );
+        assert_eq!(
+            clone_target("git@github.com:me/r.git").unwrap(),
+            (true, "r".into())
+        );
+        for bad in [
+            "",
+            "me",
+            "-x/y",
+            "me/..",
+            "me/r; rm",
+            "a/b/c",
+            "file:///etc",
+            "me/r\n",
+        ] {
+            assert!(clone_target(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn push_sets_upstream_then_pull_fast_forwards() {
+        let Some((base, repo)) = temp_repo() else {
+            return;
+        };
+        let remote = base.join("remote.git");
+        run(
+            &base,
+            &["init", "-q", "--bare", "-b", "main", &s(&remote)],
+            None,
+        )
+        .unwrap();
+        run(&repo, &["remote", "add", "origin", &s(&remote)], None).unwrap();
+        assert!(upstream(&s(&repo)).unwrap().name.is_none());
+        assert!(push(&s(&repo)).unwrap().contains("upstream set"));
+        assert_eq!(
+            upstream(&s(&repo)).unwrap().name.as_deref(),
+            Some("origin/main")
+        );
+        commit_file(&repo, "b.txt");
+        assert_eq!(upstream(&s(&repo)).unwrap().ahead, 1);
+        push(&s(&repo)).unwrap();
+        assert_eq!(upstream(&s(&repo)).unwrap().ahead, 0);
+
+        let other = base.join("other");
+        run(&base, &["clone", "-q", &s(&remote), &s(&other)], None).unwrap();
+        run(&other, &["config", "user.name", "t"], None).unwrap();
+        run(&other, &["config", "user.email", "t@t"], None).unwrap();
+        commit_file(&other, "c.txt");
+        push(&s(&other)).unwrap();
+        pull(&s(&repo)).unwrap();
+        assert!(repo.join("c.txt").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn commit_file(repo: &Path, name: &str) {
+        std::fs::write(repo.join(name), "x\n").unwrap();
+        commit(&s(repo), name).unwrap();
     }
 
     #[test]

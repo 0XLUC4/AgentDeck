@@ -5,7 +5,7 @@
 <h1 align="center">AgentDeck</h1>
 
 <p align="center">
-  A desktop dashboard to run Claude Code, Codex, Gemini CLI and Grok Build side by side,
+  A desktop dashboard to run Claude Code, Codex, Gemini CLI, Grok Build and OpenCode side by side,
   see what each one is doing, and talk to them with your voice.
 </p>
 
@@ -24,7 +24,7 @@ tells you which one needs you.
 ## Features
 
 **Agents and terminals**
-- Real terminals (ConPTY on Windows) for Claude Code, Codex, Gemini CLI, Grok Build or a plain shell
+- Real terminals (ConPTY on Windows) for Claude Code, Codex, Gemini CLI, Grok Build, OpenCode or a plain shell
 - Panes arrange themselves in a grid (2 side by side, 3 as 2 + 1, 4 as 2x2, 6 as 3x2...)
 - Zoom, maximize, detach a pane into its own window, restart, interrupt
 - Optional git worktree per agent so they don't step on each other
@@ -76,8 +76,8 @@ the installer isn't code-signed yet: click "More info" then "Run anyway".
 You need at least one agent CLI on your PATH:
 [Claude Code](https://code.claude.com/docs/en/setup),
 [Codex](https://github.com/openai/codex),
-[Gemini CLI](https://github.com/google-gemini/gemini-cli) or
-Grok Build.
+[Gemini CLI](https://github.com/google-gemini/gemini-cli),
+Grok Build or [OpenCode](https://opencode.ai/docs/).
 
 ## Shortcuts
 

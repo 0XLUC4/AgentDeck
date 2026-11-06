@@ -13,6 +13,7 @@ export const AGENT_ALIASES: Record<AgentKind, string[]> = {
   codex: ["codex", "codecs", "codec", "kodex", "codexe", "code x"],
   gemini: ["gemini", "gemini cli", "gemeni", "jemini", "jiminy", "gemmini"],
   grok: ["grok", "groc", "grock", "groque", "grok build"],
+  opencode: ["opencode", "open code", "open-code", "opène code"],
   shell: ["shell", "chell", "terminal", "le shell", "le terminal"],
 };
 

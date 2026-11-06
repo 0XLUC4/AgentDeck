@@ -1,4 +1,4 @@
-//! Agent definitions (Claude Code, Codex, Gemini CLI), install detection,
+//! Agent definitions (Claude Code, Codex, Gemini CLI, Grok, OpenCode), install detection,
 //! git worktrees and hook configuration.
 
 use std::path::{Path, PathBuf};
@@ -17,6 +17,8 @@ pub enum AgentKind {
     Codex,
     Gemini,
     Grok,
+    #[serde(rename = "opencode")]
+    OpenCode,
     Shell,
 }
 
@@ -28,6 +30,7 @@ impl AgentKind {
             Self::Codex => Some("codex"),
             Self::Gemini => Some("gemini"),
             Self::Grok => Some("grok"),
+            Self::OpenCode => Some("opencode"),
             Self::Shell => None,
         }
     }
@@ -38,6 +41,7 @@ impl AgentKind {
             Self::Codex => Some("https://github.com/openai/codex#quickstart"),
             Self::Gemini => Some("https://github.com/google-gemini/gemini-cli#-installation"),
             Self::Grok => Some("https://docs.x.ai/build/overview"),
+            Self::OpenCode => Some("https://opencode.ai/docs/"),
             Self::Shell => None,
         }
     }
@@ -60,6 +64,7 @@ pub fn detect_agents() -> Vec<AgentInfo> {
         AgentKind::Codex,
         AgentKind::Gemini,
         AgentKind::Grok,
+        AgentKind::OpenCode,
         AgentKind::Shell,
     ]
     .into_iter()
