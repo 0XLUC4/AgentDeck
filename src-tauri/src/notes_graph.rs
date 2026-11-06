@@ -107,6 +107,8 @@ fn build(notes: &[(String, String)]) -> NotesGraph {
     }
 }
 
+const MAX_NOTE_BYTES: u64 = 1024 * 1024;
+
 /// Notes and their links for the whole workspace folder (same skipped folders and cap as the assets list).
 #[tauri::command(async)]
 pub fn notes_graph(cwd: String) -> Result<NotesGraph, String> {
@@ -118,6 +120,8 @@ pub fn notes_graph(cwd: String) -> Result<NotesGraph, String> {
     walk(&root, &root, 0, &["md"], &mut files);
     let notes: Vec<(String, String)> = files
         .iter()
+        // A huge file named .md (a log, a dump) is not a note: skip it instead of loading it whole.
+        .filter(|f| std::fs::metadata(&f.path).is_ok_and(|m| m.len() <= MAX_NOTE_BYTES))
         .filter_map(|f| {
             Some((
                 f.rel.replace('\\', "/"),

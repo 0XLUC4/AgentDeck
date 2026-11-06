@@ -94,17 +94,6 @@ function Tile({ item }: { item: ActivityItem }) {
  */
 export function WallOverlay() {
   const open = useWall((s) => s.open);
-  const allWorkspaces = useWall((s) => s.allWorkspaces);
-  const tabs = useDeck((s) => s.tabs);
-  const workspaces = useDeck((s) => s.workspaces);
-  const panes = useDeck((s) => s.panes);
-  const workspace = useDeck((s) => activeWorkspace(s));
-  const rootRef = useRef<HTMLDivElement>(null);
-  const items = useMemo(
-    () => (open ? wallItems(tabs, workspaces, panes, allWorkspaces ? null : workspace.id) : []),
-    [open, tabs, workspaces, panes, allWorkspaces, workspace.id],
-  );
-
   // Ctrl+Shift+W toggles the wall; capture phase so the terminal never receives it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -117,6 +106,23 @@ export function WallOverlay() {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
+
+  // The tiles subscribe to every pane: mounted only while the wall is open.
+  return open ? <WallView /> : null;
+}
+
+function WallView() {
+  const open = useWall((s) => s.open);
+  const allWorkspaces = useWall((s) => s.allWorkspaces);
+  const tabs = useDeck((s) => s.tabs);
+  const workspaces = useDeck((s) => s.workspaces);
+  const panes = useDeck((s) => s.panes);
+  const workspace = useDeck((s) => activeWorkspace(s));
+  const rootRef = useRef<HTMLDivElement>(null);
+  const items = useMemo(
+    () => (open ? wallItems(tabs, workspaces, panes, allWorkspaces ? null : workspace.id) : []),
+    [open, tabs, workspaces, panes, allWorkspaces, workspace.id],
+  );
 
   // Take focus from the terminal underneath so typing doesn't go to a hidden agent.
   useEffect(() => {

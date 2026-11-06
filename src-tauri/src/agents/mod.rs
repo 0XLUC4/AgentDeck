@@ -253,7 +253,7 @@ pub fn prepare_hooks(kind: AgentKind, cwd: &str, hooks: &HookServer) -> Result<(
 }
 
 /// Removes AgentDeck's hooks from `<cwd>/.claude/settings.local.json` and `<cwd>/.gemini/settings.json`.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn uninstall_hooks(cwd: String) -> Result<(), String> {
     update_settings(&claude_settings(&cwd), strip_claude_hooks)?;
     update_settings(&gemini_settings(&cwd), |s| strip_hooks(s, is_ours_gemini))

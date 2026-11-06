@@ -1,5 +1,6 @@
 import {
   CheckCheck,
+  Copy,
   ExternalLink,
   GitBranch,
   Globe,
@@ -27,6 +28,7 @@ import { deck, FONT_SIZE, folderName, useDeck } from "../../store/deck";
 import { useReviews } from "../../store/review";
 import { closePane, focusPane, interruptPane, isBusy, restartPane } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
+import { spawnAgent } from "../AgentPicker/AgentPicker";
 import { browserPanelId, removeBrowser } from "../Browser/BrowserPanel";
 import { toggleDetached, useDetached } from "../Detached/host";
 import { DiffChip } from "../Git/DiffChip";
@@ -205,7 +207,24 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
                 }}
               />
             )}
-            <IconButton icon={RotateCcw} size="sm" label="Restart" onClick={() => void restartPane(pane.id)} />
+            <IconButton
+              icon={Copy}
+              size="sm"
+              label="Duplicate"
+              hint="Start another agent like this one (same folder, arguments and worktree setting)"
+              onClick={() => spawnAgent(pane.agent, pane.cwd, pane.args, pane.worktree)}
+            />
+            <IconButton
+              icon={RotateCcw}
+              size="sm"
+              label="Restart"
+              hint="Restart the agent in a new conversation"
+              onClick={() => {
+                if (!isBusy(pane.id) || window.confirm(`${agent.name} is still working. Restart anyway?`)) {
+                  void restartPane(pane.id);
+                }
+              }}
+            />
             <IconButton
               icon={ZoomOut}
               size="sm"
