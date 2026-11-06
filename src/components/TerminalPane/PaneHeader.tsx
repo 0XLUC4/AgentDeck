@@ -32,6 +32,7 @@ import { SkillsButton } from "../Skills/SkillsButton";
 import { STATUS } from "../StatusBadge/StatusBadge";
 import { UsageChip } from "../Usage/UsageChip";
 import { PaneMenu } from "./PaneMenu";
+import { VoiceGlow } from "./VoiceGlow";
 import { WorkingOutline } from "./WorkingOutline";
 
 // Diff viewer: loaded on first open, not at startup.
@@ -220,6 +221,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
         onClick={() => confirmClose(pane)}
       />
       <WorkingOutline pane={pane} part="top" />
+      <VoiceGlow paneId={pane.id} part="top" />
       {gitOpen && (
         <Suspense fallback={null}>
           <GitPanel pane={pane} onClose={() => setGitOpen(false)} />

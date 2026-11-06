@@ -66,7 +66,7 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
       )}
       {/* Above the terminal: anything painted on the pane itself ends up behind the terminal's background. */}
       <WorkingOutline pane={pane} part="body" />
-      <VoiceGlow paneId={pane.id} />
+      <VoiceGlow paneId={pane.id} part="body" />
     </section>
   );
 }

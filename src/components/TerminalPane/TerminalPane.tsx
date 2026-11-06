@@ -19,6 +19,8 @@ const THEME = { background: "#100e0c", foreground: "#ebe7e2", cursor: "#f1e7d2",
 const ZOOM_KEYS: Record<string, number | "reset"> = { "=": 1, "+": 1, "-": -1, "0": "reset" };
 /** Grace period before a hidden terminal gives its WebGL context back (quick tab flips keep it). */
 const WEBGL_RELEASE_MS = 10_000;
+/** Away from the window longer than this: the GPU canvas may be gone, rebuild the renderer on return. */
+const AWAY_RESET_MS = 2_000;
 
 /** Attaches an xterm view to an existing pane's output. Never spawns: safe to mount twice. */
 export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: number }) {
@@ -125,7 +127,23 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     viewRef.current = { term, refit };
 
     // WebView2 can drop the WebGL canvas while the window is in the background: repaint on return.
-    const repaint = () => document.visibilityState === "visible" && term.refresh(0, term.rows - 1);
+    // It reports the context loss only later, so the terminal stayed black for a while: after a real absence,
+    // start a fresh WebGL renderer right away instead of waiting for that event.
+    let awaySince = 0;
+    const leave = () => {
+      awaySince ||= Date.now();
+    };
+    const repaint = () => {
+      if (document.visibilityState !== "visible") return leave();
+      const away = awaySince > 0 && Date.now() - awaySince > AWAY_RESET_MS;
+      awaySince = 0;
+      if (away && webgl && onScreen) {
+        webgl.dispose();
+        webgl = null;
+        enableWebgl(); // repaints
+      } else repaintAll();
+    };
+    window.addEventListener("blur", leave);
     window.addEventListener("focus", repaint);
     document.addEventListener("visibilitychange", repaint);
 
@@ -161,6 +179,7 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
 
     return () => {
       viewRef.current = null;
+      window.removeEventListener("blur", leave);
       window.removeEventListener("focus", repaint);
       document.removeEventListener("visibilitychange", repaint);
       host.removeEventListener("paste", onPaste, true);
