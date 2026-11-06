@@ -203,80 +203,58 @@ body {
   }
 }
 
-/* Pane you are talking to (VoiceGlow.tsx): a comet of light runs around the border while you speak, the glow
-   swells with your voice (--voice-level 0..1), spins faster while transcribing, and flashes when the text lands. */
-@property --voice-angle {
-  syntax: "<angle>";
-  initial-value: 0deg;
-  inherits: false;
-}
-
+/* Pane you are talking to (VoiceGlow.tsx): an accent line around the whole pane (header and terminal halves),
+   an inner glow swelling with the voice (--voice-level 0..1, opacity only), a pulse while transcribing and a
+   flash when the text lands. */
 .voice-glow {
   --voice-level: 0;
   position: absolute;
   inset: 0;
-  z-index: 20;
-  border-radius: 0 0 13px 13px;
+  z-index: 21;
   pointer-events: none;
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 55%, transparent);
+  border: 1.5px solid color-mix(in oklch, var(--color-accent) 70%, transparent);
 }
 
-/* Inner glow swelling with the voice: fixed shadow, only its opacity follows --voice-level. */
-.voice-glow::after {
+.voice-glow-top {
+  border-bottom: 0;
+  border-radius: 13px 13px 0 0;
+}
+
+.voice-glow-body {
+  border-top: 0;
+  border-radius: 0 0 13px 13px;
+}
+
+.voice-glow-body::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  box-shadow: inset 0 0 36px color-mix(in oklch, var(--color-accent) 40%, transparent);
-  opacity: calc(0.25 + 0.75 * var(--voice-level));
+  box-shadow: inset 0 0 36px color-mix(in oklch, var(--color-accent) 38%, transparent);
+  opacity: calc(0.2 + 0.8 * var(--voice-level));
   transition: opacity 90ms linear;
 }
 
-.voice-glow::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  padding: 2px;
-  border-radius: inherit;
-  background: conic-gradient(
-    from var(--voice-angle),
-    transparent 0deg 220deg,
-    color-mix(in oklch, var(--color-accent) 40%, transparent) 290deg,
-    var(--color-accent) 350deg,
-    transparent 360deg
-  );
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  filter: drop-shadow(0 0 4px var(--color-accent));
-  animation: voice-orbit 2.6s linear infinite;
-}
-
-.voice-glow-transcribing::before {
-  animation-duration: 0.9s;
+.voice-glow-transcribing {
+  animation: voice-pulse 0.9s ease-in-out infinite;
 }
 
 .voice-glow-sent {
-  animation: voice-sent 900ms ease-out forwards;
+  animation: voice-sent 700ms ease-out forwards;
 }
 
-@keyframes voice-orbit {
-  to {
-    --voice-angle: 360deg;
+@keyframes voice-pulse {
+  50% {
+    opacity: 0.45;
   }
 }
 
 @keyframes voice-sent {
-  0% {
-    box-shadow:
-      inset 0 0 0 2px var(--color-accent),
-      inset 0 0 60px color-mix(in oklch, var(--color-accent) 45%, transparent);
+  from {
+    border-color: var(--color-accent);
   }
-  100% {
-    box-shadow:
-      inset 0 0 0 1px transparent,
-      inset 0 0 0 transparent;
+  to {
+    opacity: 0;
   }
 }
 
@@ -284,7 +262,7 @@ body {
   .pane-outline-top::after {
     display: none;
   }
-  .voice-glow::before {
+  .voice-glow-transcribing {
     animation: none;
   }
   .voice-glow-sent {
@@ -335,13 +313,19 @@ body {
     box-shadow 150ms;
 }
 
-/* Agent status as the pane outline (data-status is set by PanePanel): grey once done, amber while it waits for
-   the user. Working is the .pane-outline overlay. */
-
-.dockview-theme-agentdeck .dv-groupview:has([data-status="done"]) {
-  border-color: var(--color-subtle);
-  box-shadow: 0 0 0 1px var(--color-subtle);
+/* Resize handles and split separators stay invisible even on hover/drag; only the cursor changes. */
+.dockview-theme-agentdeck .dv-split-view-container .dv-sash-container .dv-sash,
+.dockview-theme-agentdeck .dv-split-view-container .dv-sash-container .dv-sash:hover,
+.dockview-theme-agentdeck .dv-split-view-container .dv-sash-container .dv-sash:active {
+  background-color: transparent;
 }
+
+.dockview-theme-agentdeck .dv-split-view-container .dv-view::before {
+  display: none;
+}
+
+/* Agent status as the pane outline (data-status is set by PanePanel): amber while it waits for the user.
+   Working is the .pane-outline overlay; done shows in the header count, not as a line. */
 
 .dockview-theme-agentdeck .dv-groupview:has([data-status="waiting"]) {
   border-color: var(--color-wait);

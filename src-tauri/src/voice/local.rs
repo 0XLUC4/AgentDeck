@@ -163,6 +163,8 @@ fn run(
     language: &str,
     partial: bool,
 ) -> Result<String, String> {
+    static HIGH_QOS: std::sync::Once = std::sync::Once::new();
+    HIGH_QOS.call_once(disable_power_throttling);
     let mut loaded = LOADED.lock().map_err(|e| e.to_string())?;
     if partial && CANCEL_PARTIAL.load(Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -207,6 +209,41 @@ fn run(
         .collect();
     Ok(clean(&text, recorded_secs))
 }
+
+/// Opts the process out of Windows power throttling (EcoQoS): otherwise Windows may run
+/// whisper's threads at low clocks or on efficiency cores while the app is in the background.
+/// Process-wide on purpose: whisper.cpp spawns its own worker threads, which inherit it.
+#[cfg(windows)]
+fn disable_power_throttling() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
+        ProcessPowerThrottling, SetProcessInformation,
+    };
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0, // control bit set, state bit clear: throttling off (HighQoS)
+    };
+    // SAFETY: valid pseudo-handle and a correctly sized struct that outlives the call.
+    let ok = unsafe {
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            (&raw const state).cast(),
+            size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        )
+    };
+    if ok == 0 {
+        eprintln!(
+            "voice: cannot disable power throttling: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn disable_power_throttling() {}
 
 /// 20 ms frames at 16 kHz.
 const FRAME: usize = 320;
@@ -332,6 +369,12 @@ mod tests {
         assert_eq!(audio_ctx(1.2), 256);
         assert_eq!(audio_ctx(5.0), 378);
         assert_eq!(audio_ctx(60.0), 1500);
+    }
+
+    #[test]
+    fn power_throttling_opt_out_is_harmless() {
+        disable_power_throttling();
+        disable_power_throttling();
     }
 
     #[test]

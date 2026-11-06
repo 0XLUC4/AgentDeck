@@ -6,10 +6,10 @@ import { useVoiceActivity, useVoiceTarget } from "../../lib/voiceListener";
 const SENT_FLASH_MS = 900;
 
 /**
- * Neon outline on the pane you are talking to: a light runs around the border while you speak, its glow
- * follows your voice, and the pane flashes once the words land in it. Styles in index.css (.voice-glow).
+ * Outline on the pane you are talking to, header included (two halves, like WorkingOutline): its glow follows
+ * your voice, it pulses while transcribing, and flashes once the words land. Styles in index.css (.voice-glow).
  */
-export function VoiceGlow({ paneId }: { paneId: string }) {
+export function VoiceGlow({ paneId, part }: { paneId: string; part: "top" | "body" }) {
   const target = useVoiceTarget() === paneId;
   const state = useVoiceActivity((s) => s.state);
   const sentAt = useVoiceActivity((s) => (s.sentTo === paneId ? s.sentAt : 0));
@@ -43,7 +43,7 @@ export function VoiceGlow({ paneId }: { paneId: string }) {
     <div
       ref={ref}
       aria-hidden="true"
-      className={`voice-glow ${live ? `voice-glow-${state}` : ""} ${flash ? "voice-glow-sent" : ""}`}
+      className={`voice-glow voice-glow-${part} ${live ? `voice-glow-${state}` : ""} ${flash ? "voice-glow-sent" : ""}`}
     />
   );
 }

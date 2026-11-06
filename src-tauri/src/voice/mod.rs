@@ -307,6 +307,9 @@ fn start_partials(app: &AppHandle, session: u64) {
     local::allow_partials();
     let app = app.clone();
     std::thread::spawn(move || {
+        // Warm-up on key-down: ramps the CPU clocks and pages the model back in while the user
+        // starts speaking, instead of on the first real pass. Result discarded; aborted by stop().
+        let _ = local::transcribe_partial(&model, &[], &config.language);
         loop {
             std::thread::sleep(PARTIAL_EVERY);
             // Ends with the recording: stop() takes the capture out of the slot.
