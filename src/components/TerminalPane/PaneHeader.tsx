@@ -37,6 +37,7 @@ import { NotesButton } from "../Skills/NotesButton";
 import { SkillsButton } from "../Skills/SkillsButton";
 import { STATUS } from "../StatusBadge/StatusBadge";
 import { UsageChip } from "../Usage/UsageChip";
+import { WorkingOutline } from "./WorkingOutline";
 
 // Diff viewer: loaded on first open, not at startup.
 const GitPanel = lazy(() => import("../Git/GitPanel").then((m) => ({ default: m.GitPanel })));
@@ -103,7 +104,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: double-click shortcut; the maximize button is the accessible path
     <header
-      className={`group/pane flex h-full min-w-0 items-center gap-2 px-2.5 text-[13px] ${active ? "text-fg" : "text-muted"}`}
+      className={`group/pane relative flex h-full min-w-0 items-center gap-2 px-2.5 text-[13px] ${active ? "text-fg" : "text-muted"}`}
       // Waiting for the user: a thin amber line on top, plus the pulsing dot.
       style={pane.status === "waiting" ? { boxShadow: "inset 0 1px 0 var(--color-wait)" } : undefined}
       onMouseDown={() => focusPane(pane.id)}
@@ -246,6 +247,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
         className={compact ? "ml-auto" : ""}
         onClick={() => confirmClose(pane)}
       />
+      <WorkingOutline pane={pane} part="top" />
       {gitOpen && (
         <Suspense fallback={null}>
           <GitPanel pane={pane} onClose={() => setGitOpen(false)} />
