@@ -390,7 +390,7 @@ export const deck = {
   },
   toast(message: string) {
     const id = Date.now() + Math.random();
-    set({ toasts: [...get().toasts, { id, message }] });
+    set({ toasts: [...get().toasts, { id, message }].slice(-5) }); // a burst (many agents exiting) stays readable
     setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), 6000);
   },
 };

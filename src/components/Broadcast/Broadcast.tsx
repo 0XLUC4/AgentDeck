@@ -22,8 +22,9 @@ const chip =
 
 function Composer({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const state = useDeck();
-  const workspace = activeWorkspace(state);
+  const tabs = useDeck((s) => s.tabs);
+  const panes = useDeck((s) => s.panes);
+  const workspace = useDeck((s) => activeWorkspace(s));
   const [text, setText] = useState("");
   const [results, setResults] = useState<Record<string, Result>>({});
   const [sending, setSending] = useState(false);
@@ -31,11 +32,11 @@ function Composer({ onClose }: { onClose: () => void }) {
   // Running panes of the current workspace, with their session name.
   const targets = useMemo(
     () =>
-      state.tabs
+      tabs
         .filter((t) => t.workspaceId === workspace.id)
-        .flatMap((tab) => tab.paneIds.map((id) => ({ pane: state.panes[id], tab })))
+        .flatMap((tab) => tab.paneIds.map((id) => ({ pane: panes[id], tab })))
         .filter(({ pane }) => pane && !pane.exited),
-    [state.tabs, state.panes, workspace.id],
+    [tabs, panes, workspace.id],
   );
   const sessionIds = () =>
     targets.filter(({ tab }) => tab.id === useDeck.getState().activeTabId).map(({ pane }) => pane.id);

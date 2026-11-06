@@ -14,6 +14,7 @@ import { startDetachHost } from "./components/Detached/host";
 import { startJournalRecorder } from "./components/Journal/recorder";
 import { listenPermissions } from "./components/Permission/permissions";
 import { TemplatePickerHost } from "./components/Templates/TemplatePicker";
+import { jumpToPane } from "./components/Wall/jump";
 import { WallOverlay } from "./components/Wall/Wall";
 import { startBudgetWatch } from "./lib/budget";
 import { onTick } from "./lib/clock";
@@ -54,6 +55,7 @@ startDetachHost();
 /** Shortcuts worth discovering, shown where a new user lands. */
 const TIPS: [string, string][] = [
   ["Ctrl+K", "Every command"],
+  ["Ctrl+1", "Go to agent 1, 2, 3..."],
   ["Ctrl+Space", "Hold to talk to an agent"],
   ["Ctrl+Shift+A", "What each agent is doing"],
   ["Ctrl+Shift+J", "Jump to the agent waiting for you"],
@@ -139,15 +141,22 @@ export default function App() {
       const activity = e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyA";
       const settings = e.ctrlKey && !e.shiftKey && !e.altKey && e.key === ",";
       const nextWaiting = e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyJ";
+      // Ctrl+1..9: the Nth agent of the session, as laid out in its tab.
+      const paneIndex =
+        e.ctrlKey && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code) ? Number(e.code[5]) - 1 : -1;
       // The voice shortcut recorder needs every combo.
       const recording = e.target instanceof HTMLElement && e.target.closest("[data-shortcut-recorder]");
-      if ((!activity && !settings && !nextWaiting) || recording) return;
+      if ((!activity && !settings && !nextWaiting && paneIndex < 0) || recording) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.repeat) return;
       if (activity) setActivityOpen((open) => !open);
       else if (nextWaiting) jumpToNextWaiting();
-      else setSettingsOpen(true);
+      else if (paneIndex >= 0) {
+        const { tabs, activeTabId } = useDeck.getState();
+        const paneId = tabs.find((t) => t.id === activeTabId)?.paneIds[paneIndex];
+        if (paneId) jumpToPane(activeTabId, paneId);
+      } else setSettingsOpen(true);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);

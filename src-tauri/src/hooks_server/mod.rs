@@ -180,8 +180,8 @@ fn session_id(body: &Value) -> Option<String> {
         .as_str()
         .filter(|id| {
             // Goes on a command line: a UUID-like id only.
-            !id.is_empty()
-                && id.len() <= 64
+            id.len() <= 64
+                && id.starts_with(|c: char| c.is_ascii_alphanumeric())
                 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         })
         .map(str::to_owned)
@@ -433,6 +433,8 @@ mod tests {
         assert_eq!(session_id(&prompt).as_deref(), Some("abc-1"));
         let forged = json!({"hook_event_name": "Stop", "session_id": "x --flag value"});
         assert_eq!(session_id(&forged), None);
+        let flag = json!({"hook_event_name": "Stop", "session_id": "--some-flag"});
+        assert_eq!(session_id(&flag), None);
         let edit = json!({"hook_event_name": "PostToolUse", "tool_name": "Edit",
             "tool_input": {"file_path": "/repo/a.rs"}});
         assert_eq!(edited_file(&edit).as_deref(), Some("/repo/a.rs"));

@@ -184,7 +184,7 @@ pub fn hub_list() -> Vec<HubServer> {
 }
 
 /// Saves the servers; a changed or removed server is stopped (restarted on next use).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn hub_save(servers: Vec<HubServer>) -> Result<(), String> {
     validate(&servers)?;
     write_file(

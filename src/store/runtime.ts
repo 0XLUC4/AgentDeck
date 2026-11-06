@@ -150,6 +150,8 @@ function nudgeSize(id: string, rt: Runtime): void {
 }
 
 const ALREADY_RUNNING = "pane id already in use";
+/** Conversation ids are UUIDs; anything else (a value starting with "-" would read as a flag) is ignored. */
+const RESUME_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 /** Claude exits within this window when the conversation to resume no longer exists. */
 const RESUME_GRACE_MS = 8000;
 
@@ -198,8 +200,11 @@ async function spawn(id: string): Promise<void> {
     const mcp = pane.orchestrator ? await mcpRegister(id) : null;
     const browser = pane.browser && pane.agent === "claude" ? await browserOpen(id) : [];
     const settings = useSettings.getState();
-    const resume = pane.agent === "claude" && pane.resumeId && settings.resumeSessions ? pane.resumeId : null;
-    rt.resumedAt = resume ? Date.now() : undefined;
+    const resume =
+      pane.agent === "claude" && pane.resumeId && settings.resumeSessions && RESUME_ID.test(pane.resumeId)
+        ? pane.resumeId
+        : null;
+    rt.resumedAt = undefined;
     if (settings.basePort && rt.port === undefined) rt.port = freePort(settings.basePort);
     const env: Record<string, string> = {
       ...(mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : {}),
@@ -219,6 +224,8 @@ async function spawn(id: string): Promise<void> {
         env: Object.keys(env).length > 0 ? env : undefined,
         trust: settings.trustAgentFolders,
       });
+      // Measured from the real start: time spent queued for a slot must not eat the grace window.
+      if (resume) rt.resumedAt = Date.now();
       return true;
     });
     if (!spawned) return;
@@ -293,6 +300,8 @@ export async function closePane(id: string): Promise<void> {
   runtimes.delete(id);
   deck.removePane(id);
   tasks.remove(id);
+  stallAlerts.delete(id);
+  for (const [file, editor] of editors) if (editor.paneId === id) editors.delete(file);
   if (backendActivePane === id) {
     backendActivePane = null;
     setActivePane(null).catch((err) => console.warn("set_active_pane failed", err));

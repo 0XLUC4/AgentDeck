@@ -8,15 +8,15 @@ interface Diff {
   deletions: number;
 }
 
-/** Refreshes this long after the agent's last action, so a burst of edits costs one git call. */
-const REFRESH_DELAY_MS = 1500;
+/** One git status costs about ten git processes: refresh once things settle, not on every tool call. */
+const REFRESH_DELAY_MS = 2500;
 
 /** "+12 -3 · 4" in the pane header: uncommitted changes in the agent's folder. Hidden when clean or not a repo. */
 export function DiffChip({ pane, onOpen }: { pane: Pane; onOpen: () => void }) {
   const [diff, setDiff] = useState<Diff | null>(null);
   const { id, cwd, worktree, exited } = pane;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: lastAction/status/completedCount only trigger the refresh
+  // biome-ignore lint/correctness/useExhaustiveDependencies: status/completedCount only trigger the refresh
   useEffect(() => {
     if (exited) return;
     let cancelled = false;
@@ -37,7 +37,7 @@ export function DiffChip({ pane, onOpen }: { pane: Pane; onOpen: () => void }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [id, cwd, worktree, exited, pane.lastAction, pane.status, pane.completedCount]);
+  }, [id, cwd, worktree, exited, pane.status, pane.completedCount]);
 
   if (!diff || diff.files === 0) return null;
   const label = `${diff.files} changed file${diff.files > 1 ? "s" : ""}, ${diff.additions} added and ${diff.deletions} removed lines`;
