@@ -1,6 +1,6 @@
 // Mirrors Rust types in src-tauri/src/{agents,hooks_server}. Keep in sync.
 
-export type AgentKind = "claude" | "codex" | "gemini" | "grok" | "shell";
+export type AgentKind = "claude" | "codex" | "gemini" | "grok" | "opencode" | "shell";
 
 export interface AgentInfo {
   kind: AgentKind;
@@ -216,4 +216,19 @@ export interface McpActivity {
   tool: string;
   args: Record<string, unknown>;
   error: string | null;
+}
+
+/** Upstream of a pane's branch (`git_upstream`); counts as of the last fetch. */
+export interface GitUpstream {
+  name: string | null;
+  ahead: number;
+  behind: number;
+}
+
+/** One entry of `gh repo list --json nameWithOwner,description,isPrivate,updatedAt`. */
+export interface GhRepo {
+  nameWithOwner: string;
+  description: string | null;
+  isPrivate: boolean;
+  updatedAt: string;
 }

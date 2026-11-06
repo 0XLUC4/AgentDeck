@@ -3,12 +3,14 @@ import type { Pane } from "../../store/deck";
 import { isBusy } from "../../store/runtime";
 
 /**
- * Thin white line around a pane while its agent is really doing something (working and printing).
+ * Soft line around a pane while its agent is really doing something (working and printing), with a light
+ * sweeping along the top of the header.
  * Drawn in two halves that meet: the header's (top) and the terminal's (rest). Dockview renders the
  * terminal in its own layer, so a border on the pane itself would end up hidden behind it.
  */
 export function WorkingOutline({ pane, part }: { pane: Pane; part: "top" | "body" }) {
-  if (pane.status !== "working" || pane.exited) return null;
+  // A plain shell has no task: its output is just commands the user runs.
+  if (pane.agent === "shell" || pane.status !== "working" || pane.exited) return null;
   return <BusyLine paneId={pane.id} part={part} />;
 }
 

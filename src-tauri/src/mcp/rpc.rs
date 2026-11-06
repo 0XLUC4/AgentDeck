@@ -91,7 +91,7 @@ fn definitions() -> Value {
             "spawn_agent",
             "Starts a new agent in your session. Default cwd: the workspace folder (must stay inside it).",
             json!({
-                "agent": { "type": "string", "enum": ["claude", "codex", "gemini", "grok", "shell"] },
+                "agent": { "type": "string", "enum": ["claude", "codex", "gemini", "grok", "opencode", "shell"] },
                 "title": { "type": "string" },
                 "cwd": { "type": "string" },
                 "worktree": { "type": "boolean", "description": "Dedicated Git worktree" },
@@ -280,7 +280,7 @@ fn wait_for(args: &Value, host: &impl Host) -> Result<Value, String> {
 /// Validated `spawn_agent` arguments, normalized for the UI.
 fn spawn_args(args: &Value) -> Result<Value, String> {
     let agent: AgentKind = serde_json::from_value(args["agent"].clone())
-        .map_err(|_| "agent must be claude, codex, gemini, grok or shell")?;
+        .map_err(|_| "agent must be claude, codex, gemini, grok, opencode or shell")?;
     let title = args["title"].as_str().map(str::trim).unwrap_or("");
     if title.is_empty() || title.chars().count() > 80 {
         return Err("title: 1 to 80 characters".into());

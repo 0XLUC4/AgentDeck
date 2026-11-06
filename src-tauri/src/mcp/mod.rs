@@ -255,7 +255,7 @@ fn mcp_config(port: u16) -> Value {
 const ROLE_PROMPT: &str = "\
 # Role: AgentDeck orchestrator
 
-You coordinate the other coding agents in this workspace (Claude Code, Codex, Gemini, Grok, shell) \
+You coordinate the other coding agents in this workspace (Claude Code, Codex, Gemini, Grok, OpenCode, shell) \
 through the `agentdeck` MCP tools. You do not write code yourself except for small checks.
 
 Method:

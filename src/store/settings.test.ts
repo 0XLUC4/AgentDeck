@@ -34,7 +34,7 @@ describe("mergeSettings", () => {
     expect(s.notify).toEqual({ ...DEFAULT_SETTINGS.notify, sound: false, error: true });
     expect(s.agents.claude).toEqual({ args: "--model opus", worktree: true });
     expect(s.agents.codex).toEqual({ args: "", worktree: false });
-    expect(Object.keys(s.agents).sort()).toEqual(["claude", "codex", "gemini", "grok", "shell"]);
+    expect(Object.keys(s.agents).sort()).toEqual(["claude", "codex", "gemini", "grok", "opencode", "shell"]);
     expect(s).not.toHaveProperty("unknown");
   });
 

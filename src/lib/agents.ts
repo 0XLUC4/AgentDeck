@@ -1,5 +1,5 @@
 import { type LucideIcon, SquareTerminal } from "lucide-react";
-import { siClaude, siGooglegemini } from "simple-icons";
+import { siClaude, siGooglegemini, siOpencode } from "simple-icons";
 import type { AgentKind } from "./types";
 
 export interface AgentMeta {
@@ -23,6 +23,7 @@ export const AGENTS: Record<AgentKind, AgentMeta> = {
   codex: { name: "Codex", mark: OPENAI_MARK, color: "var(--color-agent-codex)" },
   gemini: { name: "Gemini CLI", mark: siGooglegemini.path, color: "var(--color-agent-gemini)" },
   grok: { name: "Grok Build", mark: GROK_MARK, color: "var(--color-agent-grok)" },
+  opencode: { name: "OpenCode", mark: siOpencode.path, color: "var(--color-agent-opencode)" },
   shell: { name: "Shell", mark: SquareTerminal, color: "var(--color-agent-shell)" },
 };
 

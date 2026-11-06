@@ -6,10 +6,12 @@ import type {
   AgentKind,
   AgentStatusEvent,
   FolderInfo,
+  GhRepo,
   GitCheckpoint,
   GitCommitInfo,
   GitComparison,
   GitStatus,
+  GitUpstream,
   HistoryHit,
   HistoryWindow,
   McpActivity,
@@ -101,6 +103,13 @@ export const gitListCheckpoints = (cwd: string, paneId: string) =>
 export const gitRestoreCheckpoint = (cwd: string, paneId: string, sha: string) =>
   invoke<string | null>("git_restore_checkpoint", { cwd, paneId, sha });
 export const gitCompare = (cwd: string, otherCwd: string) => invoke<GitComparison>("git_compare", { cwd, otherCwd });
+export const gitUpstream = (cwd: string) => invoke<GitUpstream>("git_upstream", { cwd });
+export const gitPull = (cwd: string) => invoke<string>("git_pull", { cwd });
+/** Pushes the current branch, setting `origin/<branch>` as upstream when it has none. */
+export const gitPush = (cwd: string) => invoke<string>("git_push", { cwd });
+export const ghListRepos = () => invoke<GhRepo[]>("gh_list_repos");
+/** Clones `repo` (owner/name or git URL) into `parent`; resolves to the new folder's path. */
+export const gitClone = (repo: string, parent: string) => invoke<string>("git_clone", { repo, parent });
 
 export const answerPermission = (requestId: string, decision: PermissionDecision, message?: string) =>
   invoke<void>("answer_permission", { requestId, decision, message: message ?? null });

@@ -1,4 +1,15 @@
-import { GitBranch, GitCommitHorizontal, GitMerge, GitPullRequest, History, RefreshCw, Trash2, X } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  GitBranch,
+  GitCommitHorizontal,
+  GitMerge,
+  GitPullRequest,
+  History,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AGENTS } from "../../lib/agents";
@@ -11,11 +22,14 @@ import {
   gitDiffTrees,
   gitListCheckpoints,
   gitMergeWorktree,
+  gitPull,
+  gitPush,
   gitRemoveWorktree,
   gitRestoreCheckpoint,
   gitStatus,
+  gitUpstream,
 } from "../../lib/ipc";
-import type { GitCheckpoint, GitComparison, GitFileChange, GitStatus } from "../../lib/types";
+import type { GitCheckpoint, GitComparison, GitFileChange, GitStatus, GitUpstream } from "../../lib/types";
 import { deck, type Pane, useDeck } from "../../store/deck";
 import { setReviewer, useReviews } from "../../store/review";
 import { useTasks } from "../../store/tasks";
@@ -102,12 +116,14 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
   const reviewerId = useReviews((s) => s[pane.id] ?? "");
   const [dir, setDir] = useState<string | null>(null);
   const [status, setStatus] = useState<GitStatus | null>(null);
+  const [upstream, setUpstream] = useState<GitUpstream | null>(null);
   const [checkpoints, setCheckpoints] = useState<GitCheckpoint[]>([]);
   const [comparison, setComparison] = useState<(GitComparison & { otherId: string }) | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState<"pull" | "push" | null>(null);
   const [message, setMessage] = useState("");
   const panelRef = useRef<HTMLElement>(null);
   const selectedRef = useRef<string | null>(null);
@@ -121,8 +137,9 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
 
   const refresh = useCallback(async () => {
     if (!dir) return;
-    const [st, cps] = await Promise.all([gitStatus(dir), gitListCheckpoints(dir, pane.id)]);
+    const [st, cps, up] = await Promise.all([gitStatus(dir), gitListCheckpoints(dir, pane.id), gitUpstream(dir)]);
     setStatus(st);
+    setUpstream(up);
     setCheckpoints(cps);
   }, [dir, pane.id]);
 
@@ -183,6 +200,12 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
       setMessage("");
       return `Created commit ${sha}.`;
     });
+
+  const sync = (kind: "pull" | "push") => {
+    if (!dir) return;
+    setSyncing(kind);
+    void act(() => (kind === "pull" ? gitPull(dir) : gitPush(dir))).finally(() => setSyncing(null));
+  };
 
   const merge = () => {
     if (!dir || !window.confirm(`Merge ${status?.branch} into the main repository (--no-ff)?`)) return;
@@ -366,6 +389,28 @@ export function GitPanel({ pane, onClose }: { pane: Pane; onClose: () => void })
                   <GitCommitHorizontal size={14} strokeWidth={1.5} aria-hidden="true" />
                   Commit
                 </button>
+              </Section>
+            )}
+
+            {!comparison && (
+              <Section title="Remote">
+                <p className="text-xs text-subtle tabular-nums">
+                  {!upstream
+                    ? "…"
+                    : upstream.name
+                      ? `↑${upstream.ahead} ↓${upstream.behind} vs ${upstream.name} (as of the last fetch)`
+                      : "No upstream: Push publishes this branch to origin."}
+                </p>
+                <div className="flex gap-2">
+                  <button type="button" className={BTN} disabled={busy || !upstream?.name} onClick={() => sync("pull")}>
+                    <ArrowDownToLine size={14} strokeWidth={1.5} aria-hidden="true" />
+                    {syncing === "pull" ? "Pulling…" : "Pull"}
+                  </button>
+                  <button type="button" className={BTN} disabled={busy || !status?.branch} onClick={() => sync("push")}>
+                    <ArrowUpFromLine size={14} strokeWidth={1.5} aria-hidden="true" />
+                    {syncing === "push" ? "Pushing…" : "Push"}
+                  </button>
+                </div>
               </Section>
             )}
 
