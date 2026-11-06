@@ -420,10 +420,13 @@ fn validate_spawn_input(pane_id: &str, args: &[String]) -> Result<(), String> {
 
 /// Extra env vars the frontend may set: only the orchestrator's MCP secret (a UUID).
 fn validate_extra_env(env: &HashMap<String, String>) -> Result<(), String> {
-    let ok = env.iter().all(|(k, v)| {
-        k == "AGENTDECK_MCP_SECRET"
-            && (1..=64).contains(&v.len())
-            && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    let ok = env.iter().all(|(k, v)| match k.as_str() {
+        "AGENTDECK_MCP_SECRET" => {
+            (1..=64).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }
+        // Per-agent dev server port (settings.basePort), so parallel agents don't collide.
+        "PORT" => v.parse::<u16>().is_ok_and(|port| port >= 1024),
+        _ => false,
     });
     ok.then_some(())
         .ok_or_else(|| "env variable not allowed".into())
@@ -506,6 +509,9 @@ mod tests {
         assert!(v(&env("AGENTDECK_MCP_SECRET", "3f2b-aa")).is_ok());
         assert!(v(&env("PATH", "x")).is_err());
         assert!(v(&env("AGENTDECK_MCP_SECRET", "a b")).is_err());
+        assert!(v(&env("PORT", "4100")).is_ok());
+        assert!(v(&env("PORT", "80")).is_err());
+        assert!(v(&env("PORT", "41a")).is_err());
     }
 
     #[test]

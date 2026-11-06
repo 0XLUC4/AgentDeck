@@ -59,6 +59,10 @@ pub struct AgentStatusEvent {
     pub prompt: Option<String>,
     /// Agent's final message of the turn (Claude Stop, Codex agent-turn-complete).
     pub summary: Option<String>,
+    /// Claude conversation id, once the conversation has a message (so `--resume` can find it).
+    pub session_id: Option<String>,
+    /// Absolute path of a file the agent just edited (Claude PostToolUse on an edit tool).
+    pub edited_file: Option<String>,
 }
 
 /// Starts the hook server on a background thread.
@@ -161,7 +165,41 @@ fn status_event(hook: &Hook) -> Option<AgentStatusEvent> {
         event,
         prompt,
         summary,
+        session_id: session_id(&hook.json),
+        edited_file: edited_file(&hook.json),
     })
+}
+
+/// SessionStart fires before the transcript exists; any later Claude event means it can be resumed.
+fn session_id(body: &Value) -> Option<String> {
+    let event = body["hook_event_name"].as_str()?;
+    if event == "SessionStart" {
+        return None;
+    }
+    body["session_id"]
+        .as_str()
+        .filter(|id| {
+            // Goes on a command line: a UUID-like id only.
+            !id.is_empty()
+                && id.len() <= 64
+                && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+        .map(str::to_owned)
+}
+
+fn edited_file(body: &Value) -> Option<String> {
+    if body["hook_event_name"] != "PostToolUse" {
+        return None;
+    }
+    match body["tool_name"].as_str()? {
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {}
+        _ => return None,
+    }
+    let input = &body["tool_input"];
+    input["file_path"]
+        .as_str()
+        .or_else(|| input["notebook_path"].as_str())
+        .map(str::to_owned)
 }
 
 /// Validates and parses one request; `Err` is the HTTP status to answer.
@@ -218,7 +256,7 @@ pub(crate) fn token_ok(given: &str, expected: &str) -> bool {
             == 0
 }
 
-/// Maps a Claude Code hook payload or a Codex `notify` payload to a pane status.
+/// Maps a Claude Code / Gemini CLI hook payload or a Codex `notify` payload to a pane status.
 /// `None` means "no status change" (unknown or irrelevant event).
 pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
     let str_field = |k: &str| body[k].as_str().map(str::to_owned);
@@ -237,18 +275,20 @@ pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
     let event = str_field("hook_event_name")?;
     let (status, action) = match event.as_str() {
         "SessionStart" => (PaneStatus::Idle, None),
-        "UserPromptSubmit" => (PaneStatus::Working, None),
-        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+        "UserPromptSubmit" | "BeforeAgent" => (PaneStatus::Working, None),
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "BeforeTool" | "AfterTool" => {
             (PaneStatus::Working, describe_tool(body))
         }
+        // Gemini: ToolPermission is its only notification type.
         "Notification" => match body["notification_type"].as_str() {
-            None | Some("permission_prompt" | "elicitation_dialog" | "agent_needs_input") => {
-                (PaneStatus::Waiting, str_field("message"))
-            }
+            None
+            | Some(
+                "permission_prompt" | "elicitation_dialog" | "agent_needs_input" | "ToolPermission",
+            ) => (PaneStatus::Waiting, str_field("message")),
             _ => return None, // idle_prompt etc. must not override "done"
         },
         "PermissionRequest" => (PaneStatus::Waiting, describe_tool(body)),
-        "Stop" => (PaneStatus::Done, None),
+        "Stop" | "AfterAgent" => (PaneStatus::Done, None),
         "StopFailure" => (
             PaneStatus::Error,
             str_field("error").or_else(|| str_field("error_type")),
@@ -262,7 +302,8 @@ pub fn map_event(body: &Value) -> Option<(PaneStatus, Option<String>, String)> {
 fn details(body: &Value) -> (Option<String>, Option<String>) {
     let text = |k: &str| body[k].as_str().filter(|s| !s.trim().is_empty()).map(cap);
     match body["hook_event_name"].as_str() {
-        Some("UserPromptSubmit") => (text("prompt"), None),
+        Some("UserPromptSubmit" | "BeforeAgent") => (text("prompt"), None),
+        Some("AfterAgent") => (None, text("prompt_response")),
         Some("Stop") => (
             None,
             text("last_assistant_message").or_else(|| {
@@ -383,6 +424,22 @@ fn describe_tool(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_id_and_edited_file() {
+        let start = json!({"hook_event_name": "SessionStart", "session_id": "abc-1"});
+        assert_eq!(session_id(&start), None);
+        let prompt = json!({"hook_event_name": "UserPromptSubmit", "session_id": "abc-1"});
+        assert_eq!(session_id(&prompt).as_deref(), Some("abc-1"));
+        let forged = json!({"hook_event_name": "Stop", "session_id": "x --flag value"});
+        assert_eq!(session_id(&forged), None);
+        let edit = json!({"hook_event_name": "PostToolUse", "tool_name": "Edit",
+            "tool_input": {"file_path": "/repo/a.rs"}});
+        assert_eq!(edited_file(&edit).as_deref(), Some("/repo/a.rs"));
+        let read = json!({"hook_event_name": "PostToolUse", "tool_name": "Read",
+            "tool_input": {"file_path": "/repo/a.rs"}});
+        assert_eq!(edited_file(&read), None);
+    }
     use serde_json::json;
 
     fn status(v: Value) -> Option<(PaneStatus, Option<String>)> {
@@ -468,6 +525,54 @@ mod tests {
         let (s, _, e) = map_event(&json!({"type": "agent-turn-complete", "turn-id": "1"})).unwrap();
         assert_eq!((s, e.as_str()), (PaneStatus::Done, "agent-turn-complete"));
         assert_eq!(status(json!({"type": "something-else"})), None);
+    }
+
+    #[test]
+    fn maps_gemini_events() {
+        let st = |v: Value| status(v).map(|(s, _)| s);
+        assert_eq!(
+            st(json!({"hook_event_name": "SessionStart", "source": "startup"})),
+            Some(PaneStatus::Idle)
+        );
+        assert_eq!(
+            st(json!({"hook_event_name": "BeforeAgent", "prompt": "hi"})),
+            Some(PaneStatus::Working)
+        );
+        assert_eq!(
+            status(
+                json!({"hook_event_name": "BeforeTool", "tool_name": "run_shell_command",
+                "tool_input": {"command": "npm test"}})
+            ),
+            Some((
+                PaneStatus::Working,
+                Some("run_shell_command npm test".into())
+            ))
+        );
+        assert_eq!(
+            st(json!({"hook_event_name": "AfterTool", "tool_name": "x"})),
+            Some(PaneStatus::Working)
+        );
+        assert_eq!(
+            status(
+                json!({"hook_event_name": "Notification", "notification_type": "ToolPermission",
+                "message": "Allow run_shell_command?"})
+            ),
+            Some((PaneStatus::Waiting, Some("Allow run_shell_command?".into())))
+        );
+        assert_eq!(
+            st(json!({"hook_event_name": "AfterAgent"})),
+            Some(PaneStatus::Done)
+        );
+        assert_eq!(
+            details(&json!({"hook_event_name": "BeforeAgent", "prompt": "fix bug"})),
+            (Some("fix bug".into()), None)
+        );
+        assert_eq!(
+            details(
+                &json!({"hook_event_name": "AfterAgent", "prompt": "fix bug", "prompt_response": "Fixed."})
+            ),
+            (None, Some("Fixed.".into()))
+        );
     }
 
     #[test]

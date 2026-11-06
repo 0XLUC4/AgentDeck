@@ -79,20 +79,32 @@ fn build(notes: &[(String, String)]) -> NotesGraph {
             let resolved = if ids.contains(relative.as_str()) {
                 Some(relative.as_str())
             } else {
-                by_name.get(&title(&target.replace('\\', "/")).to_lowercase()).copied()
+                by_name
+                    .get(&title(&target.replace('\\', "/")).to_lowercase())
+                    .copied()
             };
             if let Some(to) = resolved.filter(|to| to != id) {
                 // Undirected: one edge per pair.
-                let (a, b) = if id.as_str() < to { (id.as_str(), to) } else { (to, id.as_str()) };
+                let (a, b) = if id.as_str() < to {
+                    (id.as_str(), to)
+                } else {
+                    (to, id.as_str())
+                };
                 edges.insert((a.to_string(), b.to_string()));
             }
         }
     }
     let nodes = notes
         .iter()
-        .map(|(id, _)| NoteNode { id: id.clone(), title: title(id).to_string() })
+        .map(|(id, _)| NoteNode {
+            id: id.clone(),
+            title: title(id).to_string(),
+        })
         .collect();
-    NotesGraph { nodes, edges: edges.into_iter().collect() }
+    NotesGraph {
+        nodes,
+        edges: edges.into_iter().collect(),
+    }
 }
 
 /// Notes and their links for the whole workspace folder (same skipped folders and cap as the assets list).
@@ -106,7 +118,12 @@ pub fn notes_graph(cwd: String) -> Result<NotesGraph, String> {
     walk(&root, &root, 0, &["md"], &mut files);
     let notes: Vec<(String, String)> = files
         .iter()
-        .filter_map(|f| Some((f.rel.replace('\\', "/"), std::fs::read_to_string(&f.path).ok()?)))
+        .filter_map(|f| {
+            Some((
+                f.rel.replace('\\', "/"),
+                std::fs::read_to_string(&f.path).ok()?,
+            ))
+        })
         .collect();
     Ok(build(&notes))
 }
@@ -125,9 +142,18 @@ mod tests {
     #[test]
     fn resolves_wikilinks_and_relative_links() {
         let notes = vec![
-            ("index.md".to_string(), "See [[Ideas|my ideas]] and [setup](docs/setup.md), [[missing]].".to_string()),
-            ("notes/ideas.md".to_string(), "Back to [home](../index.md) and [[ideas#self]].".to_string()),
-            ("docs/setup.md".to_string(), "https://example.com/a.md is not a note".to_string()),
+            (
+                "index.md".to_string(),
+                "See [[Ideas|my ideas]] and [setup](docs/setup.md), [[missing]].".to_string(),
+            ),
+            (
+                "notes/ideas.md".to_string(),
+                "Back to [home](../index.md) and [[ideas#self]].".to_string(),
+            ),
+            (
+                "docs/setup.md".to_string(),
+                "https://example.com/a.md is not a note".to_string(),
+            ),
         ];
         let graph = build(&notes);
         assert_eq!(graph.nodes.len(), 3);

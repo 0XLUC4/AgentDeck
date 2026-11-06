@@ -11,3 +11,10 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
+
+// The splash in index.html covers startup; fade it out once the first frame of the app is painted.
+requestAnimationFrame(() => {
+  const splash = document.getElementById("splash");
+  splash?.classList.add("gone");
+  setTimeout(() => splash?.remove(), 300);
+});

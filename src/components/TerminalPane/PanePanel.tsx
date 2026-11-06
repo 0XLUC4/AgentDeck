@@ -6,6 +6,7 @@ import { useDeck } from "../../store/deck";
 import { focusPane, restartPane } from "../../store/runtime";
 import { reattachPane, useDetached } from "../Detached/host";
 import { TerminalPane } from "./TerminalPane";
+import { VoiceGlow } from "./VoiceGlow";
 
 export interface PanePanelParams {
   paneId: string;
@@ -22,7 +23,7 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
   if (!pane) return null;
   return (
     <section
-      className={`flex h-full flex-col bg-base`}
+      className={`relative flex h-full flex-col bg-base`}
       data-pane-id={pane.id}
       data-status={pane.status}
       onFocusCapture={() => focusPane(pane.id)}
@@ -62,6 +63,9 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
           </button>
         </div>
       )}
+      {/* Above the terminal: anything painted on the pane itself ends up behind the terminal's background. */}
+      {pane.status === "working" && !pane.exited && <div className="pane-neon" aria-hidden="true" />}
+      <VoiceGlow paneId={pane.id} />
     </section>
   );
 }

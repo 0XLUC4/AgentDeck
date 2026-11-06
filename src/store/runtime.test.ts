@@ -21,7 +21,7 @@ vi.mock("../lib/ipc", () => ({
 }));
 vi.mock("../lib/notify", () => ({ notify: vi.fn() }));
 
-const { closePane, createPane, focusPane, isBusy, reportSize, restartPane } = await import("./runtime");
+const { checkConflict, closePane, createPane, focusPane, isBusy, reportSize, restartPane } = await import("./runtime");
 const { deck, useDeck } = await import("./deck");
 const deckSetDone = (id: string) => deck.setStatus(id, "done", null);
 
@@ -52,6 +52,27 @@ beforeEach(() => {
 });
 
 describe("runtime", () => {
+  it("passes --resume for a restored Claude pane and drops it on restart", async () => {
+    await createPane({ ...spec("r1"), resumeId: "abc-1" }, "t1");
+    expect(ipc.spawnPane.mock.calls[0][0].args).toEqual(["--resume", "abc-1"]);
+    await restartPane("r1");
+    expect(ipc.spawnPane.mock.calls[1][0].args).toEqual([]);
+  });
+
+  it("warns once when two agents edit the same file", async () => {
+    await createPane(spec("a"), "t1");
+    await createPane(spec("b"), "t1");
+    const toast = vi.spyOn(deck, "toast");
+    const windowsPath = String.raw`C:\repo\src\App.tsx`;
+    checkConflict("a", windowsPath, 1000);
+    checkConflict("a", windowsPath, 2000);
+    expect(toast).not.toHaveBeenCalled();
+    checkConflict("b", "c:/repo/src/App.tsx", 3000);
+    expect(toast).toHaveBeenCalledTimes(1);
+    checkConflict("a", windowsPath, 4000);
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
   it("dedupes concurrent restarts of the same pane", async () => {
     await createPane(spec("p1"), "t1");
     expect(ipc.spawnPane).toHaveBeenCalledTimes(1);

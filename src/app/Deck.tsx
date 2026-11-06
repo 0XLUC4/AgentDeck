@@ -146,8 +146,8 @@ export const Deck = memo(function Deck({ tab }: { tab: Tab }) {
         panel.api.close();
       }
     }
-    // Auto grid also applies to restored layouts, so a session always opens as a grid.
-    if (useSettings.getState().autoGrid && (changed || tab.paneIds.length > 1)) arrangePanesInGrid(tab.id);
+    // Only when a pane was added or removed: a restored layout keeps the sizes the user dragged.
+    if (useSettings.getState().autoGrid && changed) arrangePanesInGrid(tab.id);
   }, [api, tab.paneIds, tab.id, browsers]);
 
   useEffect(() => {

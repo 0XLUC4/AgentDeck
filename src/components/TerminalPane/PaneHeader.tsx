@@ -29,6 +29,7 @@ import { closePane, focusPane, interruptPane, isBusy, restartPane } from "../../
 import { AgentLogo } from "../AgentLogo/AgentLogo";
 import { browserPanelId, removeBrowser } from "../Browser/BrowserPanel";
 import { toggleDetached, useDetached } from "../Detached/host";
+import { DiffChip } from "../Git/DiffChip";
 import { IconButton } from "../IconButton/IconButton";
 import { OrchestratorButton } from "../Orchestrator/OrchestratorButton";
 import { QueueButton } from "../Queue/QueueButton";
@@ -139,6 +140,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-fg" title={pane.lastAction ?? undefined}>
             {shortAction(pane.lastAction)}
           </span>
+          <DiffChip pane={pane} onOpen={() => setGitOpen(true)} />
           <UsageChip pane={pane} />
           {pane.taskStartedAt !== null && <Elapsed since={pane.taskStartedAt} />}
           {pane.completedCount > 0 && (

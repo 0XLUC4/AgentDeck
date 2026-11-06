@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Fragment, lazy, Suspense, useEffect, useState } from "react";
 import { ActivityPanel, jumpToNextWaiting, PermissionBanner } from "./app/Activity";
 import { Deck } from "./app/Deck";
 import { Sidebar } from "./app/Sidebar";
@@ -26,7 +26,7 @@ import { activeWorkspace, useDeck } from "./store/deck";
 import { restoreAndAutosave } from "./store/persist";
 import { startQueueRunner } from "./store/queue";
 import { startReviewRunner } from "./store/review";
-import { deriveStatuses, listenAgentStatus } from "./store/runtime";
+import { deriveStatuses, listenAgentStatus, watchAgents } from "./store/runtime";
 import { settingsReady, useSettings } from "./store/settings";
 
 // Split out of the startup bundle: only parsed the first time they open.
@@ -50,6 +50,15 @@ listenPermissions().catch((err) => console.warn("agent-permission listener faile
 listenOrchestrator().catch((err) => console.warn("orchestrator listener failed", err));
 checkForUpdateSilently();
 startDetachHost();
+
+/** Shortcuts worth discovering, shown where a new user lands. */
+const TIPS: [string, string][] = [
+  ["Ctrl+K", "Every command"],
+  ["Ctrl+Space", "Hold to talk to an agent"],
+  ["Ctrl+Shift+A", "What each agent is doing"],
+  ["Ctrl+Shift+J", "Jump to the agent waiting for you"],
+  ["Ctrl+Shift+B", "Send one prompt to several agents"],
+];
 
 function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
   const workspace = useDeck((s) => activeWorkspace(s));
@@ -76,6 +85,23 @@ function EmptySession({ onAddAgent }: { onAddAgent: () => void }) {
           </p>
         </div>
         <AddAgentButton onOpenPicker={onAddAgent} className="" />
+        <dl className="mt-2 grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-left text-xs text-subtle">
+          {TIPS.map(([keys, what]) => (
+            <Fragment key={keys}>
+              <dt className="flex justify-end gap-1">
+                {keys.split("+").map((key) => (
+                  <kbd
+                    key={key}
+                    className="rounded border border-line-strong bg-raised px-1.5 py-px font-mono text-[11px] text-muted"
+                  >
+                    {key}
+                  </kbd>
+                ))}
+              </dt>
+              <dd>{what}</dd>
+            </Fragment>
+          ))}
+        </dl>
       </div>
     </div>
   );
@@ -101,7 +127,10 @@ export default function App() {
       setActivityOpen(activityOpen);
       setHydrated(true);
     });
-    return onTick(() => deriveStatuses());
+    return onTick(() => {
+      deriveStatuses();
+      watchAgents();
+    });
   }, []);
 
   // Ctrl+Shift+A toggles the activity panel, Ctrl+, opens Settings; capture phase so the terminal never receives them.

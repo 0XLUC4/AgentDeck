@@ -27,27 +27,44 @@ pub struct AssetFile {
 
 /// Files with one of `exts` under `dir` (hidden, dependency and build folders skipped; capped at 2000).
 pub(crate) fn walk(root: &Path, dir: &Path, depth: usize, exts: &[&str], out: &mut Vec<AssetFile>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         if out.len() >= MAX_FILES {
             return;
         }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         if kind.is_dir() {
             if depth < MAX_DEPTH && !name.starts_with('.') && !SKIP_DIRS.contains(&name.as_str()) {
                 walk(root, &path, depth + 1, exts, out);
             }
             continue;
         }
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
         if !exts.contains(&ext.as_str()) {
             continue;
         }
-        let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        out.push(AssetFile { path: path.to_string_lossy().into_owned(), rel, ext, size });
+        out.push(AssetFile {
+            path: path.to_string_lossy().into_owned(),
+            rel,
+            ext,
+            size,
+        });
     }
 }
 
@@ -64,8 +81,12 @@ pub fn assets_list(app: tauri::AppHandle, cwd: String) -> Result<Vec<AssetFile>,
         return Err(format!("{cwd} is not a folder"));
     }
     let scope = app.asset_protocol_scope();
-    scope.allow_directory(&root, true).map_err(|e| e.to_string())?;
-    scope.allow_directory(export_dir(), true).map_err(|e| e.to_string())?;
+    scope
+        .allow_directory(&root, true)
+        .map_err(|e| e.to_string())?;
+    scope
+        .allow_directory(export_dir(), true)
+        .map_err(|e| e.to_string())?;
     Ok(list_models(&root))
 }
 
@@ -88,8 +109,11 @@ pub(crate) fn inside(cwd: &str, path: &str) -> Result<PathBuf, String> {
 }
 
 fn find_blender() -> Option<PathBuf> {
-    let on_path = std::env::var_os("PATH")
-        .and_then(|paths| std::env::split_paths(&paths).map(|p| p.join("blender.exe")).find(|p| p.is_file()));
+    let on_path = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|p| p.join("blender.exe"))
+            .find(|p| p.is_file())
+    });
     if on_path.is_some() {
         return on_path;
     }
@@ -108,7 +132,8 @@ fn find_blender() -> Option<PathBuf> {
 /// Blender installed through Steam, in any Steam library (listed in libraryfolders.vdf).
 fn steam_blender() -> Option<PathBuf> {
     let steam = Path::new(r"C:\Program Files (x86)\Steam");
-    let vdf = std::fs::read_to_string(steam.join(r"steamapps\libraryfolders.vdf")).unwrap_or_default();
+    let vdf =
+        std::fs::read_to_string(steam.join(r"steamapps\libraryfolders.vdf")).unwrap_or_default();
     // Lines look like `"path"  "D:\\SteamLibrary"`: backslashes are doubled in the file.
     let libraries = vdf
         .lines()
@@ -147,7 +172,8 @@ fn blend_to_glb(file: &Path, workspace: &Path) -> Result<PathBuf, String> {
     if out.is_file() {
         return Ok(out);
     }
-    let blender = find_blender().ok_or("Blender not found: install it or add blender.exe to PATH")?;
+    let blender =
+        find_blender().ok_or("Blender not found: install it or add blender.exe to PATH")?;
     let mut cmd = Command::new(blender);
     cmd.arg("-b")
         .arg(file)
@@ -161,10 +187,16 @@ fn blend_to_glb(file: &Path, workspace: &Path) -> Result<PathBuf, String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let result = cmd.output().map_err(|e| format!("cannot run Blender: {e}"))?;
+    let result = cmd
+        .output()
+        .map_err(|e| format!("cannot run Blender: {e}"))?;
     if !out.is_file() {
         let log = String::from_utf8_lossy(&result.stdout);
-        let reason = log.lines().rev().find(|l| l.contains("Error")).unwrap_or("no GLB written");
+        let reason = log
+            .lines()
+            .rev()
+            .find(|l| l.contains("Error"))
+            .unwrap_or("no GLB written");
         return Err(format!("Blender export failed: {}", reason.trim()));
     }
     Ok(out)
@@ -174,8 +206,14 @@ fn blend_to_glb(file: &Path, workspace: &Path) -> Result<PathBuf, String> {
 #[tauri::command(async)]
 pub fn asset_source(cwd: String, path: String) -> Result<String, String> {
     let file = inside(&cwd, &path)?;
-    let is_blend = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("blend"));
-    let source = if is_blend { blend_to_glb(&file, Path::new(&cwd))? } else { file };
+    let is_blend = file
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("blend"));
+    let source = if is_blend {
+        blend_to_glb(&file, Path::new(&cwd))?
+    } else {
+        file
+    };
     Ok(source.to_string_lossy().into_owned())
 }
 
@@ -185,7 +223,8 @@ mod tests {
 
     #[test]
     fn lists_models_and_guards_the_workspace() {
-        let root = std::env::temp_dir().join(format!("agentdeck-assets-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("agentdeck-assets-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("models")).unwrap();
         std::fs::create_dir_all(root.join("node_modules")).unwrap();
         std::fs::write(root.join("models/ship.GLB"), b"x").unwrap();
@@ -198,7 +237,13 @@ mod tests {
         assert_eq!(files[1].ext, "png");
         assert!(inside(&root.to_string_lossy(), &files[0].path).is_ok());
         let models = root.join("models");
-        assert!(inside(&models.to_string_lossy(), &root.join("readme.md").to_string_lossy()).is_err());
+        assert!(
+            inside(
+                &models.to_string_lossy(),
+                &root.join("readme.md").to_string_lossy()
+            )
+            .is_err()
+        );
         std::fs::remove_dir_all(root).ok();
     }
 }

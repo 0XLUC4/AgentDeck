@@ -1,5 +1,5 @@
 //! Token usage and cost per agent, workspace and day, read from the agents' own transcripts.
-//! Files are parsed incrementally (byte offset per file) and cached for the app's lifetime.
+//! Files are parsed incrementally (byte offset per file) and cached while they fall in the 30-day window.
 
 mod parse;
 mod prices;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
-use chrono::{Days, Local, NaiveTime, TimeZone};
+use chrono::{Days, Local, NaiveDate, NaiveTime, TimeZone};
 use serde::Serialize;
 
 use parse::{Entry, FileState, Source};
@@ -142,7 +142,27 @@ fn with_entries(path: &Path, len: u64, mtime: i64, source: Source, f: &mut impl 
     f(&state.entries);
     if let Ok(mut c) = cache().lock() {
         c.insert(path.to_path_buf(), state);
+        // Older files only matter to panes started over 30 days ago: let them re-parse.
+        let cutoff = local_midnight(30);
+        c.retain(|_, s| s.mtime >= cutoff);
     }
+}
+
+/// Codex day folders (`YYYY/MM/DD`) that can hold sessions started since `since_ms`, with a day
+/// of margin on each side for UTC vs local dates. None when the span is too long to be worth it.
+fn codex_day_dirs(root: &Path, since_ms: i64, today: NaiveDate) -> Option<Vec<PathBuf>> {
+    let start = Local.timestamp_millis_opt(since_ms).single()?.date_naive() - Days::new(1);
+    let end = today + Days::new(1);
+    if (end - start).num_days() > 400 {
+        return None;
+    }
+    Some(
+        start
+            .iter_days()
+            .take_while(|d| *d <= end)
+            .map(|d| root.join(d.format("%Y/%m/%d").to_string()))
+            .collect(),
+    )
 }
 
 /// Visits every entry of both agents in files touched since `since_ms`.
@@ -286,7 +306,11 @@ pub fn pane_usage(
         return Ok(PaneUsage { totals, models });
     };
     let mut files = Vec::new();
-    walk(&root, started_at, &mut files);
+    let today = Local::now().date_naive();
+    match codex_day_dirs(&root, started_at, today).filter(|_| source == Source::Codex) {
+        Some(days) => days.iter().for_each(|d| walk(d, started_at, &mut files)),
+        None => walk(&root, started_at, &mut files),
+    }
     let want = norm(&dir);
     for (path, len, mtime) in files {
         with_entries(&path, len, mtime, source, &mut |entries| {
@@ -357,6 +381,33 @@ mod tests {
         let days: Vec<String> = empty_days(7).into_keys().collect();
         assert_eq!(days.len(), 7);
         assert_eq!(days[6], Local::now().format("%Y-%m-%d").to_string());
+    }
+
+    #[test]
+    fn codex_day_dirs_span_start_to_today() {
+        let today = NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+        let start = Local
+            .from_local_datetime(
+                &NaiveDate::from_ymd_opt(2026, 2, 28)
+                    .unwrap()
+                    .and_hms_opt(12, 0, 0)
+                    .unwrap(),
+            )
+            .unwrap()
+            .timestamp_millis();
+        let dirs = codex_day_dirs(Path::new("s"), start, today).unwrap();
+        let want: Vec<PathBuf> = [
+            "2026/02/27",
+            "2026/02/28",
+            "2026/03/01",
+            "2026/03/02",
+            "2026/03/03",
+        ]
+        .iter()
+        .map(|d| Path::new("s").join(d))
+        .collect();
+        assert_eq!(dirs, want);
+        assert!(codex_day_dirs(Path::new("s"), 0, today).is_none());
     }
 
     /// Manual check on this machine's real transcripts: `cargo test --lib real_data -- --ignored --nocapture`.

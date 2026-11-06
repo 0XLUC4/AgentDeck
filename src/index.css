@@ -154,6 +154,115 @@ body {
   }
 }
 
+/* Working agent: a crisp fluo line with a soft inner glow, drawn over the terminal. Only opacity animates
+   (composited, no repaint). */
+.pane-neon {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  border-radius: 0 0 13px 13px;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 1.5px var(--color-accent),
+    inset 0 0 6px color-mix(in oklch, var(--color-accent) 60%, transparent),
+    inset 0 0 18px color-mix(in oklch, var(--color-accent) 22%, transparent);
+  animation: pane-neon-breathe 2.4s ease-in-out infinite;
+  will-change: opacity;
+}
+
+@keyframes pane-neon-breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* Pane you are talking to (VoiceGlow.tsx): a comet of light runs around the border while you speak, the glow
+   swells with your voice (--voice-level 0..1), spins faster while transcribing, and flashes when the text lands. */
+@property --voice-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.voice-glow {
+  --voice-level: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  border-radius: 0 0 13px 13px;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 55%, transparent);
+}
+
+/* Inner glow swelling with the voice: fixed shadow, only its opacity follows --voice-level. */
+.voice-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 36px color-mix(in oklch, var(--color-accent) 40%, transparent);
+  opacity: calc(0.25 + 0.75 * var(--voice-level));
+  transition: opacity 90ms linear;
+}
+
+.voice-glow::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--voice-angle),
+    transparent 0deg 220deg,
+    color-mix(in oklch, var(--color-accent) 40%, transparent) 290deg,
+    var(--color-accent) 350deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 4px var(--color-accent));
+  animation: voice-orbit 2.6s linear infinite;
+}
+
+.voice-glow-transcribing::before {
+  animation-duration: 0.9s;
+}
+
+.voice-glow-sent {
+  animation: voice-sent 900ms ease-out forwards;
+}
+
+@keyframes voice-orbit {
+  to {
+    --voice-angle: 360deg;
+  }
+}
+
+@keyframes voice-sent {
+  0% {
+    box-shadow:
+      inset 0 0 0 2px var(--color-accent),
+      inset 0 0 60px color-mix(in oklch, var(--color-accent) 45%, transparent);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 1px transparent,
+      inset 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-neon,
+  .voice-glow::before {
+    animation: none;
+  }
+  .voice-glow-sent {
+    animation-duration: 1ms;
+  }
+}
+
 /* Dockview, retuned to our tokens. Our pane header is the dockview tab (see Deck.tsx). */
 .dockview-theme-agentdeck {
   --dv-group-view-background-color: var(--color-base);
@@ -196,13 +305,11 @@ body {
     box-shadow 150ms;
 }
 
-/* Agent status as the pane outline (data-status is set by PanePanel): green while working, grey once done,
-   amber while it waits for the user. */
+/* Agent status as the pane outline (data-status is set by PanePanel): a neon in the accent color (white by
+   default) while working, grey once done, amber while it waits for the user. The terminal part of the neon is
+   the .pane-neon overlay below. */
 .dockview-theme-agentdeck .dv-groupview:has([data-status="working"]) {
-  border-color: var(--color-ok);
-  box-shadow:
-    0 0 0 1px var(--color-ok),
-    0 0 12px color-mix(in oklch, var(--color-ok) 25%, transparent);
+  border-color: var(--color-accent);
 }
 
 .dockview-theme-agentdeck .dv-groupview:has([data-status="done"]) {
