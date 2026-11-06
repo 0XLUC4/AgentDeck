@@ -7,6 +7,7 @@ import { focusPane, restartPane } from "../../store/runtime";
 import { reattachPane, useDetached } from "../Detached/host";
 import { TerminalPane } from "./TerminalPane";
 import { VoiceGlow } from "./VoiceGlow";
+import { WorkingOutline } from "./WorkingOutline";
 
 export interface PanePanelParams {
   paneId: string;
@@ -64,7 +65,7 @@ export function PanePanel({ api, params }: IDockviewPanelProps<PanePanelParams>)
         </div>
       )}
       {/* Above the terminal: anything painted on the pane itself ends up behind the terminal's background. */}
-      {pane.status === "working" && !pane.exited && <div className="pane-neon" aria-hidden="true" />}
+      <WorkingOutline pane={pane} part="body" />
       <VoiceGlow paneId={pane.id} />
     </section>
   );

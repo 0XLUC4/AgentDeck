@@ -43,7 +43,12 @@ interface Runtime {
   port?: number;
   /** Last hook event: a hooked agent "working" with no event for long is likely stuck. */
   lastHookAt?: number;
+  /** Output before this time is a repaint (focus, resize), not activity. */
+  repaintUntil?: number;
 }
+
+/** A TUI repaints right after a click or a resize: that output must not light the pane up as busy. */
+const REPAINT_MS = 600;
 
 const runtimes = new Map<string, Runtime>();
 
@@ -94,7 +99,8 @@ export async function createPane(spec: PaneSpec, tabId: string, adopt = false): 
     rt.unlisten = await Promise.all([
       onPaneOutput(spec.id, (data) => {
         rt.buffer.push(data);
-        rt.lastOutputAt = Date.now();
+        const now = Date.now();
+        if (!rt.repaintUntil || now > rt.repaintUntil) rt.lastOutputAt = now;
         for (const fn of rt.listeners) fn(data);
       }),
       onPaneExit(spec.id, () => {
@@ -349,6 +355,7 @@ export function sendInput(id: string, data: string): void {
 export function reportSize(id: string, cols: number, rows: number): void {
   const rt = runtimes.get(id);
   if (!rt) return;
+  rt.repaintUntil = Date.now() + REPAINT_MS;
   rt.sized = true;
   if (rt.redraw) {
     rt.redraw = false;
@@ -364,6 +371,8 @@ export function reportSize(id: string, cols: number, rows: number): void {
 }
 
 export function focusPane(id: string): void {
+  const rt = runtimes.get(id);
+  if (rt) rt.repaintUntil = Date.now() + REPAINT_MS;
   deck.acknowledge(id); // looking at a finished pane counts as having seen it
   if (useDeck.getState().activePaneId === id) return;
   useDeck.setState({ activePaneId: id });

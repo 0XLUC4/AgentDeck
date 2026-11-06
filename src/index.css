@@ -154,26 +154,23 @@ body {
   }
 }
 
-/* Working agent: a crisp fluo line with a soft inner glow, drawn over the terminal. Only opacity animates
-   (composited, no repaint). */
-.pane-neon {
+/* Working agent (WorkingOutline.tsx): one clean white line around the whole pane, in two halves. */
+.pane-outline {
   position: absolute;
   inset: 0;
   z-index: 20;
-  border-radius: 0 0 13px 13px;
   pointer-events: none;
-  box-shadow:
-    inset 0 0 0 1.5px var(--color-accent),
-    inset 0 0 6px color-mix(in oklch, var(--color-accent) 60%, transparent),
-    inset 0 0 18px color-mix(in oklch, var(--color-accent) 22%, transparent);
-  animation: pane-neon-breathe 2.4s ease-in-out infinite;
-  will-change: opacity;
+  border: 1px solid var(--color-accent);
 }
 
-@keyframes pane-neon-breathe {
-  50% {
-    opacity: 0.55;
-  }
+.pane-outline-top {
+  border-bottom: 0;
+  border-radius: 13px 13px 0 0;
+}
+
+.pane-outline-body {
+  border-top: 0;
+  border-radius: 0 0 13px 13px;
 }
 
 /* Pane you are talking to (VoiceGlow.tsx): a comet of light runs around the border while you speak, the glow
@@ -254,7 +251,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pane-neon,
   .voice-glow::before {
     animation: none;
   }
@@ -305,12 +301,8 @@ body {
     box-shadow 150ms;
 }
 
-/* Agent status as the pane outline (data-status is set by PanePanel): a neon in the accent color (white by
-   default) while working, grey once done, amber while it waits for the user. The terminal part of the neon is
-   the .pane-neon overlay below. */
-.dockview-theme-agentdeck .dv-groupview:has([data-status="working"]) {
-  border-color: var(--color-accent);
-}
+/* Agent status as the pane outline (data-status is set by PanePanel): grey once done, amber while it waits for
+   the user. Working is the .pane-outline overlay. */
 
 .dockview-theme-agentdeck .dv-groupview:has([data-status="done"]) {
   border-color: var(--color-subtle);
