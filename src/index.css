@@ -156,15 +156,17 @@ body {
   }
 }
 
-/* Working agent (WorkingOutline.tsx): a soft line around the whole pane (two halves that meet) and a light
-   sweeping along the top. Only transform animates (composited). */
+/* Working agent (WorkingOutline.tsx): a soft white line around the whole pane (header and terminal halves) and a
+   light running all the way around it: top left to right, right side down, bottom right to left, left side up.
+   Four segments share one 3.2 s cycle; only transform animates (composited). */
 .pane-outline {
+  --sweep: color-mix(in oklch, var(--color-accent) 90%, transparent);
   position: absolute;
   inset: 0;
   z-index: 20;
   pointer-events: none;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--color-accent) 28%, transparent);
+  border: 1px solid color-mix(in oklch, var(--color-accent) 30%, transparent);
 }
 
 .pane-outline-top {
@@ -172,34 +174,98 @@ body {
   border-radius: 13px 13px 0 0;
 }
 
-.pane-outline-top::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 40%;
-  height: 1.5px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in oklch, var(--color-accent) 75%, transparent),
-    transparent
-  );
-  animation: pane-sweep 2.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-  will-change: transform;
-}
-
 .pane-outline-body {
   border-top: 0;
   border-radius: 0 0 13px 13px;
 }
 
-@keyframes pane-sweep {
-  from {
+.pane-outline-top::after,
+.pane-outline-body::after,
+.pane-outline-body::before,
+.pane-sweep-left {
+  content: "";
+  position: absolute;
+  animation: 3.2s linear infinite;
+  will-change: transform;
+}
+
+/* Horizontal segments: 40% of the width, 1.5px tall. */
+.pane-outline-top::after,
+.pane-outline-body::after {
+  left: 0;
+  width: 40%;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, var(--sweep), transparent);
+}
+
+/* Vertical segments: 30% of the height, 1.5px wide. */
+.pane-outline-body::before,
+.pane-sweep-left {
+  top: 0;
+  width: 1.5px;
+  height: 30%;
+  background: linear-gradient(180deg, transparent, var(--sweep), transparent);
+}
+
+.pane-outline-top::after {
+  top: 0;
+  animation-name: sweep-top;
+}
+
+.pane-outline-body::before {
+  right: 0;
+  animation-name: sweep-right;
+}
+
+.pane-outline-body::after {
+  bottom: 0;
+  animation-name: sweep-bottom;
+}
+
+.pane-sweep-left {
+  left: 0;
+  animation-name: sweep-left;
+}
+
+@keyframes sweep-top {
+  0% {
     transform: translateX(-100%);
   }
-  to {
+  25%,
+  100% {
     transform: translateX(250%);
+  }
+}
+
+@keyframes sweep-right {
+  0%,
+  25% {
+    transform: translateY(-100%);
+  }
+  50%,
+  100% {
+    transform: translateY(334%);
+  }
+}
+
+@keyframes sweep-bottom {
+  0%,
+  50% {
+    transform: translateX(250%);
+  }
+  75%,
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes sweep-left {
+  0%,
+  75% {
+    transform: translateY(334%);
+  }
+  100% {
+    transform: translateY(-100%);
   }
 }
 
@@ -259,7 +325,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pane-outline-top::after {
+  .pane-outline-top::after,
+  .pane-outline-body::after,
+  .pane-outline-body::before,
+  .pane-sweep-left {
     display: none;
   }
   .voice-glow-transcribing {

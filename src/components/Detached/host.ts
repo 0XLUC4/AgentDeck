@@ -1,4 +1,5 @@
 // Main-window side of detached panes: opens/closes pane-* windows and serves their scrollback, input and resizes.
+import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getAllWebviewWindows, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
@@ -61,21 +62,20 @@ export async function detachPane(paneId: string): Promise<void> {
   const geometry = readGeometry(paneId);
   // The main window's terminal stops forwarding as soon as this is set; the new window takes over.
   useDetached.setState({ [paneId]: true });
-  const win = new WebviewWindow(label, {
-    url: `pane.html?pane=${encodeURIComponent(paneId)}`,
-    title: pane.title || AGENTS[pane.agent].name,
-    width: geometry?.width ?? 900,
-    height: geometry?.height ?? 600,
-    ...(geometry ? { x: geometry.x, y: geometry.y } : { center: true }),
-    minWidth: 360,
-    minHeight: 200,
-    decorations: false,
-    shadow: true,
-  });
-  void win.once("tauri://error", (e) => {
+  // Created in Rust (open_pane_window): the JS API can't pass the WebView2 arguments the other windows use.
+  try {
+    await invoke("open_pane_window", {
+      paneId,
+      title: pane.title || AGENTS[pane.agent].name,
+      geometry: geometry ? [geometry.x, geometry.y, geometry.width, geometry.height] : null,
+    });
+  } catch (err) {
     markAttached(paneId);
-    deck.toast(`Could not detach the pane: ${String(e.payload)}`);
-  });
+    deck.toast(`Could not detach the pane: ${String(err)}`);
+    return;
+  }
+  const win = await WebviewWindow.getByLabel(label);
+  if (!win) return markAttached(paneId);
   void win.once("tauri://destroyed", () => markAttached(paneId));
 }
 

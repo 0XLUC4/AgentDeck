@@ -27,6 +27,40 @@ pub struct AppState {
     pub hooks: hooks_server::HookServer,
 }
 
+/// Same as `additionalBrowserArgs` in tauri.conf.json: windows sharing one WebView2 environment need identical
+/// arguments. They keep WebView2 rendering while the window is covered by another app (otherwise the GPU canvas is
+/// dropped and terminals stay black for a while on return).
+const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling";
+
+/// Opens a detached pane window (`pane-<id>`). From Rust because the JS API can't set the browser arguments.
+#[tauri::command(async)]
+fn open_pane_window(
+    app: tauri::AppHandle,
+    pane_id: String,
+    title: String,
+    geometry: Option<(f64, f64, f64, f64)>,
+) -> Result<(), String> {
+    if !pane_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("invalid pane id".into());
+    }
+    let url = format!("pane.html?pane={pane_id}");
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        &app,
+        format!("pane-{pane_id}"),
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title(title)
+    .min_inner_size(360.0, 200.0)
+    .decorations(false)
+    .shadow(true)
+    .additional_browser_args(WEBVIEW_ARGS);
+    builder = match geometry {
+        Some((x, y, width, height)) => builder.position(x, y).inner_size(width, height),
+        None => builder.inner_size(900.0, 600.0).center(),
+    };
+    builder.build().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -64,6 +98,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            open_pane_window,
             pty::spawn_pane,
             pty::attach_pane_output,
             pty::detach_pane_output,
