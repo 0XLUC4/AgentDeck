@@ -2,6 +2,7 @@
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { SquareArrowDownLeft, X, ZoomIn, ZoomOut } from "lucide-react";
@@ -120,6 +121,13 @@ export function DetachedPane({ paneId }: { paneId: string }) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch (err) {
+      console.warn("WebGL unavailable, using DOM renderer", err);
+    }
     term.attachCustomKeyEventHandler((e) => {
       const zoom = e.ctrlKey && !e.altKey ? ZOOM_KEYS[e.key] : undefined;
       if (zoom === undefined) return true;

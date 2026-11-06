@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -17,6 +18,10 @@ const THEME = { background: "#100e0c", foreground: "#ebe7e2", cursor: "#f1e7d2",
 
 /** Ctrl+<key> zoom shortcuts, handled before xterm sends them to the process. */
 const ZOOM_KEYS: Record<string, number | "reset"> = { "=": 1, "+": 1, "-": -1, "0": "reset" };
+/** Grace period before a hidden terminal gives its WebGL context back (quick tab flips keep it). */
+const WEBGL_RELEASE_MS = 10_000;
+/** Away from the window longer than this: the GPU canvas may be gone, rebuild the renderer on return. */
+const AWAY_RESET_MS = 2_000;
 
 /** Attaches an xterm view to an existing pane's output. Never spawns: safe to mount twice. */
 export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: number }) {
@@ -37,16 +42,48 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    // DOM renderer on purpose: WebView2 drops WebGL canvases while the window is in the background (black terminal).
+    // WebGL only while on screen: the webview caps live contexts (~16) and silently drops the oldest,
+    // so background sessions give theirs back. Hidden tabs sit off-screen, which ends the intersection.
+    let webgl: WebglAddon | null = null;
+    let webglBroken = false;
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    const enableWebgl = () => {
+      clearTimeout(releaseTimer);
+      if (webgl || webglBroken) return;
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => {
+          addon.dispose(); // xterm falls back to the DOM renderer
+          if (webgl === addon) webgl = null;
+          repaintAll();
+        });
+        term.loadAddon(addon);
+        webgl = addon;
+        // A fresh renderer only paints what is written next: redraw the screen already there.
+        repaintAll();
+      } catch (err) {
+        webglBroken = true;
+        console.warn("WebGL unavailable, using DOM renderer", err);
+      }
+    };
     const repaintAll = () => term.refresh(0, term.rows - 1);
+    const releaseWebgl = () => {
+      clearTimeout(releaseTimer);
+      releaseTimer = setTimeout(() => {
+        webgl?.dispose();
+        webgl = null;
+        repaintAll();
+      }, WEBGL_RELEASE_MS);
+    };
     // Off-screen tabs skip reflows (window drags would otherwise resize every terminal); refit on return.
     let onScreen = true;
     const visibility = new IntersectionObserver(([entry]) => {
       onScreen = entry?.isIntersecting ?? true;
       if (onScreen) {
+        enableWebgl();
         refit();
         repaintAll();
-      }
+      } else releaseWebgl();
     });
     visibility.observe(host);
 
@@ -91,11 +128,26 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     viewRef.current = { term, refit };
 
     // Back from minimize / another window: xterm (and our observer) may still think the pane is hidden.
+    // WebView2 can also drop the WebGL canvas meanwhile and reports the loss late: after a real absence,
+    // start a fresh WebGL renderer right away instead of waiting for that event.
+    let awaySince = 0;
+    const leave = () => {
+      awaySince ||= Date.now();
+    };
     const repaint = () => {
+      if (document.visibilityState !== "visible") return leave();
+      const away = awaySince > 0 && Date.now() - awaySince > AWAY_RESET_MS;
+      awaySince = 0;
       if (!wakeTerminal(term, host)) return;
       onScreen = true;
       refit();
+      if (away && webgl) {
+        webgl.dispose();
+        webgl = null;
+        enableWebgl(); // repaints
+      }
     };
+    window.addEventListener("blur", leave);
     window.addEventListener("focus", repaint);
     document.addEventListener("visibilitychange", repaint);
 
@@ -131,12 +183,14 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
 
     return () => {
       viewRef.current = null;
+      window.removeEventListener("blur", leave);
       window.removeEventListener("focus", repaint);
       document.removeEventListener("visibilitychange", repaint);
       host.removeEventListener("paste", onPaste, true);
       void unlistenDrop.then((unlisten) => unlisten());
       observer.disconnect();
       visibility.disconnect();
+      clearTimeout(releaseTimer);
       cancelAnimationFrame(fitFrame);
       clearTimeout(resizeTimer);
       detach();
