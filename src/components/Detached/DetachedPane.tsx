@@ -20,6 +20,7 @@ import {
   replayGate,
 } from "../../lib/detach";
 import { onPaneOutput } from "../../lib/ipc";
+import { wakeTerminal } from "../../lib/wakeTerminal";
 import { FONT_SIZE, type Pane } from "../../store/deck";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
 import { IconButton } from "../IconButton/IconButton";
@@ -138,6 +139,10 @@ export function DetachedPane({ paneId }: { paneId: string }) {
     const observer = new ResizeObserver(refit);
     observer.observe(host);
     viewRef.current = { term, refit };
+    // Back from minimize: xterm may still think it is hidden and drop every redraw.
+    const repaint = () => wakeTerminal(term, host) && refit();
+    window.addEventListener("focus", repaint);
+    document.addEventListener("visibilitychange", repaint);
 
     // Subscribe to live output first (held by the gate), then ask the main window for the scrollback.
     const gate = replayGate((data) => term.write(data));
@@ -177,6 +182,8 @@ export function DetachedPane({ paneId }: { paneId: string }) {
       disposed = true;
       viewRef.current = null;
       for (const fn of unlisten) fn();
+      window.removeEventListener("focus", repaint);
+      document.removeEventListener("visibilitychange", repaint);
       observer.disconnect();
       clearTimeout(resizeTimer);
       input.dispose();

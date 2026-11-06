@@ -6,6 +6,7 @@ import { useEffect, useRef } from "react";
 import { forwardsInput } from "../../lib/detach";
 import { fileRefs, imageExt } from "../../lib/fileRefs";
 import { savePasteImage } from "../../lib/ipc";
+import { wakeTerminal } from "../../lib/wakeTerminal";
 import { deck, useDeck } from "../../store/deck";
 import { attachOutput, reportSize, sendInput } from "../../store/runtime";
 import { DEFAULT_FONT_FAMILY, useSettings } from "../../store/settings";
@@ -89,8 +90,12 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
     observer.observe(host);
     viewRef.current = { term, refit };
 
-    // Writes made while the window was hidden can be skipped by the renderer: redraw on return.
-    const repaint = () => document.visibilityState === "visible" && repaintAll();
+    // Back from minimize / another window: xterm (and our observer) may still think the pane is hidden.
+    const repaint = () => {
+      if (!wakeTerminal(term, host)) return;
+      onScreen = true;
+      refit();
+    };
     window.addEventListener("focus", repaint);
     document.addEventListener("visibilitychange", repaint);
 
