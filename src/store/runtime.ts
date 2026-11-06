@@ -37,6 +37,12 @@ interface Runtime {
   redraw?: boolean;
   /** The terminal has reported its size at least once. */
   sized?: boolean;
+  /** Spawned with --resume: an exit right after means the conversation is gone, so retry fresh. */
+  resumedAt?: number;
+  /** PORT given to this agent (settings.basePort + n), kept across restarts. */
+  port?: number;
+  /** Last hook event: a hooked agent "working" with no event for long is likely stuck. */
+  lastHookAt?: number;
 }
 
 const runtimes = new Map<string, Runtime>();
@@ -93,6 +99,10 @@ export async function createPane(spec: PaneSpec, tabId: string, adopt = false): 
       }),
       onPaneExit(spec.id, () => {
         const pane = useDeck.getState().panes[spec.id];
+        if (!rt.onExit && pane && rt.resumedAt && Date.now() - rt.resumedAt < RESUME_GRACE_MS) {
+          retryFresh(spec.id, rt);
+          return;
+        }
         // The agent quit by itself (Ctrl+C, /exit): close its pane instead of leaving a dead one in the layout.
         if (!rt.onExit && pane && !pane.exited) {
           deck.toast(`${pane.title} exited`);
@@ -134,6 +144,41 @@ function nudgeSize(id: string, rt: Runtime): void {
 }
 
 const ALREADY_RUNNING = "pane id already in use";
+/** Claude exits within this window when the conversation to resume no longer exists. */
+const RESUME_GRACE_MS = 8000;
+
+/** The resumed conversation is gone: start a fresh one instead of losing the pane. */
+function retryFresh(id: string, rt: Runtime): void {
+  rt.resumedAt = undefined;
+  rt.buffer.clear();
+  deck.updatePane(id, (p) => ({ ...p, resumeId: undefined, generation: p.generation + 1 }));
+  void spawn(id);
+}
+
+/** At most this many agents start at once: a restore with many panes would otherwise spawn them all together. */
+const SPAWN_SLOTS = 3;
+let freeSlots = SPAWN_SLOTS;
+const slotQueue: (() => void)[] = [];
+
+async function withSpawnSlot<T>(job: () => Promise<T>): Promise<T> {
+  if (freeSlots > 0) freeSlots--;
+  else await new Promise<void>((resolve) => slotQueue.push(resolve));
+  try {
+    return await job();
+  } finally {
+    const next = slotQueue.shift();
+    if (next) next();
+    else freeSlots++;
+  }
+}
+
+/** Smallest free PORT offset among running agents. */
+function freePort(base: number): number {
+  const used = new Set([...runtimes.values()].map((r) => r.port));
+  let port = base;
+  while (used.has(port)) port++;
+  return port;
+}
 
 async function spawn(id: string): Promise<void> {
   const pane = useDeck.getState().panes[id];
@@ -146,18 +191,31 @@ async function spawn(id: string): Promise<void> {
     // goes to this process's env.
     const mcp = pane.orchestrator ? await mcpRegister(id) : null;
     const browser = pane.browser && pane.agent === "claude" ? await browserOpen(id) : [];
-    await spawnPane({
-      paneId: id,
-      agent: pane.agent,
-      cwd: pane.cwd,
-      args: [...browser, ...(mcp?.args ?? []), ...pane.args],
-      worktree: pane.worktree,
-      cols,
-      rows,
-      title: pane.title,
-      env: mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : undefined,
-      trust: useSettings.getState().trustAgentFolders,
+    const settings = useSettings.getState();
+    const resume = pane.agent === "claude" && pane.resumeId && settings.resumeSessions ? pane.resumeId : null;
+    rt.resumedAt = resume ? Date.now() : undefined;
+    if (settings.basePort && rt.port === undefined) rt.port = freePort(settings.basePort);
+    const env: Record<string, string> = {
+      ...(mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : {}),
+      ...(settings.basePort && rt.port ? { PORT: String(rt.port) } : {}),
+    };
+    const spawned = await withSpawnSlot(async () => {
+      if (runtimes.get(id) !== rt) return false; // closed while queued
+      await spawnPane({
+        paneId: id,
+        agent: pane.agent,
+        cwd: pane.cwd,
+        args: [...browser, ...(mcp?.args ?? []), ...(resume ? ["--resume", resume] : []), ...pane.args],
+        worktree: pane.worktree,
+        cols,
+        rows,
+        title: pane.title,
+        env: Object.keys(env).length > 0 ? env : undefined,
+        trust: settings.trustAgentFolders,
+      });
+      return true;
     });
+    if (!spawned) return;
     // Closed while spawning: closePane's kill ran before the backend registered the pane.
     if (runtimes.get(id) !== rt) {
       await killPane(id).catch((err) => console.warn("kill_pane failed", err));
@@ -217,6 +275,7 @@ async function doRestart(id: string): Promise<void> {
     statusSince: Date.now(),
     exited: false,
     hooked: false,
+    resumeId: undefined, // a restart starts a new conversation
     generation: p.generation + 1,
   }));
   await spawn(id);
@@ -339,7 +398,15 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
     const state = useDeck.getState();
     const prev = state.panes[e.paneId];
     if (!prev) return;
-    deck.updatePane(e.paneId, (p) => (p.hooked ? p : { ...p, hooked: true }));
+    const rt = runtimes.get(e.paneId);
+    if (rt) rt.lastHookAt = Date.now();
+    const resumeId = e.sessionId ?? undefined;
+    deck.updatePane(e.paneId, (p) =>
+      p.hooked && (!resumeId || p.resumeId === resumeId)
+        ? p
+        : { ...p, hooked: true, ...(resumeId ? { resumeId } : {}) },
+    );
+    if (e.editedFile) checkConflict(e.paneId, e.editedFile);
     tasks.apply(e.paneId, e, prev.taskStartedAt ?? undefined);
     deck.setStatus(e.paneId, e.status, e.lastAction);
     const event = e.status as keyof typeof NOTIFY_TEXT;
@@ -352,4 +419,62 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
       void notify(title, prev.title, { system: prefs.enabled, sound: prefs.sound, phoneUrl });
     }
   });
+}
+
+/** Last pane that edited each file (normalized path), to spot two agents editing the same file. */
+const editors = new Map<string, { paneId: string; at: number; warnedAt?: number }>();
+const CONFLICT_WINDOW_MS = 15 * 60_000;
+
+/** Toasts once when another live agent edited the same file recently (no worktree between them). */
+export function checkConflict(paneId: string, file: string, now = Date.now()): void {
+  const key = file.replaceAll("\\", "/").toLowerCase();
+  const prev = editors.get(key);
+  const panes = useDeck.getState().panes;
+  let warnedAt = prev?.warnedAt;
+  if (
+    prev &&
+    prev.paneId !== paneId &&
+    panes[prev.paneId] &&
+    now - prev.at < CONFLICT_WINDOW_MS &&
+    (!warnedAt || now - warnedAt > CONFLICT_WINDOW_MS)
+  ) {
+    const name = key.slice(key.lastIndexOf("/") + 1);
+    deck.toast(`${panes[prev.paneId].title} and ${panes[paneId]?.title ?? "another agent"} both edited ${name}`);
+    warnedAt = now;
+  }
+  editors.set(key, { paneId, at: now, warnedAt });
+}
+
+/** Alerts already sent, keyed by pane id: the statusSince they were sent for, and how many reminders. */
+const stallAlerts = new Map<string, { since: number; count: number }>();
+
+/**
+ * Called every second: notifies when a hooked agent has been working with no hook event for
+ * `stuckMinutes` (hung command, foreground dev server), and reminds every `remindMinutes` while
+ * an agent keeps waiting for an answer.
+ */
+export function watchAgents(now = Date.now()): void {
+  const { stuckMinutes, remindMinutes, notify: prefs, phoneUrl } = useSettings.getState();
+  for (const pane of Object.values(useDeck.getState().panes)) {
+    const rt = runtimes.get(pane.id);
+    if (!rt || pane.exited || !pane.hooked) continue;
+    const sent = stallAlerts.get(pane.id);
+    const fresh = !sent || sent.since !== pane.statusSince;
+    let due: string | null = null;
+    let count = fresh ? 0 : sent.count;
+    if (pane.status === "working" && stuckMinutes > 0 && count === 0) {
+      const quietMs = now - Math.max(rt.lastHookAt ?? 0, pane.statusSince);
+      if (quietMs > stuckMinutes * 60_000)
+        due = `${AGENTS[pane.agent].name} looks stuck (${stuckMinutes} min without progress)`;
+    } else if (pane.status === "waiting" && remindMinutes > 0 && prefs.waiting) {
+      const reminders = Math.floor((now - pane.statusSince) / (remindMinutes * 60_000));
+      if (reminders > count) {
+        due = `${AGENTS[pane.agent].name} is still waiting for you`;
+        count = reminders - 1;
+      }
+    }
+    if (!due) continue;
+    stallAlerts.set(pane.id, { since: pane.statusSince, count: count + 1 });
+    void notify(due, pane.title, { system: prefs.enabled, sound: prefs.sound, phoneUrl });
+  }
 }

@@ -3,11 +3,19 @@
 import { create } from "zustand";
 import { sendPrompt } from "../components/Broadcast/send";
 import { activeWorkspace, deck, useDeck } from "../store/deck";
-import { getVoiceConfig, onVoiceError, onVoiceTranscript } from "./ipc";
+import { getVoiceConfig, onVoiceError, onVoiceState, onVoiceTranscript } from "./ipc";
+import type { VoiceState } from "./types";
 import { type RouteCandidate, routeTranscript } from "./voiceRoute";
 
 const RECENT_KEY = "voice-recent";
 const RECENT_MAX = 50;
+
+/** Dictation state as seen by the main window, for the pane glow: recording, and the last delivery. */
+export const useVoiceActivity = create<{ state: VoiceState; sentTo: string | null; sentAt: number }>(() => ({
+  state: "idle",
+  sentTo: null,
+  sentAt: 0,
+}));
 
 /** Pane ids, most recently focused or addressed by voice first. Saved: pane ids survive a restart. */
 const useRecent = create<string[]>(() => {
@@ -69,6 +77,9 @@ export function listenVoiceTranscripts() {
   onVoiceError((message) => deck.toast(`Voice: ${message}`)).catch((err) =>
     console.warn("voice-error listener failed", err),
   );
+  onVoiceState((state) => useVoiceActivity.setState({ state })).catch((err) =>
+    console.warn("voice-state listener failed", err),
+  );
   return onVoiceTranscript(async (transcript) => {
     try {
       const { submit } = await getVoiceConfig();
@@ -80,6 +91,7 @@ export function listenVoiceTranscripts() {
       if (!paneId) throw new Error("no running agent in this workspace");
       touch(paneId);
       await sendPrompt(paneId, routed.text, submit);
+      useVoiceActivity.setState({ sentTo: paneId, sentAt: Date.now() });
     } catch (err) {
       deck.toast(`Dictation not sent: ${err instanceof Error ? err.message : String(err)}`);
     }

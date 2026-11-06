@@ -21,6 +21,10 @@ export interface AgentStatusEvent {
   prompt?: string | null;
   /** Agent's final message of the turn (Claude Stop, Codex turn end). */
   summary?: string | null;
+  /** Claude conversation id, resumable with --resume. */
+  sessionId?: string | null;
+  /** Absolute path of a file the agent just edited. */
+  editedFile?: string | null;
 }
 
 export type VoiceState = "idle" | "listening" | "downloading" | "transcribing" | "error";

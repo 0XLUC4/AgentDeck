@@ -28,9 +28,15 @@ tells you which one needs you.
 - Panes arrange themselves in a grid (2 side by side, 3 as 2 + 1, 4 as 2x2, 6 as 3x2...)
 - Zoom, maximize, detach a pane into its own window, restart, interrupt
 - Optional git worktree per agent so they don't step on each other
+- Claude Code agents pick up their conversation again after a restart or when a session is reopened
+- Each agent can get its own `PORT` so parallel dev servers don't collide
 
 **Know what's going on**
 - Live status for every agent (working, waiting for you, done, error) through the agents' own hooks
+  (Claude Code, Codex and Gemini CLI)
+- Alerts when an agent looks stuck, reminders when one keeps waiting for you, and a warning when two agents
+  edit the same file
+- Uncommitted changes of each agent (+12 -3 · 4 files) right in its header
 - Activity panel across all workspaces, with the prompt, the actions taken and the final answer of each task
 - Answer Claude Code permission prompts from the panel without switching windows, or let AgentDeck
   auto-allow the ones you trust in a folder ("Bash(pnpm test *)", chained commands never match)
@@ -41,7 +47,8 @@ tells you which one needs you.
 **Workspaces and sessions**
 - Link a folder, a git repo or a project already open in VS Code / Cursor / Explorer
 - Several sessions per workspace, archived and reopened with their layout
-- Session templates, a prompt queue per agent, broadcast one prompt to many agents
+- Session templates, a prompt queue per agent, broadcast one prompt to many agents, send one agent's
+  result to another
 - Git panel: diff, commit, merge a worktree back or open a pull request (GitHub CLI), compare two agents,
   restore points taken before each task
 - Auto review: when an agent finishes, another one reviews its changes
@@ -81,6 +88,7 @@ Grok Build.
 | Ctrl+Shift+A | Activity panel |
 | Ctrl+Shift+B | Broadcast a prompt |
 | Ctrl+Shift+F | Search terminal history |
+| Ctrl+Shift+J | Jump to the agent waiting for you |
 | Ctrl+Shift+W | Wall view |
 | Ctrl+, | Settings |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom the focused terminal |

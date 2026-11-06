@@ -19,6 +19,8 @@ export interface PaneSpec {
   orchestrator?: boolean;
   /** Claude pane driving its own AgentDeck browser window (src-tauri/src/browser.rs). */
   browser?: boolean;
+  /** Claude conversation to continue on the next spawn (restore, reopened session). */
+  resumeId?: string;
 }
 
 export interface Pane extends PaneSpec {
@@ -162,6 +164,7 @@ export const toSpec = ({
   fontSize,
   orchestrator,
   browser,
+  resumeId,
 }: Pane): PaneSpec => ({
   id,
   agent,
@@ -173,6 +176,7 @@ export const toSpec = ({
   fontSize,
   ...(orchestrator ? { orchestrator } : {}),
   ...(browser ? { browser } : {}),
+  ...(resumeId ? { resumeId } : {}),
 });
 
 export const newTab = (name: string, workspaceId: string, layout: SerializedDockview | null = null): Tab => ({

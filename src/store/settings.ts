@@ -66,6 +66,14 @@ export interface Settings {
   agents: Record<AgentKind, AgentDefaults>;
   /** Pre-accept each agent's "trust this folder" prompt for folders opened in AgentDeck. */
   trustAgentFolders: boolean;
+  /** Restored and reopened Claude panes continue their previous conversation (--resume). */
+  resumeSessions: boolean;
+  /** Notify when an agent has been working this many minutes without printing anything; 0 = off. */
+  stuckMinutes: number;
+  /** Notify again when an agent keeps waiting for an answer this many minutes; 0 = off. */
+  remindMinutes: number;
+  /** Agents get PORT=basePort+n so their dev servers don't collide; 0 = off. */
+  basePort: number;
   speech: SpeechSettings;
   autoAllow: AutoAllowRule[];
   budget: BudgetSettings;
@@ -87,6 +95,10 @@ export const DEFAULT_SETTINGS: Settings = {
   notify: { enabled: true, sound: true, done: true, waiting: true, error: false, onlyUnseen: true },
   speech: { enabled: false, voice: "", rate: 1 },
   trustAgentFolders: true,
+  resumeSessions: true,
+  stuckMinutes: 10,
+  remindMinutes: 5,
+  basePort: 0,
   autoAllow: [],
   budget: { dailyUsd: 0, paneUsd: 0, interrupt: false },
   phoneUrl: "",
@@ -103,6 +115,9 @@ const hexColor = (value: unknown) => (typeof value === "string" && HEX_COLOR.tes
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
+const minutes = (v: unknown, fallback: number) =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1440 ? v : fallback;
+const port = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 1024 && v <= 65000 ? v : 0);
 const usd = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 
 /** Builds valid settings from anything read from disk: unknown or invalid fields fall back to defaults. */
@@ -124,6 +139,10 @@ export function mergeSettings(raw: unknown): Settings {
     closeToTray: bool(raw.closeToTray, d.closeToTray),
     autoGrid: bool(raw.autoGrid, d.autoGrid),
     trustAgentFolders: bool(raw.trustAgentFolders, d.trustAgentFolders),
+    resumeSessions: bool(raw.resumeSessions, d.resumeSessions),
+    stuckMinutes: minutes(raw.stuckMinutes, d.stuckMinutes),
+    remindMinutes: minutes(raw.remindMinutes, d.remindMinutes),
+    basePort: port(raw.basePort),
     notify: {
       enabled: bool(n.enabled, d.notify.enabled),
       sound: bool(n.sound, d.notify.sound),

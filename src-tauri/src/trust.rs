@@ -96,7 +96,7 @@ fn codex_key(path: &Path) -> String {
 
 /// Read-modify-write with an atomic replace. `edit` returns None when nothing changes.
 /// A parse error is retried once: the agent may be rewriting the file right now.
-fn edit_file(
+pub(crate) fn edit_file(
     path: &Path,
     edit: impl Fn(&str) -> Result<Option<String>, String>,
 ) -> Result<(), String> {

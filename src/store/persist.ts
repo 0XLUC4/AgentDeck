@@ -5,13 +5,31 @@ import {
   DEFAULT_WORKSPACE_NAME,
   deck,
   newTab,
+  type Pane,
   type SavedSession,
   type Tab,
   tabToSession,
+  toSpec,
   useDeck,
   type Workspace,
 } from "./deck";
 import { createPane } from "./runtime";
+
+/** False when only runtime fields (status, lastAction...) changed: hook events then skip the snapshot. */
+function specsChanged(next: Record<string, Pane>, prev: Record<string, Pane>): boolean {
+  const ids = Object.keys(next);
+  if (ids.length !== Object.keys(prev).length) return true;
+  return ids.some((id) => {
+    const a = next[id];
+    const b = prev[id];
+    if (a === b) return false;
+    if (!b) return true;
+    const sa = toSpec(a) as unknown as Record<string, unknown>;
+    const sb = toSpec(b) as unknown as Record<string, unknown>;
+    const keys = new Set([...Object.keys(sa), ...Object.keys(sb)]);
+    return [...keys].some((k) => (Array.isArray(sa[k]) ? String(sa[k]) !== String(sb[k]) : sa[k] !== sb[k]));
+  });
+}
 
 const KEY = "deck";
 const SAVE_DEBOUNCE_MS = 300;
@@ -105,7 +123,11 @@ export async function restoreAndAutosave(): Promise<void> {
     const sessions = saved ? hydrate(saved) : [];
     const { adopt, orphans } = planRestore(sessions, await listPanes().catch(() => []));
     for (const id of orphans) killPane(id).catch((err) => console.warn("kill_pane failed", err));
-    for (const tab of sessions) {
+    // Active session first: its agents get the first spawn slots (see runtime.ts withSpawnSlot).
+    const ordered = [...sessions].sort(
+      (a, b) => Number(b.id === saved?.activeTabId) - Number(a.id === saved?.activeTabId),
+    );
+    for (const tab of ordered) {
       for (const pane of tab.panes) void createPane(pane, tab.id, adopt.has(pane.id));
     }
   } catch (err) {
@@ -126,7 +148,7 @@ export async function restoreAndAutosave(): Promise<void> {
     const changed =
       state.workspaces !== prev.workspaces ||
       state.tabs !== prev.tabs ||
-      state.panes !== prev.panes ||
+      (state.panes !== prev.panes && specsChanged(state.panes, prev.panes)) ||
       state.archived !== prev.archived ||
       state.lastCwd !== prev.lastCwd ||
       state.activeTabId !== prev.activeTabId;

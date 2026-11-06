@@ -148,10 +148,63 @@ function Notifications({ s, save }: { s: Settings; save: Save }) {
       >
         <Toggle id="set-unseen" checked={s.notify.onlyUnseen} onChange={(v) => set({ onlyUnseen: v })} />
       </Row>
+      <Row
+        label="Alert when an agent looks stuck"
+        hint="Working with no progress for this many minutes (a hung command, a dev server in the foreground)"
+      >
+        <NumberField
+          label="Minutes before a stuck alert"
+          value={s.stuckMinutes}
+          max={1440}
+          onCommit={(v) => save(updateSettings({ stuckMinutes: v }))}
+        />
+      </Row>
+      <Row label="Remind me when an agent keeps waiting" hint="Every this many minutes, also on your phone">
+        <NumberField
+          label="Minutes between reminders"
+          value={s.remindMinutes}
+          max={1440}
+          onCommit={(v) => save(updateSettings({ remindMinutes: v }))}
+        />
+      </Row>
       <SpeechRows s={s} save={save} />
       <PhoneRow s={s} save={save} />
       <BudgetRows s={s} save={save} />
     </Section>
+  );
+}
+
+/** Number input saved on blur; empty or 0 means off. */
+function NumberField({
+  label,
+  value,
+  min = 0,
+  max,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  min?: number;
+  max: number;
+  onCommit: (value: number) => void;
+}) {
+  return (
+    <input
+      type="number"
+      min={0}
+      max={max}
+      step={1}
+      aria-label={label}
+      defaultValue={value || ""}
+      placeholder="Off"
+      onBlur={(e) => {
+        const raw = Math.round(Number(e.target.value) || 0);
+        const next = raw === 0 ? 0 : Math.min(Math.max(raw, min), max);
+        e.target.value = next ? String(next) : "";
+        if (next !== value) onCommit(next);
+      }}
+      className={`${field} w-24 text-right tabular-nums`}
+    />
   );
 }
 
@@ -238,6 +291,26 @@ function Agents({ s, save }: { s: Settings; save: Save }) {
           id="set-trust-folders"
           checked={s.trustAgentFolders}
           onChange={(v) => save(updateSettings({ trustAgentFolders: v }))}
+        />
+      </Row>
+      <Row
+        label="Resume conversations"
+        hint="Claude Code agents pick up their previous conversation when AgentDeck restarts or a session is reopened"
+        htmlFor="set-resume"
+      >
+        <Toggle
+          id="set-resume"
+          checked={s.resumeSessions}
+          onChange={(v) => save(updateSettings({ resumeSessions: v }))}
+        />
+      </Row>
+      <Row label="Port per agent" hint="Each agent gets PORT=this+n so dev servers started in parallel don't collide">
+        <NumberField
+          label="Base port"
+          value={s.basePort}
+          min={1024}
+          max={65000}
+          onCommit={(v) => save(updateSettings({ basePort: v }))}
         />
       </Row>
       <AutoAllowRows s={s} save={save} />

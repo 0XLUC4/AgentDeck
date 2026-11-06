@@ -1,9 +1,11 @@
 import { ArrowLeft, Check, Copy, Dot, FilePen, type LucideIcon, Search, SquareTerminal, Terminal } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AgentLogo } from "../components/AgentLogo/AgentLogo";
+import { sendPrompt } from "../components/Broadcast/send";
+import { jumpToPane } from "../components/Wall/jump";
 import { AGENTS } from "../lib/agents";
 import { formatElapsed, formatSince, useNow } from "../lib/clock";
-import { type ActivityItem, deck } from "../store/deck";
+import { type ActivityItem, deck, useDeck } from "../store/deck";
 import { type Task, useTasks } from "../store/tasks";
 
 const LONG_PROMPT = 400;
@@ -80,6 +82,49 @@ function TaskBody({ task }: { task: Task }) {
         )}
       </Section>
     </>
+  );
+}
+
+/**
+ * Pastes another agent's result into a second agent's prompt (not submitted), then focuses it so the user
+ * adds the instruction: "review this", "continue from here"...
+ */
+function HandOff({ fromId, name, summary }: { fromId: string; name: string; summary: string }) {
+  const tabs = useDeck((s) => s.tabs);
+  const panes = useDeck((s) => s.panes);
+  const targets = tabs.flatMap((t) =>
+    t.paneIds
+      .filter((id) => id !== fromId && panes[id] && !panes[id].exited)
+      .map((id) => ({ tabId: t.id, id, label: `${panes[id].title || AGENTS[panes[id].agent].name} (${t.name})` })),
+  );
+  if (targets.length === 0) return null;
+  return (
+    <select
+      aria-label="Send the result to another agent"
+      className={`${BUTTON} bg-transparent`}
+      value=""
+      onChange={(e) => {
+        const target = targets.find((t) => t.id === e.target.value);
+        if (!target) return;
+        sendPrompt(
+          target.id,
+          `Result from ${name}:
+${summary}
+
+`,
+          false,
+        )
+          .then(() => jumpToPane(target.tabId, target.id))
+          .catch(() => deck.toast("Could not send the result"));
+      }}
+    >
+      <option value="">Send result to…</option>
+      {targets.map((t) => (
+        <option key={t.id} value={t.id}>
+          {t.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -164,6 +209,7 @@ export function TaskDetail({ item, onJump, onClose }: { item: ActivityItem; onJu
               {copied ? "Copied" : "Copy result"}
             </button>
           )}
+          {task?.summary && <HandOff fromId={pane.id} name={name} summary={task.summary} />}
         </div>
         {previous.length > 0 && (
           <Section title={`Previous tasks (${previous.length})`}>

@@ -4,9 +4,53 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AgentDeck</title>
+    <script src="/boot.js"></script>
+    <!-- Painted before any bundle loads: no white flash, the logo shows while the app starts. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #131313;
+      }
+      html.boot-light,
+      html.boot-light body {
+        background: #f4f4f4;
+      }
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: inherit;
+        transition: opacity 220ms ease-out;
+      }
+      #splash img {
+        width: 72px;
+        height: 72px;
+        animation: splash-breathe 1.6s ease-in-out infinite;
+      }
+      #splash.gone {
+        opacity: 0;
+        pointer-events: none;
+      }
+      @keyframes splash-breathe {
+        50% {
+          opacity: 0.55;
+          transform: scale(0.94);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #splash img {
+          animation: none;
+        }
+      }
+    </style>
   </head>
 
   <body>
+    <div id="splash" aria-hidden="true"><img src="/logo.png" alt="" /></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

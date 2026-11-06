@@ -235,18 +235,36 @@ pub fn hook_args(kind: AgentKind, pane_id: &str, hooks: &HookServer) -> Vec<Stri
 /// Merges AgentDeck hooks into the agent's config for `cwd` without clobbering user config.
 pub fn prepare_hooks(kind: AgentKind, cwd: &str, hooks: &HookServer) -> Result<(), String> {
     match kind {
-        AgentKind::Claude => update_claude_settings(cwd, |s| merge_claude_hooks(s, &hooks.url())),
+        AgentKind::Claude => update_settings(&claude_settings(cwd), |s| {
+            merge_claude_hooks(s, &hooks.url())
+        }),
+        AgentKind::Gemini => {
+            // Non-fatal: Gemini settings may be JSONC we refuse to rewrite; output-based idle detection still works.
+            let url = hooks.url();
+            if let Err(e) = update_settings(&gemini_settings(cwd), |s| merge_gemini_hooks(s, &url))
+            {
+                eprintln!("gemini hooks not installed: {e}");
+            }
+            Ok(())
+        }
         // Codex: see `hook_args` (no global config edits).
-        // TODO: Gemini CLI has command-only hooks in .gemini/settings.json (unverified
-        // locally, not installed); until wired, the frontend's idle detection covers Gemini panes.
         _ => Ok(()),
     }
 }
 
-/// Removes AgentDeck's Claude hooks from `<cwd>/.claude/settings.local.json`.
+/// Removes AgentDeck's hooks from `<cwd>/.claude/settings.local.json` and `<cwd>/.gemini/settings.json`.
 #[tauri::command]
 pub fn uninstall_hooks(cwd: String) -> Result<(), String> {
-    update_claude_settings(&cwd, strip_claude_hooks)
+    update_settings(&claude_settings(&cwd), strip_claude_hooks)?;
+    update_settings(&gemini_settings(&cwd), |s| strip_hooks(s, is_ours_gemini))
+}
+
+fn claude_settings(cwd: &str) -> PathBuf {
+    Path::new(cwd).join(".claude").join("settings.local.json")
+}
+
+fn gemini_settings(cwd: &str) -> PathBuf {
+    Path::new(cwd).join(".gemini").join("settings.json")
 }
 
 const CLAUDE_EVENTS: [&str; 10] = [
@@ -264,46 +282,53 @@ const CLAUDE_EVENTS: [&str; 10] = [
 /// PermissionRequest is held by the hook server until the user answers in AgentDeck (hold: 590 s).
 const PERMISSION_TIMEOUT_S: u64 = 600;
 
-/// Read-modify-write of settings.local.json; refuses to touch a file it cannot parse.
-fn update_claude_settings(cwd: &str, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
-    let path = Path::new(cwd).join(".claude").join("settings.local.json");
-    let original = match std::fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-    };
-    let mut settings: Value = match &original {
-        Some(text) if !text.trim().is_empty() => serde_json::from_str(text)
-            .map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?,
-        _ => json!({}),
-    };
-    if !settings.is_object() {
-        return Err(format!("{} is not a JSON object", path.display()));
-    }
-    let before = settings.clone();
-    edit(&mut settings);
-    if settings == before {
-        return Ok(());
-    }
-    std::fs::create_dir_all(path.parent().expect("has parent")).map_err(|e| e.to_string())?;
-    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+/// Read-modify-write of a JSON settings file (atomic replace); refuses to touch a file it cannot parse.
+fn update_settings(path: &Path, edit: impl Fn(&mut Value)) -> Result<(), String> {
+    crate::trust::edit_file(path, |text| {
+        let mut settings: Value = if text.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(text).map_err(|e| format!("not valid JSON: {e}"))?
+        };
+        if !settings.is_object() {
+            return Err("not a JSON object".into());
+        }
+        let before = settings.clone();
+        edit(&mut settings);
+        if settings == before {
+            return Ok(None);
+        }
+        let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+        Ok(Some(text + "\n"))
+    })
 }
 
-/// Our hook groups are recognized by the AgentDeck token header (no extra keys: Claude validates settings).
+/// Our Claude hook groups are recognized by the AgentDeck token header (no extra keys: Claude validates settings).
 fn is_ours(group: &Value) -> bool {
     group["hooks"]
         .as_array()
         .is_some_and(|hs| hs.iter().any(|h| h["headers"].get(TOKEN_HEADER).is_some()))
 }
 
+/// Our Gemini hook groups carry a hook named `GEMINI_HOOK_NAME`.
+fn is_ours_gemini(group: &Value) -> bool {
+    group["hooks"]
+        .as_array()
+        .is_some_and(|hs| hs.iter().any(|h| h["name"] == GEMINI_HOOK_NAME))
+}
+
 fn strip_claude_hooks(settings: &mut Value) {
+    strip_hooks(settings, is_ours);
+}
+
+/// Drops hook groups matching `ours`, then empty event lists and an empty `hooks` key.
+fn strip_hooks(settings: &mut Value, ours: fn(&Value) -> bool) {
     let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
         return;
     };
     for groups in hooks.values_mut() {
         if let Some(arr) = groups.as_array_mut() {
-            arr.retain(|g| !is_ours(g));
+            arr.retain(|g| !ours(g));
         }
     }
     hooks.retain(|_, groups| groups.as_array().is_none_or(|a| !a.is_empty()));
@@ -343,6 +368,59 @@ fn merge_claude_hooks(settings: &mut Value, url: &str) {
                 group["hooks"][0]["timeout"] = json!(PERMISSION_TIMEOUT_S);
             }
             arr.push(group);
+        }
+    }
+}
+
+/// https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md
+const GEMINI_EVENTS: [&str; 6] = [
+    "SessionStart",
+    "BeforeAgent",
+    "BeforeTool",
+    "AfterTool",
+    "AfterAgent",
+    "Notification",
+];
+const GEMINI_HOOK_NAME: &str = "agentdeck-status";
+
+/// Gemini hooks are command-only (payload on stdin), run by PowerShell on Windows and bash elsewhere.
+/// Token and pane id are read from the PTY env at run time, so the file holds no secret.
+fn gemini_hook_command(url: &str) -> String {
+    let url = format!("{url}?agent=gemini");
+    if cfg!(windows) {
+        // `curl.exe`, not the PowerShell `curl` alias; "@-" quoted so PowerShell does not splat it.
+        format!(
+            "curl.exe -s -m 3 -o NUL -H \"{TOKEN_HEADER}: $env:AGENTDECK_HOOK_TOKEN\" -H \"X-AgentDeck-Pane: $env:AGENTDECK_PANE_ID\" -H \"Content-Type: application/json\" --data-binary \"@-\" \"{url}\""
+        )
+    } else {
+        format!(
+            "curl -s -m 3 -o /dev/null -H \"{TOKEN_HEADER}: $AGENTDECK_HOOK_TOKEN\" -H \"X-AgentDeck-Pane: $AGENTDECK_PANE_ID\" -H \"Content-Type: application/json\" --data-binary @- '{url}'"
+        )
+    }
+}
+
+/// Idempotent: drops previous AgentDeck entries, then appends fresh ones (port may have changed).
+fn merge_gemini_hooks(settings: &mut Value, url: &str) {
+    strip_hooks(settings, is_ours_gemini);
+    let ours = json!({ "hooks": [{
+        "type": "command",
+        "name": GEMINI_HOOK_NAME,
+        "command": gemini_hook_command(url),
+        "timeout": 5000,
+    }]});
+    let obj = settings.as_object_mut().expect("checked object");
+    let hooks = obj.entry("hooks").or_insert_with(|| json!({}));
+    if !hooks.is_object() {
+        *hooks = json!({});
+    }
+    for event in GEMINI_EVENTS {
+        let groups = hooks
+            .as_object_mut()
+            .expect("object")
+            .entry(event)
+            .or_insert_with(|| json!([]));
+        if let Some(arr) = groups.as_array_mut() {
+            arr.push(ours.clone());
         }
     }
 }
@@ -398,7 +476,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("agentdeck-test-{}", uuid::Uuid::new_v4()));
         let file = dir.join(".claude").join("settings.local.json");
         let cwd = dir.to_string_lossy().into_owned();
-        update_claude_settings(&cwd, |s| merge_claude_hooks(s, "http://127.0.0.1:1/hook")).unwrap();
+        update_settings(&file, |s| merge_claude_hooks(s, "http://127.0.0.1:1/hook")).unwrap();
         assert!(
             std::fs::read_to_string(&file)
                 .unwrap()
@@ -408,8 +486,70 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), "{}");
 
         std::fs::write(&file, "{ broken").unwrap();
-        assert!(update_claude_settings(&cwd, |s| merge_claude_hooks(s, "x")).is_err());
+        assert!(update_settings(&file, |s| merge_claude_hooks(s, "x")).is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ broken");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gemini_merge_is_idempotent_and_keeps_user_settings() {
+        let user = json!({ "type": "command", "name": "mine", "command": "echo hi" });
+        let mut s = json!({
+            "model": { "name": "gemini-2.5-pro" },
+            "hooks": { "AfterAgent": [{ "hooks": [user] }] },
+            "hooksConfig": { "enabled": true }
+        });
+        merge_gemini_hooks(&mut s, "http://127.0.0.1:1/hook");
+        let once = s.clone();
+        merge_gemini_hooks(&mut s, "http://127.0.0.1:1/hook");
+        assert_eq!(s, once);
+        assert_eq!(s["model"]["name"], "gemini-2.5-pro");
+        assert_eq!(s["hooksConfig"]["enabled"], true);
+        assert_eq!(s["hooks"]["AfterAgent"].as_array().unwrap().len(), 2);
+        assert_eq!(s["hooks"]["AfterAgent"][0]["hooks"][0], user);
+        for event in GEMINI_EVENTS {
+            let ours = &s["hooks"][event].as_array().unwrap().last().unwrap()["hooks"][0];
+            assert_eq!(ours["type"], "command");
+            assert_eq!(ours["timeout"], 5000);
+        }
+
+        // New port replaces, never duplicates.
+        merge_gemini_hooks(&mut s, "http://127.0.0.1:2/hook");
+        assert_eq!(s["hooks"]["AfterAgent"].as_array().unwrap().len(), 2);
+        let command = s["hooks"]["AfterAgent"][1]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(command.contains("http://127.0.0.1:2/hook?agent=gemini"));
+        assert!(command.contains("AGENTDECK_HOOK_TOKEN") && command.contains("AGENTDECK_PANE_ID"));
+
+        strip_hooks(&mut s, is_ours_gemini);
+        assert_eq!(s["hooks"], json!({ "AfterAgent": [{ "hooks": [user] }] }));
+        strip_hooks(&mut s, is_ours_gemini);
+        assert_eq!(s["hooks"], json!({ "AfterAgent": [{ "hooks": [user] }] }));
+    }
+
+    #[test]
+    fn gemini_settings_file_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-gem-{}", uuid::Uuid::new_v4()));
+        let file = dir.join(".gemini").join("settings.json");
+        let cwd = dir.to_string_lossy().into_owned();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, r#"{ "theme": "Dracula" }"#).unwrap();
+        let hooks = HookServer {
+            port: 47800,
+            token: "tok".into(),
+        };
+        prepare_hooks(AgentKind::Gemini, &cwd, &hooks).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains(GEMINI_HOOK_NAME) && !text.contains("tok\""));
+        uninstall_hooks(cwd.clone()).unwrap();
+        let back: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(back, json!({ "theme": "Dracula" }));
+
+        // JSONC (comments) is left untouched and does not block the pane.
+        std::fs::write(&file, "// mine\n{}").unwrap();
+        prepare_hooks(AgentKind::Gemini, &cwd, &hooks).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "// mine\n{}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
