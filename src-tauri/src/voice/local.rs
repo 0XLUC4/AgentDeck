@@ -1,10 +1,10 @@
 //! Offline transcription with whisper.cpp (whisper-rs): model download, cached
 //! model state, and a filter for Whisper's classic silence hallucinations.
 
+use std::ffi::c_void;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -43,10 +43,16 @@ pub fn ensure_model(
     let part = dir.join(format!("{}.part", model.file_name()));
     let result = download(&model.url(), &part, &mut on_progress)
         .and_then(|()| fs::rename(&part, &path).map_err(|e| format!("save model: {e}")));
-    if result.is_err() {
-        let _ = fs::remove_file(&part);
+    match result {
+        Ok(()) => {
+            let _ = fs::remove_file(dir.join(model.legacy_file_name()));
+            Ok(path)
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&part);
+            Err(e)
+        }
     }
-    result.map(|()| path)
 }
 
 // Note: checks byte count against Content-Length, not the SHA-256; add it if corrupt models show up.
@@ -104,7 +110,9 @@ fn load(loaded: &mut Option<(PathBuf, WhisperState)>, model_path: &Path) -> Resu
     if loaded.as_ref().is_none_or(|(path, _)| path != model_path) {
         *loaded = None; // free the previous model before loading another
         let path = model_path.to_str().ok_or("model path is not valid UTF-8")?;
-        let context = WhisperContext::new_with_params(path, WhisperContextParameters::default())
+        let mut params = WhisperContextParameters::default();
+        params.flash_attn(true); // faster attention, also on CPU
+        let context = WhisperContext::new_with_params(path, params)
             .map_err(|e| format!("cannot load {}: {e}", model_path.display()))?;
         let state = context
             .create_state()
@@ -134,7 +142,11 @@ pub fn allow_partials() {
 }
 
 /// Live preview while the user speaks. Gives up (Err) as soon as the final transcription starts.
-pub fn transcribe_partial(model_path: &Path, samples: &[f32], language: &str) -> Result<String, String> {
+pub fn transcribe_partial(
+    model_path: &Path,
+    samples: &[f32],
+    language: &str,
+) -> Result<String, String> {
     run(model_path, samples, language, true)
 }
 
@@ -145,7 +157,12 @@ pub fn transcribe(model_path: &Path, samples: &[f32], language: &str) -> Result<
     run(model_path, samples, language, false)
 }
 
-fn run(model_path: &Path, samples: &[f32], language: &str, partial: bool) -> Result<String, String> {
+fn run(
+    model_path: &Path,
+    samples: &[f32],
+    language: &str,
+    partial: bool,
+) -> Result<String, String> {
     let mut loaded = LOADED.lock().map_err(|e| e.to_string())?;
     if partial && CANCEL_PARTIAL.load(Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -153,8 +170,10 @@ fn run(model_path: &Path, samples: &[f32], language: &str, partial: bool) -> Res
     load(&mut loaded, model_path)?;
     let (_, state) = loaded.as_mut().ok_or("model not loaded")?;
 
+    // Hallucination filter judges the clip as recorded; whisper only sees the speech part.
+    let recorded_secs = samples.len().max(MIN_SAMPLES) as f32 / 16_000.0;
     // whisper.cpp silently returns nothing for clips under 1 s: pad with silence.
-    let mut samples = samples.to_vec();
+    let mut samples = speech(samples).to_vec();
     samples.resize(samples.len().max(MIN_SAMPLES), 0.0);
     let secs = samples.len() as f32 / 16_000.0;
 
@@ -186,7 +205,37 @@ fn run(model_path: &Path, samples: &[f32], language: &str, partial: bool) -> Res
         .as_iter()
         .filter_map(|segment| segment.to_str_lossy().ok().map(|s| s.into_owned()))
         .collect();
-    Ok(clean(&text, secs))
+    Ok(clean(&text, recorded_secs))
+}
+
+/// 20 ms frames at 16 kHz.
+const FRAME: usize = 320;
+/// Kept around the detected speech so soft word starts and ends survive.
+const SPEECH_MARGIN: usize = 16_000 * 3 / 10;
+
+/// Cuts the silence before and after speech (key held before talking, released late): a shorter
+/// clip means a smaller encoder context, the main cost on CPU. Returns everything if unsure.
+fn speech(samples: &[f32]) -> &[f32] {
+    let rms: Vec<f32> = samples
+        .chunks(FRAME)
+        .map(|f| (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt())
+        .collect();
+    if rms.len() < 10 {
+        return samples;
+    }
+    let mut sorted = rms.clone();
+    sorted.sort_by(f32::total_cmp);
+    let noise = sorted[sorted.len() / 10];
+    let threshold = (noise * 3.0).max(0.003);
+    let (Some(first), Some(last)) = (
+        rms.iter().position(|&r| r > threshold),
+        rms.iter().rposition(|&r| r > threshold),
+    ) else {
+        return samples; // quiet mic or no clear speech: let whisper decide
+    };
+    let start = (first * FRAME).saturating_sub(SPEECH_MARGIN);
+    let end = ((last + 1) * FRAME + SPEECH_MARGIN).min(samples.len());
+    &samples[start..end]
 }
 
 /// 1.2 s at 16 kHz: just over whisper.cpp's 1 s minimum.
@@ -265,6 +314,17 @@ mod tests {
         }
         assert_eq!(clean(" Merci. ", 1.0), "");
         assert_eq!(clean("Thank you.", 0.8), "");
+    }
+
+    #[test]
+    fn speech_trims_silence_around_voice() {
+        let mut clip = vec![0.0005_f32; 16_000 * 3];
+        for (i, s) in clip[16_000..24_000].iter_mut().enumerate() {
+            *s = 0.2 * (i as f32 * 0.05).sin();
+        }
+        let kept = speech(&clip);
+        assert!(kept.len() < 16_000 * 2 && kept.len() >= 8_000 + 2 * SPEECH_MARGIN - FRAME);
+        assert_eq!(speech(&vec![0.0; 16_000]).len(), 16_000);
     }
 
     #[test]

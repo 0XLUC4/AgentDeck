@@ -158,6 +158,11 @@ async function spawn(id: string): Promise<void> {
       env: mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : undefined,
       trust: useSettings.getState().trustAgentFolders,
     });
+    // Closed while spawning: closePane's kill ran before the backend registered the pane.
+    if (runtimes.get(id) !== rt) {
+      await killPane(id).catch((err) => console.warn("kill_pane failed", err));
+      return;
+    }
     // The terminal may have been fitted while spawning.
     if (rt.cols !== cols || rt.rows !== rows) await resizePane(id, rt.cols, rt.rows);
   } catch (err) {

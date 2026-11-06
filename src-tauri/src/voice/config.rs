@@ -44,7 +44,13 @@ impl WhisperModel {
         Self::ALL.into_iter().find(|m| m.name() == name)
     }
 
+    /// 8-bit quantized: about half the size of f16, faster on CPU, near-identical accuracy.
     pub fn file_name(self) -> String {
+        format!("ggml-{}-q8_0.bin", self.name())
+    }
+
+    /// Unquantized file from older versions, deleted once the quantized one is downloaded.
+    pub fn legacy_file_name(self) -> String {
         format!("ggml-{}.bin", self.name())
     }
 
@@ -296,14 +302,14 @@ mod tests {
 
     #[test]
     fn model_files_and_urls() {
-        assert_eq!(WhisperModel::Small.file_name(), "ggml-small.bin");
+        assert_eq!(WhisperModel::Small.file_name(), "ggml-small-q8_0.bin");
         assert_eq!(
             WhisperModel::LargeV3Turbo.file_name(),
-            "ggml-large-v3-turbo.bin"
+            "ggml-large-v3-turbo-q8_0.bin"
         );
         assert_eq!(
             WhisperModel::Base.url(),
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q8_0.bin"
         );
         assert_eq!(WhisperModel::parse("medium"), Some(WhisperModel::Medium));
         assert_eq!(WhisperModel::parse("large"), None);

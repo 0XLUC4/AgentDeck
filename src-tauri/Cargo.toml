@@ -40,6 +40,9 @@ tauri-plugin-autostart = "2.7.0"
 chrono = "0.4.45"
 ruzstd = "0.9.1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
 [features]
 # Vulkan GPU backend for local transcription (needs the Vulkan SDK at build time).
 gpu = ["whisper-rs/vulkan"]

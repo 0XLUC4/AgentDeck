@@ -67,7 +67,15 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
         webgl = null;
       }, WEBGL_RELEASE_MS);
     };
-    const visibility = new IntersectionObserver(([entry]) => (entry?.isIntersecting ? enableWebgl() : releaseWebgl()));
+    // Off-screen tabs skip reflows (window drags would otherwise resize every terminal); refit on return.
+    let onScreen = true;
+    const visibility = new IntersectionObserver(([entry]) => {
+      onScreen = entry?.isIntersecting ?? true;
+      if (onScreen) {
+        enableWebgl();
+        refit();
+      } else releaseWebgl();
+    });
     visibility.observe(host);
 
     term.attachCustomKeyEventHandler((e) => {
@@ -80,14 +88,24 @@ export function TerminalPane({ paneId, fontSize }: { paneId: string; fontSize: n
       return false;
     });
 
-    const detach = attachOutput(paneId, (data) => term.write(data));
+    // Replayed scrollback holds old terminal queries: drop xterm's replies to them until the replay is parsed.
+    let attaching = true;
+    let replaying = false;
+    const detach = attachOutput(paneId, (data) => {
+      if (!attaching) return term.write(data);
+      replaying = true;
+      term.write(data, () => {
+        replaying = false;
+      });
+    });
+    attaching = false;
     // Only the owner window forwards: xterm auto-replies to terminal queries, so a second forwarder doubles them.
     const owner = () => forwardsInput(false, isDetached(paneId));
-    const input = term.onData((data) => owner() && sendInput(paneId, data));
+    const input = term.onData((data) => !replaying && owner() && sendInput(paneId, data));
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     let fitFrame = 0;
     const refit = () => {
-      if (host.clientWidth === 0 || host.clientHeight === 0) return; // hidden
+      if (!onScreen || host.clientWidth === 0 || host.clientHeight === 0) return; // hidden
       fit.fit();
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => owner() && reportSize(paneId, term.cols, term.rows), 100);

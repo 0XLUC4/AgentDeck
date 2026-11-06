@@ -36,7 +36,9 @@ type Sink = (String, u64, Channel<String>);
 static SINKS: LazyLock<Mutex<HashMap<String, Vec<Sink>>>> = LazyLock::new(Mutex::default);
 
 fn sinks() -> std::sync::MutexGuard<'static, HashMap<String, Vec<Sink>>> {
-    SINKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    SINKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Subscribes the calling webview to a pane's output. Returns the id for `detach_pane_output`.
@@ -89,6 +91,9 @@ pub struct Pane {
     writer: SharedWriter,
     child: Box<dyn Child + Send + Sync>,
     run: u64,
+    /// Dropped last: closing it kills the agent's whole process tree (MCP servers, dev servers...).
+    #[cfg(windows)]
+    _job: Option<job::Job>,
 }
 
 #[derive(Default)]
@@ -194,6 +199,8 @@ pub fn spawn_pane(
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let job = child.process_id().and_then(job::Job::adopt);
     drop(pair.slave); // child owns it now; dropping lets EOF propagate on exit
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
@@ -207,6 +214,8 @@ pub fn spawn_pane(
             writer: Arc::new(Mutex::new(writer)),
             child,
             run,
+            #[cfg(windows)]
+            _job: job,
         },
     );
     watch_exit(app.clone(), pane_id.clone(), run);
@@ -339,7 +348,11 @@ fn stream_output(
             if !closed && pending.len() < MAX_EMIT_BYTES {
                 // Idle: block until output arrives (waking only for the recorder's periodic flush),
                 // instead of ~60 empty wakeups a second per pane.
-                let wait = if pending.is_empty() { IDLE_WAIT } else { FLUSH_INTERVAL };
+                let wait = if pending.is_empty() {
+                    IDLE_WAIT
+                } else {
+                    FLUSH_INTERVAL
+                };
                 match rx.recv_timeout(wait) {
                     Ok(chunk) => pending.extend_from_slice(&chunk),
                     Err(RecvTimeoutError::Timeout) => {}
@@ -380,7 +393,10 @@ fn stream_output(
 fn is_parent_claude_var(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
     key.starts_with("CLAUDE_CODE_")
-        || matches!(key.as_str(), "CLAUDECODE" | "CLAUDE_PID" | "CLAUDE_EFFORT" | "AI_AGENT")
+        || matches!(
+            key.as_str(),
+            "CLAUDECODE" | "CLAUDE_PID" | "CLAUDE_EFFORT" | "AI_AGENT"
+        )
 }
 
 /// Pane ids end up in hook URLs and args, and agents run through `cmd.exe /c`
@@ -576,5 +592,65 @@ mod tests {
         drop(pair.master);
         rx.recv_timeout(Duration::from_secs(10))
             .expect("reader did not reach EOF after dropping the master");
+    }
+}
+
+/// Windows Job Object with kill-on-close: the agent and everything it starts die with the pane,
+/// even processes outside the pseudoconsole and even if AgentDeck crashes.
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    pub struct Job(HANDLE);
+
+    // SAFETY: a job handle is a plain kernel handle, usable from any thread.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        /// Puts `pid` in a new kill-on-close job. `None` (tree not tracked) if any step fails.
+        pub fn adopt(pid: u32) -> Option<Self> {
+            // SAFETY: plain Win32 calls; every handle is checked and owned by `Job` or closed here.
+            unsafe {
+                let job = Job(CreateJobObjectW(std::ptr::null(), std::ptr::null()));
+                if job.0.is_null() {
+                    return None;
+                }
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let set = SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const info).cast::<c_void>(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if set == 0 {
+                    return None;
+                }
+                let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+                if process.is_null() {
+                    return None;
+                }
+                let assigned = AssignProcessToJobObject(job.0, process);
+                CloseHandle(process);
+                (assigned != 0).then_some(job)
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: we own this handle and close it once.
+            unsafe { CloseHandle(self.0) };
+        }
     }
 }

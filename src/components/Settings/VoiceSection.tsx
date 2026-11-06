@@ -23,10 +23,10 @@ const PRESETS = [
 
 /** Download sizes of the ggml models, shown before download so users know what they're getting. */
 const MODEL_SIZE: Record<WhisperModel, string> = {
-  base: "148 MB",
-  small: "488 MB",
-  medium: "1.5 GB",
-  "large-v3-turbo": "1.6 GB",
+  base: "82 MB",
+  small: "264 MB",
+  medium: "823 MB",
+  "large-v3-turbo": "874 MB",
 };
 
 interface Progress {
