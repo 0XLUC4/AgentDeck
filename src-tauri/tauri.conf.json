@@ -22,12 +22,14 @@
         "resizable": true,
         "shadow": true,
         "backgroundColor": "#131313",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling",
         "dragDropEnabled": true
       },
       {
         "label": "voice",
         "title": "AgentDeck Voice",
         "url": "voice.html",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling",
         "width": 460,
         "height": 72,
         "decorations": false,
