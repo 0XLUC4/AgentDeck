@@ -239,11 +239,11 @@ pub fn prepare_hooks(kind: AgentKind, cwd: &str, hooks: &HookServer) -> Result<(
             merge_claude_hooks(s, &hooks.url())
         }),
         AgentKind::Gemini => {
-            // Non-fatal: Gemini settings may be JSONC we refuse to rewrite; output-based idle detection still works.
-            let url = hooks.url();
-            if let Err(e) = update_settings(&gemini_settings(cwd), |s| merge_gemini_hooks(s, &url))
+            // Older builds wrote into the project file; drop only those entries. Non-fatal (JSONC is left alone).
+            if let Err(e) =
+                update_settings(&gemini_settings(cwd), |s| strip_hooks(s, is_ours_gemini))
             {
-                eprintln!("gemini hooks not installed: {e}");
+                eprintln!("gemini legacy hooks not removed: {e}");
             }
             Ok(())
         }
@@ -252,7 +252,72 @@ pub fn prepare_hooks(kind: AgentKind, cwd: &str, hooks: &HookServer) -> Result<(
     }
 }
 
-/// Removes AgentDeck's hooks from `<cwd>/.claude/settings.local.json` and `<cwd>/.gemini/settings.json`.
+/// Env var (and file) that load AgentDeck's Gemini hooks without touching the repo or `~/.gemini`.
+/// Gemini reads its "system defaults" layer from this path, and hook arrays are concatenated across
+/// layers (packages/cli/src/config/settings.ts `getSystemDefaultsPath`, settingsSchema.ts `MergeStrategy.CONCAT`).
+/// The file is a copy of the real system defaults plus our hooks, so admin defaults still apply.
+/// `None` (logged) when the real defaults are JSONC or unwritable: output-based idle detection still works.
+pub fn gemini_env(app_data: &Path, hooks: &HookServer) -> Option<(&'static str, PathBuf)> {
+    // One file per port so concurrent AgentDeck instances do not overwrite each other.
+    let ours = app_data
+        .join("gemini")
+        .join(format!("system-defaults-{}.json", hooks.port));
+    let result = gemini_system_defaults(&ours).and_then(|base| {
+        crate::trust::edit_file(&ours, |_| {
+            let text = std::fs::read_to_string(&base).unwrap_or_default();
+            let mut settings: Value = if text.trim().is_empty() {
+                json!({})
+            } else {
+                serde_json::from_str(&text)
+                    .map_err(|e| format!("{}: not valid JSON: {e}", base.display()))?
+            };
+            if !settings.is_object() {
+                return Err(format!("{}: not a JSON object", base.display()));
+            }
+            merge_gemini_hooks(&mut settings, &hooks.url());
+            let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+            Ok(Some(
+                text + "
+",
+            ))
+        })
+    });
+    match result {
+        Ok(()) => Some((GEMINI_DEFAULTS_ENV, ours)),
+        Err(e) => {
+            eprintln!("gemini hooks not installed: {e}");
+            None
+        }
+    }
+}
+
+const GEMINI_DEFAULTS_ENV: &str = "GEMINI_CLI_SYSTEM_DEFAULTS_PATH";
+
+/// The system defaults file Gemini would read without our override (mirrors `getSystemDefaultsPath`).
+fn gemini_system_defaults(ours: &Path) -> Result<PathBuf, String> {
+    let inherited = std::env::var_os(GEMINI_DEFAULTS_ENV).map(PathBuf::from);
+    if let Some(path) = inherited.filter(|p| p != ours) {
+        return Ok(path);
+    }
+    let settings = std::env::var_os("GEMINI_CLI_SYSTEM_SETTINGS_PATH").map_or_else(
+        || {
+            PathBuf::from(if cfg!(windows) {
+                r"C:\ProgramData\gemini-cli\settings.json"
+            } else if cfg!(target_os = "macos") {
+                "/Library/Application Support/GeminiCli/settings.json"
+            } else {
+                "/etc/gemini-cli/settings.json"
+            })
+        },
+        PathBuf::from,
+    );
+    let dir = settings
+        .parent()
+        .ok_or("system settings path has no folder")?;
+    Ok(dir.join("system-defaults.json"))
+}
+
+/// Removes AgentDeck's hooks from `<cwd>/.claude/settings.local.json` and legacy `<cwd>/.gemini/settings.json` entries.
 #[tauri::command(async)]
 pub fn uninstall_hooks(cwd: String) -> Result<(), String> {
     update_settings(&claude_settings(&cwd), strip_claude_hooks)?;
@@ -529,28 +594,77 @@ mod tests {
     }
 
     #[test]
-    fn gemini_settings_file_roundtrip() {
+    fn gemini_legacy_project_hooks_are_cleaned() {
         let dir = std::env::temp_dir().join(format!("agentdeck-gem-{}", uuid::Uuid::new_v4()));
         let file = dir.join(".gemini").join("settings.json");
         let cwd = dir.to_string_lossy().into_owned();
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, r#"{ "theme": "Dracula" }"#).unwrap();
         let hooks = HookServer {
             port: 47800,
             token: "tok".into(),
         };
+        // Absent file is not created.
         prepare_hooks(AgentKind::Gemini, &cwd, &hooks).unwrap();
-        let text = std::fs::read_to_string(&file).unwrap();
-        assert!(text.contains(GEMINI_HOOK_NAME) && !text.contains("tok\""));
+        assert!(!file.exists());
+
+        // An old project entry is removed on spawn and on uninstall; user settings are kept byte-for-byte when untouched.
+        let mut legacy = json!({ "theme": "Dracula" });
+        merge_gemini_hooks(&mut legacy, "http://127.0.0.1:1/hook");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, legacy.to_string()).unwrap();
+        prepare_hooks(AgentKind::Gemini, &cwd, &hooks).unwrap();
+        let back: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(back, json!({ "theme": "Dracula" }));
+        std::fs::write(&file, legacy.to_string()).unwrap();
         uninstall_hooks(cwd.clone()).unwrap();
         let back: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(back, json!({ "theme": "Dracula" }));
 
         // JSONC (comments) is left untouched and does not block the pane.
-        std::fs::write(&file, "// mine\n{}").unwrap();
+        std::fs::write(
+            &file,
+            "// mine
+{}",
+        )
+        .unwrap();
         prepare_hooks(AgentKind::Gemini, &cwd, &hooks).unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "// mine\n{}");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "// mine
+{}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gemini_env_writes_app_data_file_only() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-gemenv-{}", uuid::Uuid::new_v4()));
+        let hooks = HookServer {
+            port: 47801,
+            token: "tok".into(),
+        };
+        let (key, path) = gemini_env(&dir, &hooks).expect("installed");
+        assert_eq!(key, "GEMINI_CLI_SYSTEM_DEFAULTS_PATH");
+        assert!(path.starts_with(&dir) && path.ends_with("system-defaults-47801.json"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains(GEMINI_HOOK_NAME)
+                && text.contains(":47801/hook")
+                && !text.contains("tok\"")
+        );
+        // Idempotent: a second pane on the same port yields the same file.
+        gemini_env(&dir, &hooks).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gemini_defaults_base_skips_our_own_file() {
+        let ours = Path::new("/x/ours.json");
+        // Without the env var (or when it already points at our file) the platform default is used.
+        if std::env::var_os(GEMINI_DEFAULTS_ENV).is_none_or(|p| p == ours.as_os_str()) {
+            let base = gemini_system_defaults(ours).unwrap();
+            assert!(base.ends_with("system-defaults.json") && base != ours);
+        }
     }
 
     #[test]

@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -20,6 +22,13 @@ const CHECKPOINT_SUBJECT: &str = "agentdeck checkpoint";
 const CHECKPOINTS_KEPT: usize = 50;
 // Note: SHA-1 empty tree only; SHA-256 repos without any commit can't show a status yet.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+/// Many panes poll the same repo: one status per root per second is enough.
+const STATUS_TTL: Duration = Duration::from_secs(1);
+
+type StatusSlot = Arc<Mutex<Option<(Instant, GitStatus)>>>;
+/// Last status per root; the per-root mutex also coalesces concurrent calls.
+static STATUS_CACHE: LazyLock<Mutex<HashMap<PathBuf, StatusSlot>>> =
+    LazyLock::new(Default::default);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,23 +141,77 @@ fn current_branch(root: &Path) -> Option<String> {
     run_trim(root, &["symbolic-ref", "--short", "-q", "HEAD"]).ok()
 }
 
+/// `main`, else `master`, when it exists (one `for-each-ref`, sorted by name so `main` comes first).
 fn base_branch(root: &Path) -> Option<String> {
-    ["main", "master"]
-        .into_iter()
-        .find(|b| {
-            run(
-                root,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("refs/heads/{b}"),
-                ],
-                None,
-            )
-            .is_ok()
-        })
+    let out = run(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads/main",
+            "refs/heads/master",
+        ],
+        None,
+    )
+    .ok()?;
+    out.lines()
+        .filter_map(|l| l.strip_prefix("refs/heads/"))
+        .find(|b| matches!(*b, "main" | "master"))
         .map(str::to_owned)
+}
+
+struct RepoInfo {
+    /// Absolute path of the real index.
+    index: String,
+    /// Linked worktree (git dir differs from the common dir).
+    linked: bool,
+    /// `None` when HEAD is unborn.
+    head: Option<String>,
+    /// `None` when HEAD is detached.
+    branch: Option<String>,
+}
+
+const REPO_PATHS: [&str; 6] = [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "index",
+    "--git-dir",
+    "--git-common-dir",
+];
+
+/// Parses `rev-parse` output for `REPO_PATHS` plus `HEAD --symbolic-full-name HEAD` (when `with_head`).
+fn parse_repo_info(out: &str, with_head: bool) -> Option<RepoInfo> {
+    let lines: Vec<&str> = out.lines().collect();
+    let (index, dir, common, head, sym) = match (with_head, lines.as_slice()) {
+        (true, [i, d, c, h, s]) => (*i, *d, *c, Some(*h), Some(*s)),
+        (false, [i, d, c]) => (*i, *d, *c, None, None),
+        _ => return None,
+    };
+    Some(RepoInfo {
+        index: index.to_string(),
+        linked: !same_dir(Path::new(dir), Path::new(common)),
+        head: head.map(str::to_owned),
+        branch: sym
+            .and_then(|s| s.strip_prefix("refs/heads/"))
+            .map(str::to_owned),
+    })
+}
+
+/// Index path, worktree kind, HEAD and branch in one `rev-parse` (two when HEAD is unborn).
+fn repo_info(root: &Path) -> Result<RepoInfo, String> {
+    let full = [&REPO_PATHS[..], &["HEAD", "--symbolic-full-name", "HEAD"]].concat();
+    if let Some(info) = run(root, &full, None)
+        .ok()
+        .and_then(|out| parse_repo_info(&out, true))
+    {
+        return Ok(info);
+    }
+    // Unborn HEAD: rev-parse rejects it, but symbolic-ref still names the branch.
+    let out = run(root, &REPO_PATHS, None)?;
+    let mut info = parse_repo_info(&out, false).ok_or("unexpected git rev-parse output")?;
+    info.branch = current_branch(root);
+    Ok(info)
 }
 
 /// Root of the main checkout (first entry of `git worktree list`).
@@ -182,14 +245,19 @@ fn agent_worktree(root: &Path) -> Result<(String, PathBuf), String> {
 
 /// Writes the whole working tree (untracked included, ignored excluded) as a tree object.
 fn snapshot_tree(root: &Path) -> Result<String, String> {
-    let index = std::env::temp_dir().join(format!("agentdeck-index-{}", uuid::Uuid::new_v4()));
     let real = run_trim(
         root,
         &["rev-parse", "--path-format=absolute", "--git-path", "index"],
     )?;
+    snapshot_from_index(root, &real)
+}
+
+/// `snapshot_tree` when the real index path (`real`) is already known.
+fn snapshot_from_index(root: &Path, real: &str) -> Result<String, String> {
+    let index = std::env::temp_dir().join(format!("agentdeck-index-{}", uuid::Uuid::new_v4()));
     // Seeding from the real index keeps git's stat cache: only changed files get hashed.
-    if Path::new(&real).is_file() {
-        std::fs::copy(&real, &index).map_err(|e| format!("copy index: {e}"))?;
+    if Path::new(real).is_file() {
+        std::fs::copy(real, &index).map_err(|e| format!("copy index: {e}"))?;
     }
     let tree = run(root, &["add", "-A"], Some(&index))
         .and_then(|_| run(root, &["write-tree"], Some(&index)));
@@ -197,14 +265,35 @@ fn snapshot_tree(root: &Path) -> Result<String, String> {
     Ok(tree?.trim().to_string())
 }
 
-/// Parses `git diff --name-status -z` output: `X\0path\0` records.
-fn parse_name_status(out: &str) -> Vec<(String, String)> {
-    let mut parts = out.split('\0').filter(|s| !s.is_empty());
-    let mut entries = Vec::new();
-    while let (Some(status), Some(path)) = (parts.next(), parts.next()) {
-        entries.push((status.to_string(), path.to_string()));
+/// Parses `git diff --raw --numstat -z --no-renames` output: all `:modes shas X\0path\0` records,
+/// then numstat records, joined by path.
+fn parse_raw_numstat(out: &str) -> Vec<FileChange> {
+    let mut parts = out.split('\0');
+    let mut files = Vec::new();
+    let mut rest = Vec::new();
+    while let Some(part) = parts.next() {
+        if let Some(meta) = part.strip_prefix(':') {
+            let (Some(status), Some(path)) = (meta.rsplit(' ').next(), parts.next()) else {
+                break;
+            };
+            files.push((status.to_string(), path.to_string()));
+        } else {
+            rest.push(part);
+        }
     }
-    entries
+    let counts = parse_numstat(&rest.join("\0"));
+    files
+        .into_iter()
+        .map(|(status, path)| {
+            let (additions, deletions) = counts.get(&path).copied().unwrap_or((None, None));
+            FileChange {
+                path,
+                status,
+                additions,
+                deletions,
+            }
+        })
+        .collect()
 }
 
 /// Parses `git diff --numstat -z --no-renames` output: `add\tdel\tpath\0` (`-` for binary).
@@ -220,28 +309,12 @@ fn parse_numstat(out: &str) -> HashMap<String, (Option<u32>, Option<u32>)> {
 
 /// Files changed between two tree-ish, with line counts.
 fn changes(root: &Path, from: &str, to: &str) -> Result<Vec<FileChange>, String> {
-    let names = run(
+    let out = run(
         root,
-        &["diff", "--name-status", "-z", "--no-renames", from, to],
+        &["diff", "--raw", "--numstat", "-z", "--no-renames", from, to],
         None,
     )?;
-    let counts = parse_numstat(&run(
-        root,
-        &["diff", "--numstat", "-z", "--no-renames", from, to],
-        None,
-    )?);
-    Ok(parse_name_status(&names)
-        .into_iter()
-        .map(|(status, path)| {
-            let (additions, deletions) = counts.get(&path).copied().unwrap_or((None, None));
-            FileChange {
-                path,
-                status,
-                additions,
-                deletions,
-            }
-        })
-        .collect())
+    Ok(parse_raw_numstat(&out))
 }
 
 fn unified_diff(root: &Path, from: &str, to: &str, path: &str) -> Result<String, String> {
@@ -255,15 +328,44 @@ fn unified_diff(root: &Path, from: &str, to: &str, path: &str) -> Result<String,
     )
 }
 
+/// Cached for `STATUS_TTL`; concurrent calls for one root wait for a single computation.
 fn status(cwd: &str) -> Result<GitStatus, String> {
     let root = repo_root(cwd)?;
-    let branch = current_branch(&root);
-    let base = base_branch(&root);
+    let slot = STATUS_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(root.clone())
+        .or_default()
+        .clone();
+    let mut cached = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((at, st)) = cached.as_ref()
+        && at.elapsed() < STATUS_TTL
+    {
+        return Ok(st.clone());
+    }
+    let st = compute_status(&root)?;
+    *cached = Some((Instant::now(), st.clone()));
+    Ok(st)
+}
+
+/// Drops cached statuses after AgentDeck itself changed a repo (commit, merge, restore...).
+fn invalidate_status() {
+    STATUS_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+}
+
+/// 5 git processes (6 off the base branch): rev-parse, for-each-ref, [rev-list], add, write-tree, diff.
+fn compute_status(root: &Path) -> Result<GitStatus, String> {
+    let info = repo_info(root)?;
+    let branch = info.branch;
+    let base = base_branch(root);
     let (mut ahead, mut behind) = (0, 0);
     if let (Some(b), Some(br)) = (&base, &branch)
         && b != br
         && let Ok(out) = run_trim(
-            &root,
+            root,
             &[
                 "rev-list",
                 "--left-right",
@@ -276,12 +378,16 @@ fn status(cwd: &str) -> Result<GitStatus, String> {
         behind = n.next().unwrap_or(0);
         ahead = n.next().unwrap_or(0);
     }
-    let tree = snapshot_tree(&root)?;
-    let from = head(&root).unwrap_or_else(|| EMPTY_TREE.into());
+    let tree = snapshot_from_index(root, &info.index)?;
+    let from = info.head.unwrap_or_else(|| EMPTY_TREE.into());
     Ok(GitStatus {
         root: root.to_string_lossy().into_owned(),
-        agent_worktree: agent_worktree(&root).is_ok(),
-        files: changes(&root, &from, &tree)?,
+        // Same rule as `agent_worktree`, from data already fetched.
+        agent_worktree: info.linked
+            && branch
+                .as_deref()
+                .is_some_and(|b| b.starts_with(BRANCH_PREFIX)),
+        files: changes(root, &from, &tree)?,
         branch,
         base,
         ahead,
@@ -572,12 +678,16 @@ pub fn git_diff_trees(
 /// Stages everything and commits; returns the short sha.
 #[tauri::command(async)]
 pub fn git_commit(cwd: String, message: String) -> Result<String, String> {
-    commit(&cwd, &message)
+    let res = commit(&cwd, &message);
+    invalidate_status();
+    res
 }
 
 #[tauri::command(async)]
 pub fn git_merge_worktree(cwd: String) -> Result<String, String> {
-    merge_worktree(&cwd)
+    let res = merge_worktree(&cwd);
+    invalidate_status();
+    res
 }
 
 #[tauri::command(async)]
@@ -587,7 +697,9 @@ pub fn git_create_pr(cwd: String, title: String, body: String) -> Result<String,
 
 #[tauri::command(async)]
 pub fn git_remove_worktree(cwd: String) -> Result<(), String> {
-    remove_worktree(&cwd)
+    let res = remove_worktree(&cwd);
+    invalidate_status();
+    res
 }
 
 #[tauri::command(async)]
@@ -618,7 +730,9 @@ pub fn git_restore_checkpoint(
     pane_id: String,
     sha: String,
 ) -> Result<Option<String>, String> {
-    restore_checkpoint(&cwd, &pane_id, &sha)
+    let res = restore_checkpoint(&cwd, &pane_id, &sha);
+    invalidate_status();
+    res
 }
 
 #[tauri::command(async)]
@@ -652,10 +766,43 @@ mod tests {
 
     #[test]
     fn parsers() {
+        let raw = ":100644 100644 aaa bbb M\0a b.txt\0:000000 100644 000 ccc A\0img.png\0\
+                   3\t1\ta b.txt\0-\t-\timg.png\0";
         assert_eq!(
-            parse_name_status("M\0a b.txt\0A\0new\0"),
-            vec![("M".into(), "a b.txt".into()), ("A".into(), "new".into())]
+            parse_raw_numstat(raw),
+            vec![
+                FileChange {
+                    path: "a b.txt".into(),
+                    status: "M".into(),
+                    additions: Some(3),
+                    deletions: Some(1),
+                },
+                FileChange {
+                    path: "img.png".into(),
+                    status: "A".into(),
+                    additions: None,
+                    deletions: None,
+                },
+            ]
         );
+        let info = parse_repo_info(
+            "/r/.git/index\n/r/.git\n/r/.git\nabc\nrefs/heads/main\n",
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                info.index.as_str(),
+                info.linked,
+                info.head.as_deref(),
+                info.branch.as_deref()
+            ),
+            ("/r/.git/index", false, Some("abc"), Some("main"))
+        );
+        let detached =
+            parse_repo_info("i\n/r/.git/worktrees/w\n/r/.git\nabc\nHEAD\n", true).unwrap();
+        assert!(detached.linked && detached.branch.is_none());
+        assert!(parse_repo_info("i\nd\nc\n", true).is_none());
         let n = parse_numstat("3\t1\ta.txt\0-\t-\timg.png\0");
         assert_eq!(n["a.txt"], (Some(3), Some(1)));
         assert_eq!(n["img.png"], (None, None));
@@ -688,6 +835,25 @@ mod tests {
                 .contains("?? new.txt")
         );
         assert!(git_diff(s(&repo), "new.txt".into()).unwrap().contains("+z"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn status_on_unborn_head() {
+        let base = std::env::temp_dir().join(format!("agentdeck-git-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        if run(&base, &["init", "-q", "-b", "main"], None).is_err() {
+            return;
+        }
+        std::fs::write(base.join("f.txt"), "x\n").unwrap();
+        let st = status(&s(&base)).unwrap();
+        assert_eq!(st.branch.as_deref(), Some("main"));
+        assert_eq!(st.base, None);
+        assert_eq!(st.files.len(), 1);
+        assert_eq!(
+            (st.files[0].status.as_str(), st.files[0].additions),
+            ("A", Some(1))
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

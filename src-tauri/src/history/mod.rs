@@ -5,6 +5,7 @@
 pub(crate) mod ansi;
 pub mod journal;
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -17,6 +18,9 @@ use tauri::{AppHandle, Manager};
 
 const PART_BYTES: u64 = 5 * 1024 * 1024;
 const KEEP: Duration = Duration::from_secs(30 * 24 * 3600);
+const MAX_TOTAL_BYTES: u64 = 500 * 1024 * 1024;
+const PURGE_EVERY: Duration = Duration::from_secs(3600);
+const SEARCH_BUDGET: Duration = Duration::from_secs(3);
 const FLUSH_EVERY: Duration = Duration::from_secs(2);
 const DISABLED_MARKER: &str = ".disabled";
 const MAX_HIT_CHARS: usize = 400;
@@ -25,7 +29,8 @@ const READ_WINDOW: usize = 2000;
 static ENABLED: AtomicBool = AtomicBool::new(true);
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-/// Resolves the history folder, reads the on/off marker and purges expired runs in the background.
+/// Resolves the history folder, reads the on/off marker and purges expired or excess runs
+/// in a background thread, at startup then hourly.
 pub fn init(app: &AppHandle) {
     let Ok(data) = app.path().app_data_dir() else {
         eprintln!("history: no app data dir, recording disabled");
@@ -40,9 +45,13 @@ pub fn init(app: &AppHandle) {
     ENABLED.store(!root.join(DISABLED_MARKER).exists(), Ordering::Relaxed);
     let _ = ROOT.set(root.clone());
     std::thread::spawn(move || {
-        purge(&root, |modified| {
-            modified.elapsed().is_ok_and(|age| age > KEEP)
-        })
+        loop {
+            purge(&root, |modified| {
+                modified.elapsed().is_ok_and(|age| age > KEEP)
+            });
+            purge_oversize(&root, MAX_TOTAL_BYTES);
+            std::thread::sleep(PURGE_EVERY);
+        }
     });
 }
 
@@ -69,6 +78,18 @@ fn purge(root: &Path, expired: impl Fn(SystemTime) -> bool) {
             }
         }
         let _ = fs::remove_dir(pane.path()); // only succeeds when empty
+    }
+}
+
+/// Keeps the newest log parts totalling at most `max_bytes`, deletes the older ones.
+/// Orphan `.json` metadata is tiny and goes with the age purge.
+fn purge_oversize(root: &Path, max_bytes: u64) {
+    let mut total = 0u64;
+    for (path, _, len) in log_files(root) {
+        total += len;
+        if total > max_bytes {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
@@ -235,8 +256,8 @@ fn read_meta(pane_dir: &Path, part_stem: &str) -> Option<RunMeta> {
     serde_json::from_slice(&fs::read(pane_dir.join(format!("{run}.json"))).ok()?).ok()
 }
 
-/// Every log part, newest first.
-fn log_files(root: &Path) -> Vec<(PathBuf, SystemTime)> {
+/// Every log part with its mtime and size, newest first.
+fn log_files(root: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
     let mut files: Vec<_> = fs::read_dir(root)
         .into_iter()
         .flatten()
@@ -244,7 +265,10 @@ fn log_files(root: &Path) -> Vec<(PathBuf, SystemTime)> {
         .filter(|e| e.path().is_dir())
         .flat_map(|pane| fs::read_dir(pane.path()).into_iter().flatten().flatten())
         .filter(|f| f.path().extension().is_some_and(|x| x == "log"))
-        .filter_map(|f| Some((f.path(), f.metadata().ok()?.modified().ok()?)))
+        .filter_map(|f| {
+            let meta = f.metadata().ok()?;
+            Some((f.path(), meta.modified().ok()?, meta.len()))
+        })
         .collect();
     files.sort_by(|a, b| b.1.cmp(&a.1));
     files
@@ -256,58 +280,84 @@ fn run_id(path: &Path) -> Option<String> {
     Some(format!("{pane}/{stem}"))
 }
 
-/// Case-insensitive substring search, newest runs first, stopping at `limit` hits.
+/// `needle` is already lowercase. ASCII lines are matched in place, no allocation.
+fn contains_ci(line: &str, needle: &str) -> bool {
+    if line.is_ascii() && needle.is_ascii() {
+        let n = needle.as_bytes();
+        return n.is_empty()
+            || line
+                .as_bytes()
+                .windows(n.len())
+                .any(|w| w.eq_ignore_ascii_case(n));
+    }
+    line.to_lowercase().contains(needle)
+}
+
+/// Case-insensitive substring search, newest runs first, stopping at `limit` hits
+/// or after `SEARCH_BUDGET`.
 fn search(root: &Path, query: &str, limit: usize) -> Vec<SearchHit> {
     let needle = query.to_lowercase();
     let mut hits = Vec::new();
     if needle.trim().is_empty() || limit == 0 {
         return hits;
     }
-    for (path, _) in log_files(root) {
+    let started = Instant::now();
+    let mut metas: HashMap<PathBuf, Option<RunMeta>> = HashMap::new();
+    'files: for (path, _, _) in log_files(root) {
         let Ok(file) = File::open(&path) else {
             continue;
         };
-        let (Some(id), Some(dir)) = (run_id(&path), path.parent()) else {
+        let (Some(id), Some(dir), Some(stem)) = (
+            run_id(&path),
+            path.parent(),
+            path.file_stem().and_then(|s| s.to_str()),
+        ) else {
             continue;
         };
-        let meta = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|stem| read_meta(dir, stem));
+        let run = stem.split('.').next().unwrap_or(stem);
+        let meta = metas
+            .entry(dir.join(run))
+            .or_insert_with(|| read_meta(dir, stem))
+            .clone();
         let mut reader = BufReader::new(file);
         let mut raw = Vec::new();
-        let mut prev: Option<String> = None;
+        let mut prev_raw = Vec::new();
         let mut awaiting_after = false;
         let mut line_no = 0;
         while reader.read_until(b'\n', &mut raw).is_ok_and(|n| n > 0) {
-            let line = String::from_utf8_lossy(&raw)
-                .trim_end_matches(['\n', '\r'])
-                .to_string();
-            raw.clear();
+            let text = String::from_utf8_lossy(&raw);
+            let line = text.trim_end_matches(['\n', '\r']);
             if awaiting_after {
                 if let Some(hit) = hits.last_mut() {
-                    hit.after = Some(clip(&line));
+                    hit.after = Some(clip(line));
                 }
                 awaiting_after = false;
                 if hits.len() >= limit {
-                    break;
+                    break 'files;
                 }
             }
-            if line.to_lowercase().contains(&needle) {
+            if contains_ci(line, &needle) {
+                let prev = String::from_utf8_lossy(&prev_raw);
+                let prev = prev.trim_end_matches(['\n', '\r']);
                 hits.push(SearchHit {
                     run_id: id.clone(),
                     meta: meta.clone(),
                     line: line_no,
-                    text: clip(&line),
-                    before: prev.take().filter(|p| !p.trim().is_empty()),
+                    text: clip(line),
+                    before: (!prev.trim().is_empty()).then(|| clip(prev)),
                     after: None,
                 });
                 awaiting_after = true;
             }
-            prev = Some(clip(&line));
+            drop(text);
+            std::mem::swap(&mut raw, &mut prev_raw);
+            raw.clear();
             line_no += 1;
+            if line_no % 4096 == 0 && started.elapsed() > SEARCH_BUDGET {
+                break 'files;
+            }
         }
-        if hits.len() >= limit {
+        if hits.len() >= limit || started.elapsed() > SEARCH_BUDGET {
             break;
         }
     }
@@ -476,5 +526,40 @@ mod tests {
         purge(&root, |_| true);
         assert!(!root.join("p3").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn size_purge_deletes_oldest_parts_first() {
+        let root = temp_root("oversize");
+        let dir = root.join("p4");
+        fs::create_dir_all(&dir).unwrap();
+        let base = SystemTime::now() - Duration::from_secs(3600);
+        for i in 0..4u64 {
+            let path = dir.join(format!("{i}.log"));
+            fs::write(&path, vec![b'x'; 100]).unwrap();
+            // Distinct mtimes: part 0 oldest, part 3 newest.
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(base + Duration::from_secs(i * 60))
+                .unwrap();
+        }
+        purge_oversize(&root, 250);
+        let left: Vec<bool> = (0..4)
+            .map(|i| dir.join(format!("{i}.log")).exists())
+            .collect();
+        assert_eq!(left, [false, false, true, true]);
+        purge_oversize(&root, 1000);
+        assert!(dir.join("3.log").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn matches_case_insensitively_ascii_and_unicode() {
+        assert!(contains_ci("Error: Boom", "boom"));
+        assert!(!contains_ci("Error", "errors"));
+        assert!(contains_ci("ÉCHEC total", &"échec".to_lowercase()));
+        assert!(contains_ci("plain", ""));
     }
 }

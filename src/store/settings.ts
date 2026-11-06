@@ -74,6 +74,8 @@ export interface Settings {
   remindMinutes: number;
   /** Agents get PORT=basePort+n so their dev servers don't collide; 0 = off. */
   basePort: number;
+  /** After a rate limit error, send "continue" to the agent after this many minutes; 0 = off. */
+  retryRateLimitMinutes: number;
   speech: SpeechSettings;
   autoAllow: AutoAllowRule[];
   budget: BudgetSettings;
@@ -99,6 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   stuckMinutes: 10,
   remindMinutes: 5,
   basePort: 0,
+  retryRateLimitMinutes: 0,
   autoAllow: [],
   budget: { dailyUsd: 0, paneUsd: 0, interrupt: false },
   phoneUrl: "",
@@ -143,6 +146,7 @@ export function mergeSettings(raw: unknown): Settings {
     stuckMinutes: minutes(raw.stuckMinutes, d.stuckMinutes),
     remindMinutes: minutes(raw.remindMinutes, d.remindMinutes),
     basePort: port(raw.basePort),
+    retryRateLimitMinutes: minutes(raw.retryRateLimitMinutes, d.retryRateLimitMinutes),
     notify: {
       enabled: bool(n.enabled, d.notify.enabled),
       sound: bool(n.sound, d.notify.sound),

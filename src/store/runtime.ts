@@ -1,5 +1,7 @@
 // Pane lifecycle: IPC subscriptions, spawn/restart/close, output buffering, status events.
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
+import { sendPrompt } from "../components/Broadcast/send";
 import { AGENTS, interruptKey } from "../lib/agents";
 import {
   browserClose,
@@ -15,6 +17,7 @@ import {
   writeToPane,
 } from "../lib/ipc";
 import { notify } from "../lib/notify";
+import { rememberPrompt } from "../lib/recentPrompts";
 import { RingBuffer } from "../lib/ringBuffer";
 import { activeTab, deck, newPane, type PaneSpec, useDeck } from "./deck";
 import { useSettings } from "./settings";
@@ -93,6 +96,7 @@ export async function createPane(spec: PaneSpec, tabId: string, adopt = false): 
     cols: 80,
     rows: 24,
     onExit: null,
+    port: spec.port, // an adopted process still runs with it
   };
   runtimes.set(spec.id, rt);
   try {
@@ -205,7 +209,12 @@ async function spawn(id: string): Promise<void> {
         ? pane.resumeId
         : null;
     rt.resumedAt = undefined;
-    if (settings.basePort && rt.port === undefined) rt.port = freePort(settings.basePort);
+    const portTaken = [...runtimes.values()].some((r) => r !== rt && r.port === rt.port);
+    if (settings.basePort && (rt.port === undefined || portTaken)) {
+      const port = freePort(settings.basePort);
+      rt.port = port;
+      deck.updatePane(id, (p) => ({ ...p, port }));
+    }
     const env: Record<string, string> = {
       ...(mcp ? { AGENTDECK_MCP_SECRET: mcp.secret } : {}),
       ...(settings.basePort && rt.port ? { PORT: String(rt.port) } : {}),
@@ -301,6 +310,8 @@ export async function closePane(id: string): Promise<void> {
   deck.removePane(id);
   tasks.remove(id);
   stallAlerts.delete(id);
+  clearTimeout(rateLimitRetries.get(id));
+  rateLimitRetries.delete(id);
   for (const [file, editor] of editors) if (editor.paneId === id) editors.delete(file);
   if (backendActivePane === id) {
     backendActivePane = null;
@@ -425,8 +436,18 @@ export function listenAgentStatus(): Promise<UnlistenFn> {
         : { ...p, hooked: true, ...(resumeId ? { resumeId } : {}) },
     );
     if (e.editedFile) checkConflict(e.paneId, e.editedFile);
+    if (e.event === "UserPromptSubmit" && e.prompt) rememberPrompt(e.prompt);
     tasks.apply(e.paneId, e, prev.taskStartedAt ?? undefined);
     deck.setStatus(e.paneId, e.status, e.lastAction);
+    if (e.status === "error" && e.event === "StopFailure" && /rate.?limit/i.test(e.lastAction ?? "")) {
+      scheduleRateLimitRetry(e.paneId);
+    }
+    // Flash the taskbar button while the window is in the background and an agent needs the user.
+    if (e.status === "waiting" && prev.status !== "waiting" && !document.hasFocus()) {
+      getCurrentWindow()
+        .requestUserAttention(UserAttentionType.Informational)
+        .catch(() => undefined);
+    }
     const event = e.status as keyof typeof NOTIFY_TEXT;
     // PermissionRequest has its own, more precise notification (components/Permission/permissions.ts).
     if (e.status === prev.status || !(event in NOTIFY_TEXT) || e.event === "PermissionRequest") return;
@@ -495,4 +516,21 @@ export function watchAgents(now = Date.now()): void {
     stallAlerts.set(pane.id, { since: pane.statusSince, count: count + 1 });
     void notify(due, pane.title, { system: prefs.enabled, sound: prefs.sound, phoneUrl });
   }
+}
+
+const rateLimitRetries = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Sends "continue" once the wait is over, if the agent is still stopped on that error. */
+function scheduleRateLimitRetry(id: string): void {
+  const minutes = useSettings.getState().retryRateLimitMinutes;
+  if (minutes <= 0 || rateLimitRetries.has(id)) return;
+  const since = useDeck.getState().panes[id]?.statusSince;
+  const timer = setTimeout(() => {
+    rateLimitRetries.delete(id);
+    const pane = useDeck.getState().panes[id];
+    if (!pane || pane.exited || pane.status !== "error" || pane.statusSince !== since) return;
+    deck.toast(`${pane.title}: continuing after the rate limit`);
+    sendPrompt(id, "continue").catch((err) => console.warn("rate limit retry failed", err));
+  }, minutes * 60_000);
+  rateLimitRetries.set(id, timer);
 }

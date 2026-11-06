@@ -1,21 +1,14 @@
 import {
   CheckCheck,
-  Copy,
-  ExternalLink,
   GitBranch,
   Globe,
   Maximize2,
   Mic,
   Minimize2,
   Pause,
-  Pencil,
-  RotateCcw,
   ScanEye,
-  SquareArrowDownLeft,
   SquareTerminal,
   X,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 import { revealPane } from "../../app/Deck";
@@ -24,13 +17,12 @@ import { formatElapsed, useNow } from "../../lib/clock";
 import { shortAction } from "../../lib/shortAction";
 import { useVoiceTarget } from "../../lib/voiceListener";
 import type { Pane } from "../../store/deck";
-import { deck, FONT_SIZE, folderName, useDeck } from "../../store/deck";
+import { deck, folderName, useDeck } from "../../store/deck";
 import { useReviews } from "../../store/review";
 import { closePane, focusPane, interruptPane, isBusy, restartPane } from "../../store/runtime";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
-import { spawnAgent } from "../AgentPicker/AgentPicker";
 import { browserPanelId, removeBrowser } from "../Browser/BrowserPanel";
-import { toggleDetached, useDetached } from "../Detached/host";
+import { useDetached } from "../Detached/host";
 import { DiffChip } from "../Git/DiffChip";
 import { IconButton } from "../IconButton/IconButton";
 import { OrchestratorButton } from "../Orchestrator/OrchestratorButton";
@@ -39,6 +31,7 @@ import { NotesButton } from "../Skills/NotesButton";
 import { SkillsButton } from "../Skills/SkillsButton";
 import { STATUS } from "../StatusBadge/StatusBadge";
 import { UsageChip } from "../Usage/UsageChip";
+import { PaneMenu } from "./PaneMenu";
 import { WorkingOutline } from "./WorkingOutline";
 
 // Diff viewer: loaded on first open, not at startup.
@@ -107,8 +100,8 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
     // biome-ignore lint/a11y/noStaticElementInteractions: double-click shortcut; the maximize button is the accessible path
     <header
       className={`group/pane relative flex h-full min-w-0 items-center gap-2 px-2.5 text-[13px] ${active ? "text-fg" : "text-muted"}`}
-      // Waiting for the user: a thin amber line on top, plus the pulsing dot.
-      style={pane.status === "waiting" ? { boxShadow: "inset 0 1px 0 var(--color-wait)" } : undefined}
+      // Waiting for the user: a thin amber line on top, plus the pulsing dot. Color tag: a stripe on the left.
+      style={headerShadow(pane)}
       onMouseDown={() => focusPane(pane.id)}
       onDoubleClick={(e) => {
         if (!(e.target instanceof Element && e.target.closest("button, input"))) onToggleMaximize();
@@ -165,7 +158,6 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
             role="toolbar"
             aria-label={`${agent.name} actions`}
           >
-            <IconButton icon={Pencil} size="sm" label="Rename" onClick={() => setRenaming(true)} />
             <IconButton
               icon={GitBranch}
               size="sm"
@@ -207,46 +199,7 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
                 }}
               />
             )}
-            <IconButton
-              icon={Copy}
-              size="sm"
-              label="Duplicate"
-              hint="Start another agent like this one (same folder, arguments and worktree setting)"
-              onClick={() => spawnAgent(pane.agent, pane.cwd, pane.args, pane.worktree)}
-            />
-            <IconButton
-              icon={RotateCcw}
-              size="sm"
-              label="Restart"
-              hint="Restart the agent in a new conversation"
-              onClick={() => {
-                if (!isBusy(pane.id) || window.confirm(`${agent.name} is still working. Restart anyway?`)) {
-                  void restartPane(pane.id);
-                }
-              }}
-            />
-            <IconButton
-              icon={ZoomOut}
-              size="sm"
-              label="Zoom out"
-              hint="Zoom out (Ctrl+-)"
-              onClick={() => deck.zoom(pane.id, -1)}
-              disabled={pane.fontSize <= FONT_SIZE.min}
-            />
-            <IconButton
-              icon={ZoomIn}
-              size="sm"
-              label="Zoom in"
-              hint="Zoom in (Ctrl+=, Ctrl+0 to reset)"
-              onClick={() => deck.zoom(pane.id, 1)}
-              disabled={pane.fontSize >= FONT_SIZE.max}
-            />
-            <IconButton
-              icon={detached ? SquareArrowDownLeft : ExternalLink}
-              size="sm"
-              label={detached ? "Reattach" : "Detach to a window"}
-              onClick={() => toggleDetached(pane.id)}
-            />
+            <PaneMenu pane={pane} detached={detached} onRename={() => setRenaming(true)} />
             <IconButton
               icon={maximized ? Minimize2 : Maximize2}
               size="sm"
@@ -274,6 +227,14 @@ export function PaneHeader({ pane, active, maximized, compact, onToggleMaximize 
       )}
     </header>
   );
+}
+
+function headerShadow(pane: Pane) {
+  const shadows = [
+    pane.status === "waiting" ? "inset 0 1px 0 var(--color-wait)" : "",
+    pane.color ? `inset 3px 0 0 ${pane.color}` : "",
+  ].filter(Boolean);
+  return shadows.length > 0 ? { boxShadow: shadows.join(", ") } : undefined;
 }
 
 /** Fallback header while the pane is gone from the store (closing). */

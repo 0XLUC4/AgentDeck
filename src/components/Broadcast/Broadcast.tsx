@@ -1,8 +1,10 @@
 // "Broadcast prompt": one prompt sent to several running agents of the current workspace.
+
 import { Check, CircleAlert, Send, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { AGENT_KINDS, AGENTS } from "../../lib/agents";
+import { rememberPrompt, useRecentPrompts } from "../../lib/recentPrompts";
 import type { AgentKind } from "../../lib/types";
 import { activeWorkspace, useDeck } from "../../store/deck";
 import { AgentLogo } from "../AgentLogo/AgentLogo";
@@ -26,6 +28,7 @@ function Composer({ onClose }: { onClose: () => void }) {
   const panes = useDeck((s) => s.panes);
   const workspace = useDeck((s) => activeWorkspace(s));
   const [text, setText] = useState("");
+  const recent = useRecentPrompts();
   const [results, setResults] = useState<Record<string, Result>>({});
   const [sending, setSending] = useState(false);
 
@@ -62,6 +65,7 @@ function Composer({ onClose }: { onClose: () => void }) {
     e?.preventDefault();
     if (!text.trim() || chosen.length === 0 || sending) return;
     setSending(true);
+    rememberPrompt(text); // Codex/Gemini/shell send no prompt hook: remember it here too
     const settled = await Promise.all(
       chosen.map(({ pane }) =>
         sendPrompt(pane.id, text.trim()).then(
@@ -93,6 +97,21 @@ function Composer({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex flex-col gap-4 p-5">
+          {recent.length > 0 && (
+            <select
+              aria-label="Reuse a recent prompt"
+              value=""
+              onChange={(e) => e.target.value && setText(e.target.value)}
+              className="h-8 w-full truncate rounded-md border border-line bg-base px-2 text-xs text-muted outline-none hover:border-line-strong focus:border-accent"
+            >
+              <option value="">Recent prompts…</option>
+              {recent.map((prompt) => (
+                <option key={prompt} value={prompt}>
+                  {prompt.length > 90 ? `${prompt.slice(0, 90)}…` : prompt}
+                </option>
+              ))}
+            </select>
+          )}
           <textarea
             autoFocus
             value={text}

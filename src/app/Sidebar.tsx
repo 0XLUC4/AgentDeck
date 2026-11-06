@@ -209,7 +209,8 @@ function WorkspaceItem({ ws, active }: { ws: Workspace; active: boolean }) {
           </button>
         )}
         {!renaming && (
-          <div className="flex opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+          // The active workspace always shows its actions: new users find them without hovering around.
+          <div className={`flex group-focus-within:opacity-100 group-hover:opacity-100 ${active ? "" : "opacity-0"}`}>
             <IconButton
               icon={Plus}
               size="sm"
