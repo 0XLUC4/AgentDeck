@@ -11,7 +11,7 @@ use agentdeck_core::skills::{
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::{Disableable as _, Sizable as _};
+use gpui_kit::component::Disableable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -84,13 +84,14 @@ impl AgentFilesDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let url = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("https://github.com/owner/repo (or …/tree/main/skills/name)")
-        });
+        let placeholder = match kind {
+            AgentDialogKind::Skills => "Search skills, or paste a GitHub link to install one",
+            AgentDialogKind::Notes => "Search notes",
+        };
+        let url = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let url_events = cx.subscribe_in(&url, window, |this, _, event: &InputEvent, window, cx| {
             match event {
-                InputEvent::PressEnter { .. } => this.install(window, cx),
+                InputEvent::PressEnter { .. } if this.query_is_link(cx) => this.install(window, cx),
                 _ => cx.notify(),
             }
         });
@@ -111,12 +112,24 @@ impl AgentFilesDialog {
         this
     }
 
-    /// What gets the focus on open: the GitHub link field for skills (the dialog opens to install one).
+    /// What gets the focus on open: the search / GitHub link field.
     pub fn initial_focus(&self, cx: &App) -> FocusHandle {
-        match self.kind {
-            AgentDialogKind::Skills => self.url.read(cx).focus_handle(cx),
-            AgentDialogKind::Notes => self.focus.clone(),
+        self.url.read(cx).focus_handle(cx)
+    }
+
+    /// The field holds a GitHub link to install, not a search.
+    fn query_is_link(&self, cx: &App) -> bool {
+        let text = self.url.read(cx).value();
+        let text = text.trim();
+        text.starts_with("http") || text.starts_with("github.com/")
+    }
+
+    /// Lowercased search text; empty when the field is empty or holds a link.
+    fn search(&self, cx: &App) -> String {
+        if self.query_is_link(cx) {
+            return String::new();
         }
+        self.url.read(cx).value().trim().to_lowercase()
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -334,7 +347,6 @@ impl AgentFilesDialog {
                     .child(
                         Button::new("agent-file-back")
                             .ghost()
-                            .small()
                             .icon(IconName::ArrowLeft)
                             .tooltip("Back")
                             .on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
@@ -353,7 +365,6 @@ impl AgentFilesDialog {
                     .child(
                         Button::new("agent-file-save")
                             .primary()
-                            .small()
                             .icon(IconName::Save)
                             .label("Save")
                             .disabled(!dirty)
@@ -375,7 +386,8 @@ impl AgentFilesDialog {
 
     fn render_skills(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
-        let can_install = !self.busy && !self.url.read(cx).value().trim().is_empty();
+        let can_install = !self.busy && self.query_is_link(cx);
+        let search = self.search(cx);
         let scope = self.scope;
         let picker = segmented(
             "skill-scope",
@@ -396,12 +408,11 @@ impl AgentFilesDialog {
             .flex()
             .items_center()
             .gap_2()
-            .child(div().flex_1().min_w_0().child(Input::new(&self.url).small()))
+            .child(div().flex_1().min_w_0().child(Input::new(&self.url)))
             .child(picker)
             .child(
                 Button::new("skill-install")
                     .primary()
-                    .small()
                     .icon(IconName::Download)
                     .label("Install")
                     .disabled(!can_install)
@@ -412,7 +423,11 @@ impl AgentFilesDialog {
             Some(skills) if skills.is_empty() => {
                 centered_note("No skills installed.", p.muted).into_any_element()
             }
-            Some(skills) => list_box("skills-list", &p).children(skills.iter().enumerate().map(
+            Some(skills) => list_box("skills-list", &p).children(skills.iter().enumerate().filter(|(_, skill)| {
+                search.is_empty()
+                    || skill.name.to_lowercase().contains(&search)
+                    || skill.description.to_lowercase().contains(&search)
+            }).map(
                 |(i, skill)| {
                     let (edit_path, name, path) =
                         (skill.path.clone(), skill.name.clone(), skill.path.clone());
@@ -458,7 +473,6 @@ impl AgentFilesDialog {
                         .child(
                             Button::new(("skill-edit", i))
                                 .ghost()
-                                .small()
                                 .icon(IconName::Pencil)
                                 .tooltip(format!("Edit {}", skill.name))
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -468,7 +482,6 @@ impl AgentFilesDialog {
                         .child(
                             Button::new(("skill-remove", i))
                                 .ghost()
-                                .small()
                                 .icon(IconName::Trash)
                                 .tooltip(format!("Uninstall {}", skill.name))
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -487,7 +500,12 @@ impl AgentFilesDialog {
         let Some(notes) = &self.notes else {
             return centered_note("Loading…", p.muted).into_any_element();
         };
-        list_box("notes-list", &p).children(notes.iter().enumerate().map(|(i, note)| {
+        let search = self.search(cx);
+        let list = list_box("notes-list", &p).children(notes.iter().enumerate().filter(|(_, note)| {
+            search.is_empty()
+                || note.label.to_lowercase().contains(&search)
+                || note.path.to_lowercase().contains(&search)
+        }).map(|(i, note)| {
             let path = note.path.clone();
             let label = if note.exists {
                 format!("Edit {}", note.label)
@@ -518,15 +536,14 @@ impl AgentFilesDialog {
                 .child(
                     Button::new(("note-edit", i))
                         .ghost()
-                        .small()
                         .icon(if note.exists { IconName::Pencil } else { IconName::FilePlus })
                         .tooltip(label)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.edit(path.clone(), window, cx)
                         })),
                 )
-        }))
-        .into_any_element()
+        }));
+        div().flex().flex_col().gap_3().child(Input::new(&self.url)).child(list).into_any_element()
     }
 }
 

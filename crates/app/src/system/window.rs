@@ -79,6 +79,20 @@ pub(super) fn toggle_main(cx: &mut App) {
 
 /// Kills every agent process, then exits (the pill window would otherwise keep the app alive).
 pub fn quit(cx: &mut App) {
+    stop_agents(cx);
+    cx.quit();
+}
+
+/// Update restart: same cleanup, then exit at once. The graceful GPUI quit can take longer than the
+/// new exe waits for the single-instance port (closing pseudoconsoles, MCP servers), and then the
+/// new exe thinks AgentDeck still runs and exits: nothing restarts.
+pub fn quit_for_update(cx: &mut App) {
+    stop_agents(cx);
+    agentdeck_core::shutdown();
+    std::process::exit(0);
+}
+
+fn stop_agents(cx: &mut App) {
     if let Some(deck) = main_deck(cx) {
         deck.update(cx, |d, cx| d.save_now(cx)); // a change inside the autosave debounce would be lost
         let backend = deck.read(cx).backend.clone();
@@ -91,7 +105,6 @@ pub fn quit(cx: &mut App) {
             }
         }
     }
-    cx.quit();
 }
 
 #[cfg(windows)]

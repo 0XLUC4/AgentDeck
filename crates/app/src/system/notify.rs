@@ -20,35 +20,51 @@ pub fn notify(settings: &Settings, title: &str, body: &str) {
     if settings.notify.enabled {
         let (title, body) = (title.to_owned(), body.to_owned());
         std::thread::spawn(move || {
-            let mut toast = notify_rust::Notification::new();
-            toast.summary(&title).body(&body).appname("AgentDeck");
-            if let Some(id) = toast_app_id() {
-                toast.app_id(id);
-            }
-            if let Err(e) = toast.show() {
+            if let Err(e) = show_toast(&title, &body) {
                 eprintln!("notification failed: {e}");
             }
         });
     }
 }
 
-/// Toast sender id with AgentDeck's name and icon. Without it Windows shows toasts as PowerShell's.
-/// Registered once per run under HKCU (no installer step needed); None if that fails.
-fn toast_app_id() -> Option<&'static str> {
-    static ID: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
-    *ID.get_or_init(|| match register_app_id() {
-        Ok(()) => Some(agentdeck_core::APP_IDENTIFIER),
-        Err(e) => {
-            eprintln!("notification icon not registered: {e}");
-            None
-        }
+/// Windows: AgentDeck's sender id plus its logo left of the text (the header icon alone is tiny
+/// and cached by Windows). Falls back to notify-rust's default sender if registration failed.
+fn show_toast(title: &str, body: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    if let Some(icon) = toast_icon() {
+        use tauri_winrt_notification::{IconCrop, Toast};
+        return Toast::new(agentdeck_core::APP_IDENTIFIER)
+            .title(title)
+            .text1(body)
+            .icon(icon, IconCrop::Square, "AgentDeck")
+            .show()
+            .map_err(|e| format!("{e:?}"));
+    }
+    notify_rust::Notification::new()
+        .summary(title)
+        .body(body)
+        .appname("AgentDeck")
+        .show()
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
+/// Registers the sender id once per run (HKCU, no installer step); the logo's path, None if that fails.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn toast_icon() -> Option<&'static std::path::Path> {
+    static ICON: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        register_app_id()
+            .map_err(|e| eprintln!("notification icon not registered: {e}"))
+            .ok()
     })
+    .as_deref()
 }
 
 /// HKCU\Software\Classes\AppUserModelId\<id>: DisplayName + IconUri (a PNG next to the app data).
 /// Ref: https://learn.microsoft.com/windows/apps/design/shell/tiles-and-notifications/send-local-toast-other-apps
 #[cfg(windows)]
-fn register_app_id() -> Result<(), String> {
+fn register_app_id() -> Result<std::path::PathBuf, String> {
     use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
     let dir = agentdeck_core::AppHandle::default_data_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -73,11 +89,11 @@ fn register_app_id() -> Result<(), String> {
             return Err(format!("RegSetKeyValueW: error {status}"));
         }
     }
-    Ok(())
+    Ok(icon)
 }
 
 #[cfg(not(windows))]
-fn register_app_id() -> Result<(), String> {
+fn register_app_id() -> Result<std::path::PathBuf, String> {
     Err("Windows only".into())
 }
 

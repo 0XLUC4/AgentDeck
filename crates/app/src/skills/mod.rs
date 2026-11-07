@@ -209,7 +209,6 @@ fn modal_header(title: String, actions: Option<AnyElement>, cx: &App) -> Div {
 fn close_button() -> Button {
     Button::new("skills-dialog-close")
         .ghost()
-        .small()
         .icon(IconName::X)
         .tooltip("Close (Esc)")
         .on_click(|_, window, cx| close(window, cx))
