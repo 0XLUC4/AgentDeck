@@ -224,6 +224,10 @@ impl AgentFilesDialog {
         .detach();
     }
 
+    pub fn has_unsaved(&self, cx: &App) -> bool {
+        self.editing.as_ref().is_some_and(|e| e.dirty(cx))
+    }
+
     fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dirty = self.editing.as_ref().is_some_and(|e| e.dirty(cx));
         cx.spawn_in(window, async move |this, cx| {

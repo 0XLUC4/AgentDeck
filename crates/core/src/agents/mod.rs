@@ -231,6 +231,11 @@ pub fn hook_args(kind: AgentKind, pane_id: &str, hooks: &HookServer) -> Vec<Stri
                 hooks.token,
                 hooks.url()
             ),
+            // `notify` only reports finished turns: approvals come as OSC 9 terminal notifications.
+            "-c".into(),
+            "tui.notifications=['approval-requested']".into(),
+            "-c".into(),
+            "tui.notification_method='osc9'".into(),
         ],
         _ => Vec::new(),
     }

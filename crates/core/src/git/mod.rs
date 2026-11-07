@@ -658,6 +658,30 @@ fn remove_worktree(cwd: &str) -> Result<(), String> {
 }
 
 /// Directory where a pane's agent runs: its worktree when it has one (see `agents::create_worktree`).
+/// Same key for a file in the main repo and in any agent worktree of it (`repo-agentdeck-1a2b3c4d/x`
+/// -> `repo/x`), lowercased with `/`: two agents editing it will meet at merge time.
+pub fn shared_file_key(path: &str) -> String {
+    path.replace('\\', "/")
+        .to_lowercase()
+        .split('/')
+        .map(|part| match part.rsplit_once("-agentdeck-") {
+            Some((repo, short)) if short.len() == 8 && !repo.is_empty() => repo,
+            _ => part,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Prompt asking the worktree's agent to fix a merge that `git_merge_worktree` refused for conflicts.
+pub fn merge_conflict_prompt(error: &str) -> Option<String> {
+    let rest = error.strip_prefix("conflicts merging ")?;
+    let (branch, rest) = rest.split_once(" into ")?;
+    let (target, files) = rest.split_once(" (merge aborted): ")?;
+    Some(format!(
+        "Merging your branch {branch} into {target} conflicts on: {files}. In this worktree, run `git merge {target}`, resolve every conflict keeping the intent of both sides, run the tests, then commit the merge. Tell me when it is done so I can merge again."
+    ))
+}
+
 fn pane_dir(cwd: &str, pane_id: &str, worktree: bool) -> String {
     let short: String = pane_id.chars().take(8).collect();
     let target = worktree
@@ -917,6 +941,21 @@ pub fn git_compare(cwd: String, other_cwd: String) -> Result<Comparison, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_files_share_a_key_with_the_main_repo() {
+        assert_eq!(shared_file_key(r"D:\Proj\app-agentdeck-1a2b3c4d\src\A.rs"), "d:/proj/app/src/a.rs");
+        assert_eq!(shared_file_key("d:/proj/app/src/a.rs"), "d:/proj/app/src/a.rs");
+        assert_eq!(shared_file_key("/x/my-agentdeck-tool/a"), "/x/my-agentdeck-tool/a"); // not 8 chars
+    }
+
+    #[test]
+    fn conflict_error_becomes_a_prompt() {
+        let err = "conflicts merging agentdeck/1a2b3c4d into main (merge aborted): src/a.rs, src/b.rs";
+        let prompt = merge_conflict_prompt(err).unwrap();
+        assert!(prompt.contains("git merge main") && prompt.contains("src/a.rs, src/b.rs"));
+        assert_eq!(merge_conflict_prompt("cannot merge x into y: boom"), None);
+    }
 
     /// Fresh repo with one commit (`a.txt` = "one\n"), or None when git is missing.
     fn temp_repo() -> Option<(PathBuf, PathBuf)> {

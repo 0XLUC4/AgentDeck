@@ -36,6 +36,28 @@ pub struct PermissionRequest {
     pub detail: String,
     /// Rules "Toujours autoriser" would add, e.g. "Bash(npm test)". Empty: no such option.
     pub suggestions: Vec<String>,
+    /// `AskUserQuestion` only: the questions, answered with [`answer_questions`] instead of allow/deny.
+    #[serde(default)]
+    pub questions: Vec<Question>,
+}
+
+/// One `AskUserQuestion` question with the choices the agent offers.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    pub question: String,
+    #[serde(default)]
+    pub header: String,
+    #[serde(default)]
+    pub multi_select: bool,
+    pub options: Vec<QuestionOption>,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 struct Pending {
@@ -95,6 +117,11 @@ impl Permissions {
             truncated
         };
         let tool_name = body["tool_name"].as_str().unwrap_or("?").to_owned();
+        let questions = if tool_name == "AskUserQuestion" {
+            serde_json::from_value(input["questions"].clone()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let request = PermissionRequest {
             request_id: request_id.clone(),
             pane_id: pane_id.to_owned(),
@@ -103,6 +130,7 @@ impl Permissions {
             tool_name,
             detail,
             suggestions,
+            questions,
         };
         self.lock().insert(
             request_id,
@@ -129,6 +157,25 @@ impl Permissions {
         let body = decision_body(decision, message, &pending.always);
         // The holding thread may have just timed out: nothing left to answer.
         let _ = pending.tx.send(body);
+        Ok(())
+    }
+
+    /// Allows an `AskUserQuestion` call with the user's picks (question text -> label(s), comma-joined),
+    /// the way Claude Code's own prompt fills `answers`.
+    pub fn answer_questions(&self, id: &str, answers: &HashMap<String, String>) -> Result<(), String> {
+        let pending = self
+            .lock()
+            .remove(id)
+            .ok_or("Request expired or already handled")?;
+        let mut input = pending.tool_input;
+        input["answers"] = json!(answers);
+        let body = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow", "updatedInput": input }
+            }
+        });
+        let _ = pending.tx.send(Some(body));
         Ok(())
     }
 
@@ -210,6 +257,11 @@ pub fn answer_permission(
     PENDING.answer(&request_id, &decision, message.as_deref())
 }
 
+/// Answers a pending `AskUserQuestion` from the UI.
+pub fn answer_questions(request_id: &str, answers: &HashMap<String, String>) -> Result<(), String> {
+    PENDING.answer_questions(request_id, answers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +320,28 @@ mod tests {
             p.answer(&req.request_id, "allow", None).is_err(),
             "answered twice"
         );
+    }
+
+    #[test]
+    fn questions_are_parsed_and_answered() {
+        let p = Permissions::default();
+        let body = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [
+            {"question": "Which DB?", "header": "DB", "multiSelect": false,
+             "options": [{"label": "SQLite", "description": "local"}, {"label": "Postgres", "description": "server"}]}
+        ]}});
+        let (req, rx) = p.register("p1", &body);
+        assert_eq!(req.questions.len(), 1);
+        assert_eq!(req.questions[0].options[1].label, "Postgres");
+        let answers = HashMap::from([("Which DB?".to_string(), "SQLite".to_string())]);
+        p.answer_questions(&req.request_id, &answers).unwrap();
+        let out = wait_decision(&rx, Duration::from_secs(5), || true).unwrap();
+        let d = &out["hookSpecificOutput"]["decision"];
+        assert_eq!(d["behavior"], "allow");
+        assert_eq!(d["updatedInput"]["answers"]["Which DB?"], "SQLite");
+        assert_eq!(d["updatedInput"]["questions"][0]["header"], "DB");
+        // Other tools never get questions.
+        let (req, _rx) = p.register("p1", &request("ls"));
+        assert!(req.questions.is_empty());
     }
 
     #[test]

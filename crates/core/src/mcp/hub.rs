@@ -69,7 +69,12 @@ pub fn init(app: &AppHandle, port: u16) {
 
 /// Stops every server (app exit): they would otherwise outlive AgentDeck and keep their ports.
 pub fn stop_all() {
-    lock(&RUNNING).clear();
+    // In-flight calls still hold an Arc<Upstream>, so Drop alone would not run before exit: kill now.
+    for (_, upstream) in lock(&RUNNING).drain() {
+        if let Link::Pipe(pipe) = &upstream.link {
+            pipe.kill();
+        }
+    }
 }
 
 /// CLI args that point `kind` at the hub instead of starting its own servers.
@@ -376,7 +381,7 @@ impl Upstream {
         let reply = match &self.link {
             Link::Pipe(pipe) => pipe.request(id, &msg, timeout),
             Link::Remote(remote) => remote
-                .post(&msg)
+                .post(&msg, timeout)
                 .and_then(|r| r.ok_or_else(|| "no response".into())),
         };
         if reply.is_err() && matches!(self.link, Link::Remote(_)) {
@@ -389,7 +394,7 @@ impl Upstream {
         let msg = json!({ "jsonrpc": "2.0", "method": method });
         match &self.link {
             Link::Pipe(pipe) => write_line(&pipe.stdin, &msg),
-            Link::Remote(remote) => remote.post(&msg).map(drop),
+            Link::Remote(remote) => remote.post(&msg, CALL_TIMEOUT).map(drop),
         }
     }
 
@@ -488,26 +493,36 @@ impl Pipe {
     }
 }
 
+impl Pipe {
+    fn kill(&self) {
+        kill_tree(&mut self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    }
+}
+
 impl Drop for Pipe {
     fn drop(&mut self) {
-        let child = self
-            .child
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // The server runs under cmd.exe on Windows: kill the whole tree, not just the shell.
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = Command::new("taskkill")
-                .args(["/T", "/F", "/PID", &child.id().to_string()])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-        let _ = child.kill();
-        let _ = child.wait();
+        kill_tree(self.child.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner));
     }
+}
+
+fn kill_tree(child: &mut Child) {
+    // Already reaped (stop_all, then Drop): its PID may belong to another process by now.
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    // The server runs under cmd.exe on Windows: kill the whole tree, not just the shell.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(windows)]
@@ -599,10 +614,11 @@ impl Remote {
     }
 
     /// `Ok(None)`: accepted without a body (notification).
-    fn post(&self, msg: &Value) -> Result<Option<Value>, String> {
+    fn post(&self, msg: &Value, timeout: Duration) -> Result<Option<Value>, String> {
         let mut req = self
             .client
             .post(&self.url)
+            .timeout(timeout)
             .header("Accept", "application/json, text/event-stream")
             .json(msg);
         for (key, value) in &self.headers {
@@ -635,6 +651,9 @@ impl Remote {
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/event-stream"));
         let text = resp.text().map_err(|e| e.to_string())?;
+        if text.trim().is_empty() {
+            return Ok(None); // 200/204 without a body: nothing to answer
+        }
         if sse {
             return Ok(sse_reply(&text, &msg["id"]));
         }

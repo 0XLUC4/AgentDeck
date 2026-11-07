@@ -9,7 +9,7 @@ Windows first. Early version: expect rough edges.
 
 ## Run
 
-Download `AgentDeck_0.2.0_x64-portable.zip` from the releases, unzip and start `agentdeck.exe`.
+Download `agentdeck.exe` from the releases and start it.
 It shares its data folder (`%APPDATA%\com.agentdeck.app`) with the previous Tauri AgentDeck (0.1.x), so close that one first,
 or set `AGENTDECK_DATA_DIR` to another folder to keep them apart.
 

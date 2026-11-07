@@ -104,6 +104,8 @@ pub fn apply(appearance: &Appearance, window: Option<&mut Window>, cx: &mut App)
         c.sidebar_accent = hsla(p.hover);
         c.sidebar_accent_foreground = hsla(p.fg);
         c.danger = hsla(p.bad);
+        // Text on a danger background (title bar close button hover): white, not red on red.
+        c.danger_foreground = white();
         c.success = hsla(p.ok);
         c.warning = hsla(p.wait);
         c.info = hsla(p.busy);

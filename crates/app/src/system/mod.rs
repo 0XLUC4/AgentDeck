@@ -26,7 +26,7 @@ pub use {
     window::{hide_main, main_deck, main_window},
 };
 pub use instance::single_instance;
-pub use window::{is_main_focused, quit, show_main};
+pub use window::{is_main_focused, quit, show_main, strip_frame};
 
 use gpui_kit::*;
 

@@ -49,10 +49,26 @@ impl JsonStore {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         let text = serde_json::to_string_pretty(&self.data).map_err(|e| e.to_string())?;
-        let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| format!("{}: {e}", self.path.display()))
+        write_atomic(&self.path, text.as_bytes())
     }
+}
+
+/// Replaces `path` with `bytes`: unique temp file (threads never share it), flushed to disk before
+/// the rename, so a crash or power cut leaves the old file or the new one, never an empty one.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let written = std::fs::File::create(&tmp).and_then(|mut file| {
+        file.write_all(bytes)?;
+        file.sync_all()
+    });
+    written
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("{}: {e}", path.display())
+        })
 }
 
 pub const DECK_FILE: &str = "store.json";
@@ -93,7 +109,16 @@ fn sessions(v: &Value) -> Vec<SavedSession> {
 pub fn migrate(saved: &Value) -> Option<Saved> {
     match saved["version"].as_u64() {
         Some(2) => {
-            let s: Saved = serde_json::from_value(saved.clone()).ok()?;
+            // Session by session, like v1: one unreadable pane (unknown agent from another build)
+            // costs its session, not the whole deck.
+            let s = Saved {
+                version: 2,
+                workspaces: serde_json::from_value(saved["workspaces"].clone()).unwrap_or_default(),
+                tabs: sessions(&saved["tabs"]),
+                active_tab_id: saved["activeTabId"].as_str().unwrap_or("").into(),
+                last_cwd: saved["lastCwd"].as_str().unwrap_or("").into(),
+                archived: sessions(&saved["archived"]),
+            };
             (!s.workspaces.is_empty() && !s.tabs.is_empty()).then_some(s)
         }
         Some(1) => {
@@ -211,7 +236,17 @@ pub fn specs_changed(next: &HashMap<String, Pane>, prev: &HashMap<String, Pane>)
 /// Loads the saved deck into `deck`. Returns the sessions to respawn (empty when nothing was saved).
 pub fn load_deck(dir: &Path, deck: &mut DeckState) -> Result<Vec<SavedSession>, String> {
     let store = JsonStore::load(dir, DECK_FILE)?;
-    Ok(migrate(&store.get(DECK_KEY)).map_or_else(Vec::new, |saved| hydrate(deck, saved)))
+    let saved = store.get(DECK_KEY);
+    match migrate(&saved) {
+        Some(saved) => Ok(hydrate(deck, saved)),
+        None if saved.is_null() => Ok(Vec::new()),
+        None => {
+            // The next save would overwrite it: keep a copy the user can restore.
+            let backup = dir.join(format!("{DECK_FILE}.bak"));
+            let _ = std::fs::copy(dir.join(DECK_FILE), &backup);
+            Err(format!("saved sessions unreadable, copy kept in {}", backup.display()))
+        }
+    }
 }
 
 /// Saves the deck snapshot (store.json, key "deck").
@@ -279,6 +314,20 @@ mod tests {
         assert!(migrate(&Value::Null).is_none());
         assert!(migrate(&json!({ "version": 1, "tabs": [], "activeTabId": "", "lastCwd": "" })).is_none());
         assert!(migrate(&json!({ "version": 99 })).is_none());
+    }
+
+    #[test]
+    fn v2_keeps_good_sessions_when_one_pane_is_unreadable() {
+        let mut bad = session();
+        bad["id"] = json!("bad");
+        bad["panes"] = json!([{ "id": "p", "agent": "copilot", "title": "x", "cwd": "/" }]);
+        let saved = migrate(&json!({
+            "version": 2, "workspaces": [{ "id": "w", "name": "W", "path": "" }],
+            "tabs": [session(), bad], "activeTabId": "s1", "lastCwd": "",
+        }))
+        .unwrap();
+        assert_eq!(saved.tabs.len(), 1);
+        assert_eq!(saved.tabs[0].id, "s1");
     }
 
     #[test]

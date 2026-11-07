@@ -239,7 +239,10 @@ impl Voice {
             ..Default::default()
         };
         let pill = self.pill.clone();
-        match cx.open_window(options, move |_, _| pill) {
+        match cx.open_window(options, move |window, _| {
+            crate::system::strip_frame(window);
+            pill
+        }) {
             Ok(handle) => self.pill_window = Some(handle),
             Err(e) => eprintln!("voice pill window failed: {e}"),
         }

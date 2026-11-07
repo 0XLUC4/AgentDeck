@@ -84,8 +84,14 @@ impl Deck {
         }
     }
 
-    /// Saves workspaces, tabs and archive to store.json. Errors become a toast.
+    /// Asks for a save: the runtime's debounced autosave writes store.json once the burst ends
+    /// (holding Ctrl+= used to rewrite the file on every key repeat, on the UI thread).
     pub fn save(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
+    /// Writes workspaces, tabs and archive to store.json now (autosave, quit). Errors become a toast.
+    pub fn save_now(&mut self, cx: &mut Context<Self>) {
         if let Err(e) = persist::save_deck(&self.data_dir, &self.state, now_ms()) {
             self.toast(format!("Save failed: {e}"), cx);
         }
@@ -115,7 +121,10 @@ impl Deck {
                     let started = self.state.panes.get(&e.pane_id).and_then(|p| p.task_started_at);
                     let next = apply_task_event(&log, &TaskEvent::from(&e), now, started.unwrap_or(now));
                     self.tasks.insert(e.pane_id.clone(), next);
-                    self.state.update_pane(&e.pane_id, |p| p.hooked = true);
+                    // A terminal notification is no hook: output keeps driving the status of such panes.
+                    if e.event != agentdeck_core::logic::text::TERMINAL_NOTICE {
+                        self.state.update_pane(&e.pane_id, |p| p.hooked = true);
+                    }
                     self.state.set_status(&e.pane_id, e.status, e.last_action.clone(), now);
                 }
             }

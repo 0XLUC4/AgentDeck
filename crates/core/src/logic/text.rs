@@ -330,6 +330,32 @@ pub fn last_lines(raw: &str, count: usize) -> Vec<String> {
 }
 
 /// "now" in ms since the epoch, like `Date.now()`.
+/// Status event name for a desktop notification an agent printed to its terminal.
+pub const TERMINAL_NOTICE: &str = "terminal-notification";
+
+/// Text of the last desktop notification escape in `output`: OSC 9 (`ESC ] 9 ; text BEL`, Codex,
+/// Windows Terminal style) or OSC 777 (`ESC ] 777 ; notify ; title ; body BEL`). ConEmu progress
+/// (`9;4;...`) is not a notification. A sequence split across two chunks is missed.
+pub fn osc_notification(output: &str) -> Option<String> {
+    let mut found = None;
+    let mut rest = output;
+    while let Some(start) = rest.find("]") {
+        rest = &rest[start + 2..];
+        let end = rest.find(['', '']).unwrap_or(rest.len());
+        let body = &rest[..end];
+        let text = if let Some(t) = body.strip_prefix("9;") {
+            (!t.starts_with("4;")).then_some(t)
+        } else {
+            body.strip_prefix("777;notify;")
+        };
+        if let Some(text) = text.map(|t| t.replace(';', " ").trim().to_owned()).filter(|t| !t.is_empty()) {
+            found = Some(text);
+        }
+        rest = &rest[end..];
+    }
+    found
+}
+
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -338,6 +364,16 @@ pub fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn finds_terminal_notifications() {
+        use super::osc_notification as osc;
+        assert_eq!(osc("x]9;Approval requested: lsy").as_deref(), Some("Approval requested: ls"));
+        assert_eq!(osc("]777;notify;Codex;Needs you\\").as_deref(), Some("Codex Needs you"));
+        assert_eq!(osc("]9;4;1;50"), None); // progress bar
+        assert_eq!(osc("]0;window titleplain text"), None);
+        assert_eq!(osc("no escapes"), None);
+    }
+
     use super::*;
 
     #[test]

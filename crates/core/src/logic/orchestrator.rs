@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use super::deck::{DeckState, Pane, Tab, activity_key};
 use super::tasks::TaskLog;
+use crate::agents::AgentKind;
 use crate::hooks_server::PaneStatus;
 
 pub const ORCHESTRATOR_TITLE: &str = "Orchestrator";
@@ -188,16 +189,25 @@ pub fn target<'a>(scope: &Scope<'a>, pane_id: &str) -> Result<&'a Pane, String> 
     if pane_id == scope.orchestrator.id {
         return Err("You cannot control yourself".into());
     }
-    scope
+    let pane = scope
         .panes
         .iter()
         .find(|(p, _)| p.id == pane_id)
         .map(|(p, _)| *p)
-        .ok_or_else(|| format!("Agent {pane_id} not found in your workspace (see list_agents)"))
+        .ok_or_else(|| format!("Agent {pane_id} not found in your workspace (see list_agents)"))?;
+    // Two orchestrators driving each other would loop with no human in between.
+    if pane.orchestrator {
+        return Err(format!("{} is another orchestrator: it cannot be controlled", pane.title));
+    }
+    Ok(pane)
 }
 
 /// Permission prompts are the user's to answer: no keystrokes go to a waiting agent.
 pub fn assert_can_type(pane: &Pane) -> Result<(), String> {
+    // Typing into a shell runs commands with no permission prompt: shells stay the user's.
+    if pane.agent == AgentKind::Shell {
+        return Err(format!("{} is a shell: only the user types there", pane.title));
+    }
     if pane.exited {
         return Err(format!("{} is stopped", pane.title));
     }
