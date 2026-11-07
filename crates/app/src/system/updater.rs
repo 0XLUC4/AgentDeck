@@ -154,7 +154,7 @@ impl Updater {
                     u.progress = Some(1.0);
                     replace_and_restart(&path)
                 }) {
-                    Ok(()) => super::quit(cx),
+                    Ok(()) => super::window::quit_for_update(cx),
                     Err(e) => {
                         u.phase = UpdatePhase::Error;
                         u.error = Some(e);

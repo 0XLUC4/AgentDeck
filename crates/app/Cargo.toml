@@ -18,6 +18,8 @@ gpui-webview = "0.9"
 global-hotkey = "0.8"
 tray-icon = "0.26"
 notify-rust = "4"
+# Same crate notify-rust uses on Windows, called directly for the app logo in toasts (appLogoOverride).
+tauri-winrt-notification = "0.8"
 auto-launch = "0.6"
 rfd = "0.17"
 arboard = "3"

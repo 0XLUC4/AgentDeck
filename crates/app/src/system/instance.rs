@@ -23,7 +23,8 @@ pub fn single_instance() -> Option<TcpListener> {
     let old_exe = if legacy_update { other_instance_exe() } else { None };
     let mut bound = TcpListener::bind(("127.0.0.1", INSTANCE_PORT));
     if legacy_update || std::env::args().any(|a| a == AFTER_UPDATE) {
-        for _ in 0..50 {
+        for _ in 0..200 {
+            // Up to 20 s: the old instance stops its agents before it frees the port.
             if bound.is_ok() {
                 break;
             }
