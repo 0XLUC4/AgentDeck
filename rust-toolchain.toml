@@ -1,0 +1,4 @@
+[toolchain]
+# gpui-pre 0.3.11 uses std::hint::cold_path (stable since 1.95).
+channel = "1.99.1"
+profile = "minimal"

@@ -1,0 +1,62 @@
+[package]
+name = "agentdeck"
+version.workspace = true
+edition.workspace = true
+description = "Multi-agent terminal dashboard (GPUI)"
+
+[dependencies]
+agentdeck-core.workspace = true
+gpui-kit = "0.9"
+serde.workspace = true
+serde_json.workspace = true
+smol = "2"
+# Terminal emulation (VT parser + grid), as in Zed's terminal.
+alacritty_terminal = "0.26"
+# Browser panel: Wry/WebView2 child view.
+gpui-webview = "0.9"
+# System integration. global-hotkey matches agentdeck-core (same HotKey type).
+global-hotkey = "0.8"
+tray-icon = "0.26"
+notify-rust = "4"
+auto-launch = "0.6"
+rfd = "0.17"
+arboard = "3"
+image = "0.25"
+# --- git module (app/src/git) ---
+# chrono: provided by the history block below (one key per table).
+# --- end git module ---
+
+# --- system + voice (owner: system agent) ---
+# Updater: GitHub latest.json fetch + installer download (same reqwest build as core), minisign check.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking"] }
+minisign-verify = "0.3"
+# Main window HWND for close to tray (GPUI has no hide on Windows).
+raw-window-handle = "0.6"
+# windows-sys is a no-op on other targets; kept in [dependencies] so later blocks stay in this table.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug"] }
+# --- end system + voice ---
+
+# --- history module (app/src/history) ---
+# Local dates and times for the journal, usage days and history results.
+chrono = "0.4"
+# --- end history module ---
+
+# --- browser module (app/src/browser) ---
+# Raw Wry builder (profile dir, DevTools port) for gpui-webview; same lb-wry it wraps.
+wry = { package = "lb-wry", version = "0.53" }
+url = "2"
+# --- end browser module ---
+
+# --- palette module (app/src/palette) ---
+# Accent-insensitive fuzzy matching in the command palette (NFD, like String.normalize).
+unicode-normalization = "0.1"
+# --- end palette module ---
+
+# --- skills module: 3D asset preview (app/src/skills/model3d.rs) ---
+gltf = "1"
+tobj = "4"
+stl_io = "0.8"
+# --- end skills module ---
+
+[build-dependencies]
+winresource = "0.1"

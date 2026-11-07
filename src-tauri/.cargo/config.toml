@@ -1,3 +1,0 @@
-# Machine-specific: whisper-rs-sys runs bindgen, which needs libclang. Adjust if LLVM lives elsewhere.
-[env]
-LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
