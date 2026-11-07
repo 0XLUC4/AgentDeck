@@ -91,11 +91,11 @@ fn definitions() -> Value {
             "spawn_agent",
             "Starts a new agent in your session. Default cwd: the workspace folder (must stay inside it).",
             json!({
-                "agent": { "type": "string", "enum": ["claude", "codex", "gemini", "grok", "opencode", "shell"] },
+                "agent": { "type": "string", "enum": ["claude", "codex", "gemini", "grok", "opencode"] },
                 "title": { "type": "string" },
                 "cwd": { "type": "string" },
                 "worktree": { "type": "boolean", "description": "Dedicated Git worktree" },
-                "args": { "type": "array", "items": { "type": "string" } },
+                "args": { "type": "array", "items": { "type": "string" }, "description": "Only --model <name>" },
             }),
             &["agent", "title"]
         ),
@@ -280,7 +280,9 @@ fn wait_for(args: &Value, host: &impl Host) -> Result<Value, String> {
 /// Validated `spawn_agent` arguments, normalized for the UI.
 fn spawn_args(args: &Value) -> Result<Value, String> {
     let agent: AgentKind = serde_json::from_value(args["agent"].clone())
-        .map_err(|_| "agent must be claude, codex, gemini, grok, opencode or shell")?;
+        .ok()
+        .filter(|a| *a != AgentKind::Shell) // a shell would run the orchestrator's commands unprompted
+        .ok_or("agent must be claude, codex, gemini, grok or opencode")?;
     let title = args["title"].as_str().map(str::trim).unwrap_or("");
     if title.is_empty() || title.chars().count() > 80 {
         return Err("title: 1 to 80 characters".into());
@@ -305,6 +307,10 @@ fn spawn_args(args: &Value) -> Result<Value, String> {
     {
         return Err("args: at most 20 arguments, no control characters".into());
     }
+    if !model_args_only(&extra) {
+        // Flags like --dangerously-skip-permissions or --yolo would skip the user's permission prompts.
+        return Err("args: only --model <name> is allowed".into());
+    }
     Ok(json!({
         "agent": agent,
         "title": title,
@@ -312,6 +318,21 @@ fn spawn_args(args: &Value) -> Result<Value, String> {
         "worktree": bool_arg(args, "worktree", false)?,
         "args": extra,
     }))
+}
+
+/// `--model x`, `-m x` or `--model=x`, nothing else.
+fn model_args_only(args: &[&str]) -> bool {
+    let mut rest = args.iter();
+    while let Some(flag) = rest.next() {
+        let ok = match *flag {
+            "--model" | "-m" => rest.next().is_some_and(|v| !v.starts_with('-')),
+            f => f.strip_prefix("--model=").is_some_and(|v| !v.is_empty()),
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 fn pane_arg(args: &Value) -> Result<&str, String> {
@@ -359,6 +380,17 @@ pub fn last_lines(raw: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spawn_refuses_shell_and_permission_flags() {
+        use serde_json::json;
+        let spawn = |v| super::spawn_args(&v);
+        assert!(spawn(json!({"agent": "shell", "title": "x"})).is_err());
+        assert!(spawn(json!({"agent": "claude", "title": "x", "args": ["--dangerously-skip-permissions"]})).is_err());
+        assert!(spawn(json!({"agent": "codex", "title": "x", "args": ["--model", "--yolo"]})).is_err());
+        assert!(spawn(json!({"agent": "claude", "title": "x", "args": ["--model", "opus"]})).is_ok());
+        assert!(spawn(json!({"agent": "claude", "title": "x", "args": ["--model=opus"]})).is_ok());
+    }
+
     use super::*;
     use std::cell::RefCell;
 

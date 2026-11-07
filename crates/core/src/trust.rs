@@ -10,6 +10,8 @@ use serde_json::{Map, Value};
 use crate::agents::AgentKind;
 
 /// (agent, cwd) pairs already trusted this run: skips re-reading `~/.claude.json` (often MBs) on every spawn.
+/// Serializes `edit_file`: panes spawned in parallel edit the same settings files.
+static EDIT: Mutex<()> = Mutex::new(());
 static TRUSTED: LazyLock<Mutex<HashSet<(AgentKind, String)>>> = LazyLock::new(Mutex::default);
 
 /// Marks `cwd` as trusted in the agent's own config. Failures are logged, never fatal:
@@ -101,6 +103,7 @@ pub(crate) fn edit_file(
     path: &Path,
     edit: impl Fn(&str) -> Result<Option<String>, String>,
 ) -> Result<(), String> {
+    let _guard = EDIT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let read = || match std::fs::read_to_string(path) {
         Ok(text) => Ok(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
@@ -116,15 +119,7 @@ pub(crate) fn edit_file(
     let Some(text) = updated else { return Ok(()) };
     let dir = path.parent().ok_or("no parent folder")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let tmp = dir.join(format!(
-        ".{}.agentdeck-tmp",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("{}: {e}", path.display())
-    })
+    crate::persist::write_atomic(path, text.as_bytes())
 }
 
 /// Claude (`nested`): `projects[key].hasTrustDialogAccepted = true`.

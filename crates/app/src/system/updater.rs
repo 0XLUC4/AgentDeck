@@ -1,5 +1,5 @@
-//! Auto-update from this repo's release feed: GitHub `latest.json`, installers signed with
-//! the minisign key from tauri.conf.json. Checked at startup and every few hours; shared by the
+//! Auto-update from this repo's release feed: GitHub `latest.json` pointing at the portable exe,
+//! signed with the minisign key from tauri.conf.json. The running exe is swapped in place. Checked at startup and every few hours; shared by the
 //! title bar button ([`UpdateButton`]) and Settings > About ([`super::AppControls`]).
 
 use std::io::Read;
@@ -59,6 +59,10 @@ pub fn updater(cx: &App) -> Option<Entity<Updater>> {
 
 /// Startup check, then every few hours. Network or endpoint errors stay quiet.
 pub(super) fn init(cx: &mut App) {
+    // Leftover of the previous update (the old exe cannot be deleted while it runs).
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::fs::remove_file(exe.with_extension("exe.old"));
+    }
     let entity = cx.new(|_| Updater {
         update: None,
         phase: UpdatePhase::Idle,
@@ -96,6 +100,10 @@ impl Updater {
         cx.spawn(async move |this, cx| {
             let result = job.await;
             let _ = this.update(cx, |u, cx| {
+                // An install started meanwhile owns the phase now.
+                if u.phase != UpdatePhase::Checking {
+                    return;
+                }
                 match result {
                     Ok(update) => {
                         u.update = update;
@@ -114,7 +122,7 @@ impl Updater {
         .detach();
     }
 
-    /// Downloads with progress, verifies the signature, starts the passive installer and quits.
+    /// Downloads with progress, verifies the signature, swaps the exe, restarts and quits.
     pub fn install(&mut self, cx: &mut Context<Self>) {
         let Some(update) = self.update.clone() else {
             return;
@@ -144,7 +152,7 @@ impl Updater {
                 match result.and_then(|path| {
                     u.phase = UpdatePhase::Installing;
                     u.progress = Some(1.0);
-                    launch_installer(&path)
+                    replace_and_restart(&path)
                 }) {
                     Ok(()) => super::quit(cx),
                     Err(e) => {
@@ -238,6 +246,7 @@ fn is_newer(candidate: &str, current: &str) -> bool {
 fn download(update: &Update, progress: impl Fn(Option<f32>)) -> Result<PathBuf, String> {
     let mut response = client()?
         .get(&update.url)
+        .timeout(Duration::from_secs(30 * 60)) // the client default (30 s) also covers the body: slow links failed
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|e| format!("download failed: {e}"))?;
@@ -300,21 +309,23 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Passive install, then the installer restarts AgentDeck (Tauri's `installMode: passive`).
-fn launch_installer(path: &std::path::Path) -> Result<(), String> {
-    let is_msi = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("msi"));
-    let spawned = if is_msi {
-        std::process::Command::new("msiexec")
-            .arg("/i")
-            .arg(path)
-            .args(["/passive", "AUTOLAUNCHAPP=True"])
-            .spawn()
-    } else {
-        std::process::Command::new(path).args(["/P", "/R"]).spawn()
-    };
-    spawned
+/// Replaces the running exe with `new` (Windows lets a running exe be renamed, not overwritten),
+/// then starts it. On failure the old exe is put back.
+fn replace_and_restart(new: &std::path::Path) -> Result<(), String> {
+    let current = std::env::current_exe().map_err(|e| format!("cannot find AgentDeck's exe: {e}"))?;
+    let old = current.with_extension("exe.old");
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(&current, &old).map_err(|e| format!("{}: {e}", current.display()))?;
+    if let Err(e) = std::fs::copy(new, &current) {
+        let _ = std::fs::rename(&old, &current);
+        return Err(format!("cannot install the update: {e}"));
+    }
+    let _ = std::fs::remove_file(new);
+    std::process::Command::new(&current)
+        .arg(super::instance::AFTER_UPDATE)
+        .spawn()
         .map(drop)
-        .map_err(|e| format!("cannot start the installer: {e}"))
+        .map_err(|e| format!("cannot restart AgentDeck: {e}"))
 }
 
 /// Title bar button: a dot when a new release is out, a small panel to install it and restart.
@@ -362,9 +373,11 @@ impl Render for UpdateButton {
             .id("update-toggle")
             .size(ui(28.0))
             .flex()
+            .flex_shrink_0()
             .items_center()
             .justify_center()
             .rounded(ui(6.0))
+            .text_size(ui(16.0)) // same icon size as the other title bar buttons (icon_button)
             .text_color(hsla(if self.open { p.fg } else { p.muted }))
             .when(self.open, |d| d.bg(hsla(p.raised)))
             .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
@@ -377,13 +390,11 @@ impl Render for UpdateButton {
             root = root.child(
                 div()
                     .absolute()
-                    .top(ui(-1.0))
-                    .right(ui(-1.0))
-                    .size(ui(10.0))
+                    .top(ui(4.0))
+                    .right(ui(4.0))
+                    .size(ui(6.0))
                     .rounded_full()
-                    .bg(hsla(p.busy))
-                    .border_2()
-                    .border_color(hsla(p.panel)),
+                    .bg(hsla(p.busy)),
             );
         }
         if !self.open {

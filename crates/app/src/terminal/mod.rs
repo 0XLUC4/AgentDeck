@@ -16,7 +16,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use agentdeck_core::agents::AgentKind;
-use agentdeck_core::logic::ring_buffer::RingBuffer;
 use agentdeck_core::logic::text::file_refs;
 use agentdeck_core::logic::layout::ReplayGate;
 use agentdeck_core::{pty, skills};
@@ -88,8 +87,6 @@ fn new_term(cols: usize, rows: usize, listener: Listener) -> Term<Listener> {
 /// before its first paint.
 pub struct TerminalView {
     pub pane_id: String,
-    /// Raw output kept for detach replay and the orchestrator's read_output.
-    pub buffer: RingBuffer,
     /// Deck to read the pane (agent, zoom, restarts) from. Found from the main window when unset.
     pub deck: Option<Entity<Deck>>,
     /// Only one terminal per pane answers queries, sends input and resizes (`forwards_input`).
@@ -143,7 +140,6 @@ impl TerminalView {
         }
         Self {
             pane_id,
-            buffer: RingBuffer::default(),
             deck: None,
             forwards_input: true,
             term: new_term(80, 24, replies.clone()),
@@ -171,17 +167,15 @@ impl TerminalView {
         }
     }
 
-    /// Clears the screen and the buffer (pane restarted: fresh output).
+    /// Clears the screen (pane restarted: fresh output).
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.term = new_term(self.term.columns(), self.term.screen_lines(), self.replies.clone());
         self.parser = Processor::new();
-        self.buffer.clear();
         cx.notify();
     }
 
     /// Feeds pty output to the emulator. A replay's answers to old terminal queries are dropped.
     fn feed(&mut self, data: &str, replay: bool, cx: &mut Context<Self>) {
-        self.buffer.push(data);
         self.parser.advance(&mut self.term, data.as_bytes());
         let replies = std::mem::take(&mut *self.replies.0.borrow_mut());
         for reply in replies {
@@ -202,6 +196,14 @@ impl TerminalView {
     fn send_input(&mut self, data: &str, cx: &mut Context<Self>) {
         if self.forwards_input && !data.is_empty() {
             runtime::send_input(&self.pane_id, data, cx);
+        }
+    }
+
+    /// Focus reporting (DECSET 1004), when the program asked for it: Codex only sends its
+    /// "approval requested" notification while its terminal is not focused.
+    fn report_focus(&mut self, focused: bool, cx: &mut Context<Self>) {
+        if self.term.mode().contains(TermMode::FOCUS_IN_OUT) {
+            self.send_input(if focused { "[I" } else { "[O" }, cx);
         }
     }
 
@@ -612,11 +614,19 @@ impl TerminalView {
         self.subscriptions.push(cx.on_focus(&focus, window, |view, _, cx| {
             view.focused = true;
             view.blink_on = true;
+            view.report_focus(true, cx);
             cx.notify();
         }));
         self.subscriptions.push(cx.on_blur(&focus, window, |view, _, cx| {
             view.focused = false;
+            view.report_focus(false, cx);
             cx.notify();
+        }));
+        // Switching to another app keeps the GPUI focus: report it too, or Codex thinks you are watching.
+        self.subscriptions.push(cx.observe_window_activation(window, |view, window, cx| {
+            if view.focused {
+                view.report_focus(window.is_window_active(), cx);
+            }
         }));
         // Theme switch: repaint with the new terminal colors.
         self.subscriptions.push(cx.observe_global::<crate::theme::AppTheme>(|_, cx| cx.notify()));

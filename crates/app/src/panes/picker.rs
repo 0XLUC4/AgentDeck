@@ -25,14 +25,25 @@ use crate::theme::{hsla, hsla_a, palette, ui};
 const LAST_AGENT_KEY: &str = "add-agent-last";
 
 /// Agent the quick "Add agent" button starts: the last one added, Claude at first.
+/// Read on every title bar render: loaded from local.json once, then kept here.
+static LAST_AGENT: std::sync::Mutex<Option<AgentKind>> = std::sync::Mutex::new(None);
+
 pub fn last_agent(cx: &App) -> AgentKind {
-    runtime::deck(cx)
-        .and_then(|deck| JsonStore::load(&deck.read(cx).data_dir, LOCAL_FILE).ok())
+    let mut cached = LAST_AGENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(agent) = *cached {
+        return agent;
+    }
+    let Some(deck) = runtime::deck(cx) else { return AgentKind::Claude };
+    let agent = JsonStore::load(&deck.read(cx).data_dir, LOCAL_FILE)
+        .ok()
         .and_then(|store| serde_json::from_value(store.get(LAST_AGENT_KEY)).ok())
-        .unwrap_or(AgentKind::Claude)
+        .unwrap_or(AgentKind::Claude);
+    *cached = Some(agent);
+    agent
 }
 
 fn remember_agent(agent: AgentKind, dir: &std::path::Path) {
+    *LAST_AGENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(agent);
     let saved = JsonStore::load(dir, LOCAL_FILE).and_then(|mut store| {
         store.set(LAST_AGENT_KEY, serde_json::json!(agent));
         store.save()

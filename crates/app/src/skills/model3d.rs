@@ -111,6 +111,12 @@ fn to_srgb(c: f32) -> u8 {
 }
 
 pub fn load(path: &Path, ext: &str) -> Result<Model, String> {
+    // The gltf crate panics on some malformed files (out-of-range buffer views): never take the app down.
+    std::panic::catch_unwind(|| load_model(path, ext))
+        .unwrap_or_else(|_| Err("Could not read the model (malformed file).".into()))
+}
+
+fn load_model(path: &Path, ext: &str) -> Result<Model, String> {
     let parts = match ext {
         "glb" | "gltf" | "blend" => load_gltf(path)?,
         "obj" => load_obj(path)?,

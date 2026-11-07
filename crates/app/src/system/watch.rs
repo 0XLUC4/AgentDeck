@@ -123,7 +123,12 @@ impl Watch {
             _ => return,
         };
         if wanted && (unseen || !prefs.only_unseen) {
-            notify(&settings, &format!("{agent} {text}"), &title);
+            // A waiting agent's own message ("Approval requested: npm test") says more than the pane title.
+            let body = match (e.status, &e.last_action) {
+                (PaneStatus::Waiting, Some(message)) => format!("{title}: {message}"),
+                _ => title,
+            };
+            notify(&settings, &format!("{agent} {text}"), &body);
         }
     }
 
@@ -140,7 +145,10 @@ impl Watch {
         let prefs = &d.settings.notify;
         let unseen = !focused || d.state.active_pane_id.as_deref() != Some(&req.pane_id);
         if prefs.waiting && (unseen || !prefs.only_unseen) {
-            let title = format!("{} is asking for permission: {}", agent_name(pane.agent), req.summary);
+            let title = match req.questions.first() {
+                Some(q) => format!("{} asks: {}", agent_name(pane.agent), q.question),
+                None => format!("{} is asking for permission: {}", agent_name(pane.agent), req.summary),
+            };
             notify(&d.settings, &title, &pane.title);
         }
     }

@@ -20,7 +20,7 @@ use gpui_kit::*;
 
 use super::DeckView;
 use super::chrome::icon_button;
-use crate::panes::{PermissionCard, PermissionCardEvent, agent_logo, runtime, status_color};
+use crate::panes::{PermissionCard, agent_logo, runtime, status_color};
 use crate::theme::{hsla, palette, ui};
 
 const LONG_PROMPT: usize = 400;
@@ -34,7 +34,6 @@ pub(super) struct ActivityState {
     /// Expanded long prompts and previous tasks, by key.
     expanded: HashSet<String>,
     copied_at: i64,
-    cards: HashMap<String, (Entity<PermissionCard>, Subscription)>,
 }
 
 fn activity_label(key: ActivityKey) -> &'static str {
@@ -99,25 +98,15 @@ fn note(text: impl Into<SharedString>, p: &Palette) -> Div {
 }
 
 impl DeckView {
-    fn permission_card(&mut self, request: &PermissionRequest, cx: &mut Context<Self>) -> Entity<PermissionCard> {
-        if let Some((card, _)) = self.activity.cards.get(&request.request_id) {
-            return card.clone();
-        }
-        let card = cx.new(|_| PermissionCard::new(request.clone()));
-        let pane_id = request.pane_id.clone();
-        let sub = cx.subscribe(&card, move |this, _, _: &PermissionCardEvent, cx| this.jump(&pane_id, cx));
-        self.activity.cards.insert(request.request_id.clone(), (card.clone(), sub));
-        card
-    }
-
     /// Right column: every agent of every workspace, the ones needing attention first.
     pub(super) fn activity_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let now = now_ms();
+        // Same card entities as the banner: picks and a half-typed deny reason survive switching views.
         let pending: Vec<PermissionRequest> = self.deck.read(cx).permissions.clone();
-        self.activity.cards.retain(|id, _| pending.iter().any(|r| &r.request_id == id));
-        let cards: HashMap<String, Entity<PermissionCard>> =
-            pending.iter().map(|r| (r.request_id.clone(), self.permission_card(r, cx))).collect();
+        let cards: HashMap<String, Entity<PermissionCard>> = self.permission_banner.update(cx, |banner, cx| {
+            pending.iter().map(|r| (r.request_id.clone(), banner.card(r, cx))).collect()
+        });
         let detail = self.activity.detail.clone().filter(|id| self.deck.read(cx).state.panes.contains_key(id));
         let detail_view = detail.map(|id| self.task_detail(&id, now, cx));
 

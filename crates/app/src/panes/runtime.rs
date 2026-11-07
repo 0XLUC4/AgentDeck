@@ -12,7 +12,8 @@ use agentdeck_core::hooks_server::{AgentStatusEvent, PaneStatus};
 use agentdeck_core::logic::deck::{Pane, PaneSpec, new_pane};
 use agentdeck_core::logic::queue::{SUBMIT_DELAY_MS, prompt_text};
 use agentdeck_core::logic::ring_buffer::RingBuffer;
-use agentdeck_core::logic::text::{agent_name, interrupt_key, now_ms};
+use agentdeck_core::agents::AgentKind;
+use agentdeck_core::logic::text::{TERMINAL_NOTICE, agent_name, interrupt_key, now_ms, osc_notification};
 use agentdeck_core::{AppHandle, AppState, Event, mcp, persist, pty};
 use gpui_kit::*;
 use smol::lock::Semaphore;
@@ -39,6 +40,10 @@ struct Output {
     last_output_at: i64,
     /// Output before this time is a repaint (focus, resize, typing echo), not activity.
     repaint_until: i64,
+    /// Desktop notification the agent printed (OSC 9 / 777), not yet forwarded.
+    notice: Option<String>,
+    /// Set while the pane waits because of such a notification (cleared once output resumes).
+    notice_waiting_since: Option<i64>,
 }
 
 struct Runtime {
@@ -71,6 +76,7 @@ struct Editor {
     pane_id: String,
     at: i64,
     warned_at: Option<i64>,
+    in_worktree: bool,
 }
 
 #[derive(Default)]
@@ -206,7 +212,7 @@ fn schedule_save(cx: &mut App) {
                 return;
             }
             rts(cx).last_saved = snapshot;
-            deck.update(cx, |d, cx| d.save(cx));
+            deck.update(cx, |d, cx| d.save_now(cx));
         });
     })
     .detach();
@@ -216,6 +222,7 @@ fn schedule_save(cx: &mut App) {
 fn tick(cx: &mut App) {
     let now = now_ms();
     derive_statuses(now, cx);
+    forward_terminal_notices(now, cx);
     let Some(deck) = deck(cx) else { return };
     let live = deck.read(cx).state.panes.values().any(|p| {
         p.task_started_at.is_some() || matches!(p.status, PaneStatus::Working | PaneStatus::Waiting)
@@ -272,6 +279,9 @@ pub fn create_pane(spec: PaneSpec, tab_id: &str, adopt: bool, cx: &mut App) {
             while let Ok(data) = rx.recv() {
                 let now = now_ms();
                 let mut out = lock(&reader);
+                if let Some(text) = osc_notification(&data) {
+                    out.notice = Some(text);
+                }
                 out.buffer.push(&data);
                 if now > out.repaint_until {
                     out.last_output_at = now;
@@ -577,6 +587,7 @@ pub fn restart_pane(id: &str, cx: &mut App) {
             };
             rt.restarting = false;
             lock(&rt.output).buffer.clear();
+            agentdeck_core::mcp::STATUS.set(&id, PaneStatus::Idle); // forget the old run's "done"
             let now = now_ms();
             update_pane(&id, cx, |p| {
                 p.status = PaneStatus::Idle;
@@ -697,7 +708,9 @@ fn is_rate_limit(text: Option<&str>) -> bool {
 
 /// Toasts once when another live agent edited the same file recently (no worktree between them).
 fn check_conflict(pane_id: &str, file: &str, now: i64, cx: &mut App) {
-    let key = file.replace('\\', "/").to_lowercase();
+    let key = agentdeck_core::git::shared_file_key(file);
+    // In separate worktrees the clash waits for the merge, however long ago the other edit was.
+    let in_worktree = key != file.replace('\\', "/").to_lowercase();
     let Some(deck) = deck(cx) else { return };
     let prev = rts(cx).editors.remove(&key);
     let mut warned_at = prev.as_ref().and_then(|e| e.warned_at);
@@ -705,13 +718,17 @@ fn check_conflict(pane_id: &str, file: &str, now: i64, cx: &mut App) {
         let panes = &deck.read(cx).state.panes;
         let fresh_warning = warned_at.is_none_or(|w| now - w > CONFLICT_WINDOW_MS);
         if prev.pane_id != pane_id
-            && now - prev.at < CONFLICT_WINDOW_MS
+            && (in_worktree || prev.in_worktree || now - prev.at < CONFLICT_WINDOW_MS)
             && fresh_warning
             && let Some(other) = panes.get(&prev.pane_id)
         {
             let name = key.rsplit('/').next().unwrap_or(&key).to_owned();
             let this = panes.get(pane_id).map_or("another agent".to_owned(), |p| p.title.clone());
-            let message = format!("{} and {this} both edited {name}", other.title);
+            let message = if in_worktree || prev.in_worktree {
+                format!("{} and {this} both edited {name}: expect a conflict when merging", other.title)
+            } else {
+                format!("{} and {this} both edited {name}", other.title)
+            };
             toast(message, cx);
             warned_at = Some(now);
         }
@@ -722,6 +739,7 @@ fn check_conflict(pane_id: &str, file: &str, now: i64, cx: &mut App) {
             pane_id: pane_id.to_owned(),
             at: now,
             warned_at,
+            in_worktree,
         },
     );
 }
@@ -851,6 +869,49 @@ pub fn is_busy(id: &str, now: i64, cx: &App) -> bool {
             .is_some_and(|rt| now - lock(&rt.output).last_output_at < ACTIVITY_WINDOW_MS)
 }
 
+/// Codex (tui.notifications), Grok, OpenCode: a desktop notification printed to the terminal means
+/// the agent needs the user, so the pane waits and the usual "waiting" notification fires. Claude
+/// and Gemini report this through their hooks. Output resuming afterwards means it was answered.
+fn forward_terminal_notices(now: i64, cx: &mut App) {
+    let Some(deck) = deck(cx) else { return };
+    let Some(r) = cx.try_global::<Runtimes>() else { return };
+    let d = deck.read(cx);
+    let mut events = Vec::new();
+    for (id, rt) in &r.map {
+        let Some(pane) = d.state.panes.get(id) else { continue };
+        let mut out = lock(&rt.output);
+        if let Some(text) = out.notice.take() {
+            if !matches!(pane.agent, AgentKind::Claude | AgentKind::Gemini) && !pane.exited {
+                out.notice_waiting_since = Some(now);
+                events.push((id.clone(), PaneStatus::Waiting, Some(text)));
+            }
+        } else if let Some(since) = out.notice_waiting_since {
+            if pane.status != PaneStatus::Waiting {
+                out.notice_waiting_since = None; // a hook moved it on
+            } else if out.last_output_at > since + 2000 {
+                out.notice_waiting_since = None;
+                events.push((id.clone(), PaneStatus::Working, None));
+            }
+        }
+    }
+    let backend = d.backend.clone();
+    for (pane_id, status, last_action) in events {
+        let event = AgentStatusEvent {
+            pane_id,
+            status,
+            last_action,
+            event: TERMINAL_NOTICE.into(),
+            prompt: None,
+            summary: None,
+            session_id: None,
+            edited_file: None,
+        };
+        if let Err(e) = backend.emit("agent-status", event) {
+            eprintln!("terminal notification: {e}");
+        }
+    }
+}
+
 /// Panes without hooks: working if output arrived recently, idle otherwise.
 fn derive_statuses(now: i64, cx: &mut App) {
     let Some(deck) = deck(cx) else { return };
@@ -873,6 +934,9 @@ fn derive_statuses(now: i64, cx: &mut App) {
     }
     deck.update(cx, |d, cx| {
         for (id, status) in changes {
+            // No hook will ever report these panes: the orchestrator's wait_for reads this instead.
+            let done = if status == PaneStatus::Idle { PaneStatus::Done } else { PaneStatus::Working };
+            agentdeck_core::mcp::STATUS.set(&id, done);
             d.state.set_status(&id, status, None, now);
         }
         cx.notify();

@@ -4,7 +4,7 @@
 use agentdeck_core::git::{
     Checkpoint, Comparison, GitStatus, Upstream, git_checkpoint, git_commit, git_compare, git_create_pr, git_diff,
     git_diff_trees, git_list_checkpoints, git_merge_worktree, git_pane_dir, git_pull, git_push, git_remove_worktree,
-    git_restore_checkpoint, git_status, git_upstream,
+    git_restore_checkpoint, git_status, git_upstream, merge_conflict_prompt,
 };
 use agentdeck_core::logic::deck::Pane;
 use agentdeck_core::logic::text::agent_name;
@@ -80,6 +80,8 @@ pub struct GitPanel {
     /// Active comparison and the other pane's id.
     comparison: Option<(Comparison, String)>,
     selected: Option<String>,
+    /// Changed files list collapsed (long lists push the commit section out of view).
+    files_collapsed: bool,
     diff: Option<Vec<(DiffLineKind, SharedString)>>,
     shown: usize,
     notice: Option<(bool, String)>,
@@ -130,6 +132,7 @@ impl GitPanel {
             checkpoints: Vec::new(),
             comparison: None,
             selected: None,
+            files_collapsed: false,
             diff: None,
             shown: DIFF_PAGE,
             notice: None,
@@ -192,24 +195,26 @@ impl GitPanel {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    match trees {
+                    let text = match trees {
                         Some((from, to)) => git_diff_trees(dir, from, to, file),
                         None => git_diff(dir, file),
-                    }
+                    }?;
+                    // Split and classify here: a 100k-line lockfile diff would freeze the window.
+                    let lines = diff_lines(&text);
+                    let kinds = classify_diff(&lines);
+                    Ok::<Vec<_>, String>(
+                        kinds
+                            .into_iter()
+                            .zip(lines)
+                            .map(|(k, l)| (k, SharedString::from(l.to_owned())))
+                            .collect(),
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(text) if this.selected.as_deref() == Some(path.as_str()) => {
-                        let lines = diff_lines(&text);
-                        let kinds = classify_diff(&lines);
-                        this.diff = Some(
-                            kinds
-                                .into_iter()
-                                .zip(lines)
-                                .map(|(k, l)| (k, SharedString::from(l.to_owned())))
-                                .collect(),
-                        );
+                    Ok(diff) if this.selected.as_deref() == Some(path.as_str()) => {
+                        this.diff = Some(diff);
                     }
                     Ok(_) => {}
                     Err(e) => this.notice = Some((false, e)),
@@ -361,6 +366,10 @@ impl GitPanel {
     }
 
     fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Two git jobs at once in one repo (restore during a pull) race on the index.
+        if self.busy {
+            return;
+        }
         let Some(pending) = self.pending.take() else { return };
         self.focus.focus(window, cx);
         match pending {
@@ -580,6 +589,8 @@ impl Render for GitPanel {
                     .child(self.dir.clone().unwrap_or_default()),
             );
 
+        // Merge refused for conflicts: the worktree's agent can merge the target in and resolve them.
+        let fix_prompt = self.notice.as_ref().filter(|(ok, _)| !ok).and_then(|(_, text)| merge_conflict_prompt(text));
         let notice = self.notice.as_ref().map(|(ok, text)| {
             div()
                 .flex_shrink_0()
@@ -591,6 +602,21 @@ impl Render for GitPanel {
                 .when(*ok, |d| d.text_color(muted))
                 .when(!*ok, |d| d.bg(hsla_a(p.bad, 0.1)).text_color(hsla(p.bad)))
                 .child(text.clone())
+                .when_some(fix_prompt.clone(), |d, prompt| {
+                    d.child(
+                        Button::new("git-fix-conflicts")
+                            .mt_2()
+                            .small()
+                            .primary()
+                            .label("Ask the agent to resolve")
+                            .tooltip("Sends the agent a prompt: merge the target into its worktree, fix the conflicts, commit")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                crate::panes::runtime::send_prompt(&this.pane_id, &prompt, cx);
+                                this.notice = Some((true, "Sent to the agent. Merge again once it is done.".into()));
+                                cx.notify();
+                            })),
+                    )
+                })
         });
 
         let pending = self.pending.as_ref().map(|c| {
@@ -651,6 +677,7 @@ impl Render for GitPanel {
                             Button::new("git-confirm-ok")
                                 .primary()
                                 .label("OK")
+                                .disabled(self.busy)
                                 .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
                         ),
                 )
@@ -682,14 +709,24 @@ impl Render for GitPanel {
                 },
             ));
 
+        let collapsed = self.files_collapsed;
         let files_title = div()
+            .id("git-files-toggle")
             .flex()
             .items_center()
+            .gap_1()
             .px_3()
             .pt_1()
             .pb_1()
             .text_xs()
             .text_color(subtle)
+            .cursor_pointer()
+            .hover(|s| s.text_color(muted))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.files_collapsed = !this.files_collapsed;
+                cx.notify();
+            }))
+            .child(icon(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown }, subtle).size(ui(12.0)))
             .child(match &compared_name {
                 Some(n) => format!("Differences with {n}"),
                 None => "Changed files".into(),
@@ -895,7 +932,7 @@ impl Render for GitPanel {
             .border_color(line)
             .child(compare)
             .child(files_title)
-            .child(file_list)
+            .when(!collapsed, |d| d.child(file_list))
             .children(commit_section)
             .children(remote_section)
             .children(worktree_section)

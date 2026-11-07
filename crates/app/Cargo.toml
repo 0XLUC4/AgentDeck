@@ -33,7 +33,7 @@ minisign-verify = "0.3"
 # Main window HWND for close to tray (GPUI has no hide on Windows).
 raw-window-handle = "0.6"
 # windows-sys is a no-op on other targets; kept in [dependencies] so later blocks stay in this table.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Media_Audio", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 # --- end system + voice ---
 
 # --- history module (app/src/history) ---

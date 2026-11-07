@@ -65,9 +65,28 @@ fn show(view: AnyView, focus: FocusHandle, window: &mut Window, cx: &mut App) {
 }
 
 /// Closes the open dialog of this module (if any).
+/// Closes the open dialog; asks first when the notes editor has unsaved changes (Esc, X).
 pub fn close(window: &mut Window, cx: &mut App) {
-    cx.set_global(OpenDialog(None));
-    window.refresh();
+    let unsaved = cx
+        .try_global::<OpenDialog>()
+        .and_then(|open| open.0.clone())
+        .and_then(|view| view.downcast::<AgentFilesDialog>().ok())
+        .is_some_and(|dialog| dialog.read(cx).has_unsaved(cx));
+    if !unsaved {
+        cx.set_global(OpenDialog(None));
+        window.refresh();
+        return;
+    }
+    window
+        .spawn(cx, async move |cx| {
+            if confirm("Discard your changes?".into(), "Discard", cx).await {
+                let _ = cx.update(|window, cx| {
+                    cx.set_global(OpenDialog(None));
+                    window.refresh();
+                });
+            }
+        })
+        .detach();
 }
 
 /// Opens the skills manager of an agent pane.

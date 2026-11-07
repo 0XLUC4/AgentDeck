@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use agentdeck_core::hooks_server::permissions::{PermissionRequest, answer_permission};
+use agentdeck_core::hooks_server::permissions::{PermissionRequest, answer_permission, answer_questions};
 use agentdeck_core::logic::permissions::rule_for;
 use agentdeck_core::logic::settings::AutoAllowRule;
 use agentdeck_core::logic::theme::{FONT_MONO, RADIUS_LG, RADIUS_MD};
@@ -45,6 +45,28 @@ pub fn answer(request: &PermissionRequest, decision: &str, message: Option<Strin
     deck.update(cx, |d, cx| {
         d.permissions.retain(|r| r.request_id != id);
         if let Err(e) = answer_permission(id.clone(), decision.to_owned(), message) {
+            d.toast(format!("Answer not sent ({e}): reply in the terminal."), cx);
+        }
+        cx.notify();
+    });
+}
+
+/// Sends the picked options of an `AskUserQuestion` (question -> labels); the request leaves the UI at once.
+fn send_answers(request: &PermissionRequest, picked: &[Vec<usize>], cx: &mut App) {
+    let Some(deck) = runtime::deck(cx) else { return };
+    let answers: HashMap<String, String> = request
+        .questions
+        .iter()
+        .zip(picked)
+        .map(|(q, picks)| {
+            let labels: Vec<&str> = picks.iter().filter_map(|&i| q.options.get(i)).map(|o| o.label.as_str()).collect();
+            (q.question.clone(), labels.join(", "))
+        })
+        .collect();
+    let id = request.request_id.clone();
+    deck.update(cx, |d, cx| {
+        d.permissions.retain(|r| r.request_id != id);
+        if let Err(e) = answer_questions(&id, &answers) {
             d.toast(format!("Answer not sent ({e}): reply in the terminal."), cx);
         }
         cx.notify();
@@ -92,6 +114,8 @@ pub enum PermissionCardEvent {
 pub struct PermissionCard {
     pub request: PermissionRequest,
     details_open: bool,
+    /// `AskUserQuestion`: picked option indexes, one list per question.
+    picked: Vec<Vec<usize>>,
     /// Deny form open, with its reason field.
     reason: Option<Entity<InputState>>,
     _reason_sub: Option<Subscription>,
@@ -102,6 +126,7 @@ impl EventEmitter<PermissionCardEvent> for PermissionCard {}
 impl PermissionCard {
     pub fn new(request: PermissionRequest) -> Self {
         Self {
+            picked: vec![Vec::new(); request.questions.len()],
             request,
             details_open: false,
             reason: None,
@@ -126,6 +151,29 @@ impl PermissionCard {
         self.reason = None;
         self._reason_sub = None;
         cx.notify();
+    }
+
+    /// Single choice replaces, multi choice toggles. Sends at once when every question is single choice
+    /// and answered; with a multi choice question the user presses "Send".
+    fn pick(&mut self, question: usize, option: usize, cx: &mut Context<Self>) {
+        let multi = self.request.questions[question].multi_select;
+        let picks = &mut self.picked[question];
+        if !multi {
+            *picks = vec![option];
+        } else if let Some(at) = picks.iter().position(|&i| i == option) {
+            picks.remove(at);
+        } else {
+            picks.push(option);
+        }
+        let any_multi = self.request.questions.iter().any(|q| q.multi_select);
+        if !any_multi && self.all_answered() {
+            send_answers(&self.request, &self.picked, cx);
+        }
+        cx.notify();
+    }
+
+    fn all_answered(&self) -> bool {
+        self.picked.iter().all(|p| !p.is_empty())
     }
 
     fn deny(&mut self, cx: &mut Context<Self>) {
@@ -173,6 +221,20 @@ impl Render for PermissionCard {
                 .text_color(hsla(p.fg))
                 .hover(|s| s.bg(hsla(p.hover)))
         };
+
+        let terminal = button("terminal", "Terminal")
+            .ml_auto()
+            .text_color(hsla(p.subtle))
+            .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
+            .tooltip(|window, cx| Tooltip::new("Hand back to the agent's prompt in its terminal").build(window, cx))
+            .on_click(cx.listener(|this, _, _, cx| {
+                answer(&this.request, "ask", None, cx);
+                cx.emit(PermissionCardEvent::Jump);
+            }));
+
+        if !req.questions.is_empty() {
+            return self.render_questions(&req, terminal, cx).into_any_element();
+        }
 
         let body: AnyElement = if let Some(input) = &self.reason {
             div()
@@ -240,17 +302,7 @@ impl Render for PermissionCard {
                         .hover(|s| s.bg(hsla_a(p.bad, 0.15)))
                         .on_click(cx.listener(|this, _, window, cx| this.start_deny(window, cx))),
                 )
-                .child(
-                    button("terminal", "Terminal")
-                        .ml_auto()
-                        .text_color(hsla(p.subtle))
-                        .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
-                        .tooltip(|window, cx| Tooltip::new("Hand back to the agent's prompt in its terminal").build(window, cx))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            answer(&this.request, "ask", None, cx);
-                            cx.emit(PermissionCardEvent::Jump);
-                        })),
-                )
+                .child(terminal)
                 .into_any_element()
         };
 
@@ -302,6 +354,100 @@ impl Render for PermissionCard {
                 )
             })
             .child(body)
+            .into_any_element()
+    }
+}
+
+impl PermissionCard {
+    /// `AskUserQuestion`: each question with its options as clickable choices (radio or checkbox).
+    fn render_questions(&self, req: &PermissionRequest, terminal: Stateful<Div>, cx: &mut Context<Self>) -> Div {
+        let p = palette(cx);
+        let any_multi = req.questions.iter().any(|q| q.multi_select);
+        let ready = self.all_answered();
+        let mut card = div()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .gap(ui(8.0))
+            .rounded(ui(RADIUS_MD - 4.0))
+            .border_1()
+            .border_color(hsla_a(p.wait, 0.4))
+            .bg(hsla(p.base))
+            .p_2()
+            .text_xs()
+            .text_color(hsla(p.fg));
+        for (qi, q) in req.questions.iter().enumerate() {
+            let mut options = div().flex().flex_col().gap(ui(4.0));
+            for (oi, option) in q.options.iter().enumerate() {
+                let on = self.picked[qi].contains(&oi);
+                let mark = match (q.multi_select, on) {
+                    (true, true) => IconName::SquareCheck,
+                    (true, false) => IconName::Square,
+                    (false, true) => IconName::CircleDot,
+                    (false, false) => IconName::Circle,
+                };
+                options = options.child(
+                    div()
+                        .id(SharedString::from(format!("q{qi}-o{oi}")))
+                        .flex()
+                        .items_start()
+                        .gap(ui(6.0))
+                        .rounded(ui(RADIUS_MD - 6.0))
+                        .border_1()
+                        .border_color(hsla(if on { p.accent } else { p.line_strong }))
+                        .when(on, |d| d.bg(hsla_a(p.accent, 0.12)))
+                        .px_2()
+                        .py(ui(4.0))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hsla(p.hover)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.pick(qi, oi, cx)))
+                        .child(Icon::new(mark).size(ui(14.0)).text_color(hsla(if on { p.accent } else { p.subtle })))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().font_weight(FontWeight::MEDIUM).child(option.label.clone()))
+                                .when(!option.description.is_empty(), |d| {
+                                    d.child(div().text_color(hsla(p.subtle)).child(option.description.clone()))
+                                }),
+                        ),
+                );
+            }
+            card = card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(ui(4.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(ui(6.0))
+                            .child(Icon::new(IconName::CircleQuestionMark).size(ui(14.0)).text_color(hsla(p.wait)))
+                            .child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(q.question.clone())),
+                    )
+                    .child(options),
+            );
+        }
+        card.child(
+            div()
+                .flex()
+                .gap(ui(6.0))
+                .when(any_multi, |row| {
+                    row.child(
+                        button("send-answers", "Send")
+                            .bg(hsla(if ready { p.accent } else { p.line_strong }))
+                            .text_color(hsla(p.on_accent))
+                            .when(ready, |b| {
+                                b.hover(|s| s.bg(hsla(p.accent_hover)))
+                                    .on_click(cx.listener(|this, _, _, cx| send_answers(&this.request, &this.picked, cx)))
+                            }),
+                    )
+                })
+                .child(terminal),
+        )
     }
 }
 
@@ -315,7 +461,12 @@ pub struct PermissionBanner {
 
 impl PermissionBanner {
     pub fn new(deck: Entity<Deck>, cx: &mut Context<Self>) -> Self {
-        let observe = cx.observe(&deck, |_, _, cx| cx.notify());
+        let observe = cx.observe(&deck, |this: &mut Self, deck, cx| {
+            // Pruned here, not in render: the banner is hidden while the activity panel shows the cards.
+            let pending = &deck.read(cx).permissions;
+            this.cards.retain(|id, _| pending.iter().any(|r| &r.request_id == id));
+            cx.notify();
+        });
         Self {
             deck,
             cards: HashMap::new(),
@@ -323,7 +474,8 @@ impl PermissionBanner {
         }
     }
 
-    fn card(&mut self, request: &PermissionRequest, cx: &mut Context<Self>) -> Entity<PermissionCard> {
+    /// The one card of a request, shared by the banner and the activity panel.
+    pub(crate) fn card(&mut self, request: &PermissionRequest, cx: &mut Context<Self>) -> Entity<PermissionCard> {
         if let Some((card, _)) = self.cards.get(&request.request_id) {
             return card.clone();
         }
@@ -348,8 +500,6 @@ impl Render for PermissionBanner {
                 .is_some_and(|t| t.workspace_id == workspace)
         };
         let requests: Vec<PermissionRequest> = deck.permissions.iter().filter(in_workspace).cloned().collect();
-        let pending: Vec<String> = deck.permissions.iter().map(|r| r.request_id.clone()).collect();
-        self.cards.retain(|id, _| pending.contains(id));
         let Some(request) = requests.first().cloned() else {
             return div();
         };
@@ -391,7 +541,7 @@ impl Render for PermissionBanner {
                                     .flex()
                                     .gap_1()
                                     .child(div().font_weight(FontWeight::MEDIUM).text_color(hsla(p.fg)).child(display_title(&pane)))
-                                    .child("is asking for permission"),
+                                    .child(if request.questions.is_empty() { "is asking for permission" } else { "has a question" }),
                             ),
                     )
                     .when(more > 0, |row| row.child(div().text_color(hsla(p.subtle)).child(format!("+{more}")))),

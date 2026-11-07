@@ -27,6 +27,8 @@ struct Run {
     col: usize,
     text: String,
     style: Style,
+    /// Only single-width ASCII: byte length == column count, so it can be extended.
+    ascii: bool,
 }
 
 enum CursorPaint {
@@ -188,24 +190,26 @@ fn prepaint(
             undercurl: cell.flags.contains(Flags::UNDERCURL),
             strike: cell.flags.contains(Flags::STRIKEOUT),
         };
-        let mut text = cell.c.to_string();
-        for c in cell.zerowidth().into_iter().flatten() {
-            text.push(*c);
-        }
         // ASCII runs stay together; anything else gets its own run so fallback fonts and wide
         // chars cannot push the following columns out of the grid.
-        let ascii = cell.c.is_ascii() && width == 1 && text.len() == 1;
+        let zerowidth = cell.zerowidth().unwrap_or_default();
+        let ascii = cell.c.is_ascii() && width == 1 && zerowidth.is_empty();
         match runs.last_mut() {
             Some(run)
                 if ascii
+                    && run.ascii
                     && run.row == row
                     && run.style == style
-                    && run.text.is_ascii()
-                    && run.col + run.text.chars().count() == col =>
+                    && run.col + run.text.len() == col =>
             {
                 run.text.push(cell.c)
             }
-            _ => runs.push(Run { row, col, text, style }),
+            _ => {
+                let mut text = String::with_capacity(if ascii { 32 } else { 4 });
+                text.push(cell.c);
+                text.extend(zerowidth);
+                runs.push(Run { row, col, text, style, ascii });
+            }
         }
     }
     flush_bg(bg_run.take(), &mut rects);

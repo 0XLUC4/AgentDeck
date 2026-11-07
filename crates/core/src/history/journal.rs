@@ -44,13 +44,18 @@ fn append(dir: &Path, date: &str, entry: Value) -> Result<(), String> {
     let path = day_file(dir, date)?;
     let _guard = WRITE.lock().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut entries = read_day(&path);
+    let mut entries: Vec<Value> = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            // Unreadable day: set it aside instead of overwriting it with one entry.
+            let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+            Vec::new()
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
     entries.push(entry);
     let json = serde_json::to_vec(&entries).map_err(|e| e.to_string())?;
-    // Write then rename: a crash mid-write never leaves a truncated day file.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::persist::write_atomic(&path, &json)
 }
 
 /// Appends a finished task to today's journal (local date).

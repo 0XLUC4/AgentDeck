@@ -7,11 +7,11 @@ const MAX_TEXT: usize = 4 * 1024;
 
 /// https anywhere; plain http only to this machine (a self-hosted relay).
 fn check_url(url: &str) -> Result<(), String> {
-    let local = ["http://127.0.0.1", "http://localhost"].iter().any(|p| {
-        url.strip_prefix(p)
-            .is_some_and(|rest| rest.starts_with([':', '/']))
-    });
-    if url.starts_with("https://") || local {
+    // Parsed, not prefix-matched: "http://127.0.0.1:80@evil.com" has host evil.com.
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid notification URL: {e}"))?;
+    let local = parsed.scheme() == "http"
+        && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"));
+    if parsed.scheme() == "https" || local {
         Ok(())
     } else {
         Err("the notification URL must start with https://".into())
@@ -56,5 +56,7 @@ mod tests {
         assert!(check_url("http://localhost.evil.com/t").is_err());
         assert!(check_url("http://ntfy.sh/t").is_err());
         assert!(check_url("file:///c:/x").is_err());
+        assert!(check_url("http://127.0.0.1:80@evil.com/t").is_err());
+        assert!(check_url("http://localhost@evil.com/t").is_err());
     }
 }
