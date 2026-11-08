@@ -246,6 +246,9 @@ pub fn pane_overlays(pane: &Pane, deck: &Deck, cx: &App) -> Vec<AnyElement> {
     let glow = VoiceGlow::current(cx);
     let target = glow.target.clone().or_else(|| deck.state.active_pane_id.clone()).as_deref() == Some(pane.id.as_str());
     overlays.extend(voice_glow(&pane.id, &glow, target, now, &p));
+    if target {
+        overlays.extend(crate::voice::pill_overlay(cx));
+    }
     overlays
 }
 

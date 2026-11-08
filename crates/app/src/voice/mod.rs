@@ -1,4 +1,4 @@
-//! Voice: floating voice pill window (level meter, partial transcript, check mark), dictation
+//! Voice: dictation pill on the target pane (level meter, check mark), dictation
 //! routing to a pane ("Codex, run the tests"), voice glow data for the target pane, spoken task
 //! summaries (TTS).
 //! Original: src/components/VoicePill, src/voice.tsx, src/lib/{voiceListener,voiceRoute,tts}.ts.
@@ -26,9 +26,8 @@ use crate::state::{Deck, DeckEvent};
 
 const RECENT_KEY: &str = "voice-recent";
 const RECENT_MAX: usize = 50;
-/// Distance between the pill and the bottom of the screen, in logical px.
-const BOTTOM_MARGIN: f32 = 80.0;
-const PILL_SIZE: (f32, f32) = (460.0, 72.0);
+/// Distance between the pill and the bottom of the target pane, in logical px.
+const PILL_BOTTOM: f32 = 16.0;
 
 /// Dictation as seen by the main window, for the pane glow: recording state and the last delivery.
 #[derive(Debug, Clone, Default)]
@@ -53,6 +52,22 @@ pub fn voice_target(cx: &App) -> Option<String> {
     target(&voice.recent, &candidates(state, &voice.recent))
 }
 
+/// The dictation pill, pinned bottom-center of the target pane while dictation runs.
+pub fn pill_overlay(cx: &App) -> Option<AnyElement> {
+    let voice = cx.try_global::<VoiceGlobal>()?.0.read(cx);
+    voice.pill_visible.then(|| {
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(PILL_BOTTOM))
+            .flex()
+            .justify_center()
+            .child(voice.pill.clone())
+            .into_any_element()
+    })
+}
+
 struct VoiceGlobal(Entity<Voice>);
 
 impl Global for VoiceGlobal {}
@@ -64,7 +79,7 @@ struct Voice {
     last_active: Option<String>,
     statuses: HashMap<String, PaneStatus>,
     pill: Entity<VoicePill>,
-    pill_window: Option<WindowHandle<VoicePill>>,
+    pill_visible: bool,
 }
 
 /// Registers the voice listener on the main window's deck, and the "any key silences speech" hook.
@@ -96,7 +111,7 @@ impl Voice {
         let statuses = state.panes.iter().map(|(id, p)| (id.clone(), p.status)).collect();
         let last_active = state.active_pane_id.clone();
         let pill = cx.new(|cx| VoicePill::new(deck.clone(), cx));
-        Self { deck, recent, last_active, statuses, pill, pill_window: None }
+        Self { deck, recent, last_active, statuses, pill, pill_visible: false }
     }
 
     /// Moves `id` to the front of the recent list and saves it.
@@ -156,8 +171,7 @@ impl Voice {
         let DeckEvent::Backend(event) = event;
         let text = event.payload.as_str().unwrap_or("").to_owned();
         match event.name.as_str() {
-            "voice-pill" if text == "show" => self.show_pill(cx),
-            "voice-pill" => self.hide_pill(cx),
+            "voice-pill" => self.set_pill(text == "show", cx),
             // The pill truncates long errors: show the full message here too.
             "voice-error" => deck.update(cx, |d, cx| d.toast(format!("Voice: {text}"), cx)),
             "voice-state" => cx.global_mut::<VoiceActivity>().state = text,
@@ -205,52 +219,11 @@ impl Voice {
         .detach();
     }
 
-    /// Opens the pill bottom-center of the primary display, without taking focus.
-    fn show_pill(&mut self, cx: &mut Context<Self>) {
-        if self.pill_window.is_some() {
-            return;
-        }
-        let (w, h) = PILL_SIZE;
-        let display = cx.primary_display();
-        let bounds = match &display {
-            Some(d) => {
-                let area = d.bounds();
-                Bounds::new(
-                    point(
-                        area.origin.x + (area.size.width - px(w)) / 2.0,
-                        area.origin.y + area.size.height - px(h + BOTTOM_MARGIN),
-                    ),
-                    size(px(w), px(h)),
-                )
-            }
-            None => Bounds::centered(None, size(px(w), px(h)), cx),
-        };
-        let options = WindowOptions {
-            titlebar: None,
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            focus: false,
-            show: true,
-            kind: WindowKind::PopUp,
-            is_movable: true,
-            is_resizable: false,
-            is_minimizable: false,
-            display_id: display.map(|d| d.id()),
-            window_background: WindowBackgroundAppearance::Transparent,
-            ..Default::default()
-        };
-        let pill = self.pill.clone();
-        match cx.open_window(options, move |window, _| {
-            crate::system::strip_frame(window);
-            pill
-        }) {
-            Ok(handle) => self.pill_window = Some(handle),
-            Err(e) => eprintln!("voice pill window failed: {e}"),
-        }
-    }
-
-    fn hide_pill(&mut self, cx: &mut Context<Self>) {
-        if let Some(handle) = self.pill_window.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+    /// Shows or hides the pill on the target pane; the deck repaint redraws the panes.
+    fn set_pill(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.pill_visible != visible {
+            self.pill_visible = visible;
+            self.deck.update(cx, |_, cx| cx.notify());
         }
     }
 }
