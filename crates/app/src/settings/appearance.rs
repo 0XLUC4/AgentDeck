@@ -79,9 +79,10 @@ impl SettingsDialog {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Div {
-        let (neutral, picker) = match target {
-            Target::Accent => (p.fg, &self.appearance.accent),
-            Target::Background => (p.raised, &self.appearance.background),
+        // Both rows start with "Neutral": the row name keeps their element ids apart.
+        let (id_prefix, neutral, picker) = match target {
+            Target::Accent => ("accent-swatch", p.fg, &self.appearance.accent),
+            Target::Background => ("background-swatch", p.raised, &self.appearance.background),
         };
         let custom = !value.is_empty() && !presets.iter().any(|(_, v)| *v == value);
         let custom_fill = if custom { parse_hex(value).unwrap_or(p.raised) } else { p.raised };
@@ -90,10 +91,10 @@ impl SettingsDialog {
             .flex()
             .items_center()
             .gap(ui(4.0))
-            .children(presets.iter().enumerate().map(|(i, &(label, preset))| {
+            .children(presets.iter().enumerate().map(|(i, &(_, preset))| {
                 let fill = parse_hex(preset).unwrap_or(neutral);
                 ring(value == preset, p)
-                    .id((label, i))
+                    .id((id_prefix, i))
                     .cursor_pointer()
                     .child(dot(fill))
                     .on_click(cx.listener(move |this, _, window, cx| {
