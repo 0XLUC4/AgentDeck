@@ -1,6 +1,7 @@
 //! Paints the terminal grid: background runs, selection, text shaped per style run and pinned to
 //! its cell column, box/block glyphs as rectangles, and the cursor.
 
+use agentdeck_core::logic::theme::RADIUS_XL;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::point_to_viewport;
@@ -8,7 +9,7 @@ use alacritty_terminal::vte::ansi::CursorShape;
 use gpui_kit::*;
 
 use super::{Metrics, TerminalView, colors, glyphs};
-use crate::theme::hsla;
+use crate::theme::{hsla, ui};
 
 /// Text style of a run of cells.
 #[derive(Clone, Copy, PartialEq)]
@@ -285,7 +286,10 @@ fn alac_point(row: usize, col: usize) -> alacritty_terminal::index::Point<usize>
 fn paint(view: &Entity<TerminalView>, frame: Frame, window: &mut Window, cx: &mut App) {
     window.handle_input(&frame.focus, ElementInputHandler::new(frame.area, view.clone()), cx);
     let theme = colors::theme(cx);
-    window.paint_quad(fill(frame.area, hsla(theme.background)));
+    // Bottom corners follow the pane's rounded box (GPUI clips to rectangles only).
+    let radius = ui(RADIUS_XL - 1.0).to_pixels(window.rem_size());
+    let corners = Corners { top_left: px(0.0), top_right: px(0.0), bottom_right: radius, bottom_left: radius };
+    window.paint_quad(fill(frame.area, hsla(theme.background)).corner_radii(corners));
     for (bounds, color) in frame.rects {
         window.paint_quad(fill(bounds, color));
     }

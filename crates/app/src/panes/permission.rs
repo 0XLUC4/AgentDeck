@@ -368,16 +368,16 @@ impl PermissionCard {
             .flex()
             .flex_col()
             .min_w_0()
-            .gap(ui(8.0))
+            .gap(ui(12.0))
             .rounded(ui(RADIUS_MD - 4.0))
             .border_1()
             .border_color(hsla_a(p.wait, 0.4))
             .bg(hsla(p.base))
-            .p_2()
-            .text_xs()
+            .p_3()
+            .text_sm()
             .text_color(hsla(p.fg));
         for (qi, q) in req.questions.iter().enumerate() {
-            let mut options = div().flex().flex_col().gap(ui(4.0));
+            let mut options = div().flex().flex_col().gap(ui(6.0));
             for (oi, option) in q.options.iter().enumerate() {
                 let on = self.picked[qi].contains(&oi);
                 let mark = match (q.multi_select, on) {
@@ -391,17 +391,17 @@ impl PermissionCard {
                         .id(SharedString::from(format!("q{qi}-o{oi}")))
                         .flex()
                         .items_start()
-                        .gap(ui(6.0))
-                        .rounded(ui(RADIUS_MD - 6.0))
+                        .gap(ui(8.0))
+                        .rounded(ui(RADIUS_MD - 4.0))
                         .border_1()
                         .border_color(hsla(if on { p.accent } else { p.line_strong }))
                         .when(on, |d| d.bg(hsla_a(p.accent, 0.12)))
-                        .px_2()
-                        .py(ui(4.0))
+                        .px(ui(10.0))
+                        .py(ui(8.0))
                         .cursor_pointer()
                         .hover(|s| s.bg(hsla(p.hover)))
                         .on_click(cx.listener(move |this, _, _, cx| this.pick(qi, oi, cx)))
-                        .child(Icon::new(mark).size(ui(14.0)).text_color(hsla(if on { p.accent } else { p.subtle })))
+                        .child(Icon::new(mark).size(ui(16.0)).mt(ui(2.0)).text_color(hsla(if on { p.accent } else { p.subtle })))
                         .child(
                             div()
                                 .flex()
@@ -410,7 +410,7 @@ impl PermissionCard {
                                 .min_w_0()
                                 .child(div().font_weight(FontWeight::MEDIUM).child(option.label.clone()))
                                 .when(!option.description.is_empty(), |d| {
-                                    d.child(div().text_color(hsla(p.subtle)).child(option.description.clone()))
+                                    d.child(div().text_xs().text_color(hsla(p.subtle)).child(option.description.clone()))
                                 }),
                         ),
                 );
@@ -419,13 +419,13 @@ impl PermissionCard {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(ui(4.0))
+                    .gap(ui(8.0))
                     .child(
                         div()
                             .flex()
                             .items_start()
-                            .gap(ui(6.0))
-                            .child(Icon::new(IconName::CircleQuestionMark).size(ui(14.0)).text_color(hsla(p.wait)))
+                            .gap(ui(8.0))
+                            .child(Icon::new(IconName::CircleQuestionMark).size(ui(16.0)).mt(ui(2.0)).text_color(hsla(p.wait)))
                             .child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).child(q.question.clone())),
                     )
                     .child(options),
@@ -512,7 +512,8 @@ impl Render for PermissionBanner {
             .absolute()
             .top(ui(48.0))
             .right(ui(16.0))
-            .w(ui(340.0))
+            // Questions carry options with descriptions: give them room to read.
+            .w(ui(if request.questions.is_empty() { 340.0 } else { 480.0 }))
             .flex()
             .flex_col()
             .gap(ui(6.0))
