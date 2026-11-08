@@ -18,6 +18,7 @@ use std::time::Duration;
 use agentdeck_core::agents::AgentKind;
 use agentdeck_core::logic::text::file_refs;
 use agentdeck_core::logic::layout::ReplayGate;
+use agentdeck_core::logic::theme::RADIUS_XL;
 use agentdeck_core::{pty, skills};
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event as AlacEvent, EventListener};
@@ -31,7 +32,7 @@ use gpui_kit::*;
 
 use crate::panes::runtime;
 use crate::state::Deck;
-use crate::theme::{hsla, palette};
+use crate::theme::{hsla, palette, ui};
 
 /// Lines kept above the screen (xterm `scrollback: 5000`).
 const SCROLLBACK: usize = 5000;
@@ -692,6 +693,7 @@ impl Render for TerminalView {
             .size_full()
             .min_h_0()
             .overflow_hidden()
+            .rounded_b(ui(RADIUS_XL - 1.0))
             .bg(hsla(p.base))
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::on_key_down))

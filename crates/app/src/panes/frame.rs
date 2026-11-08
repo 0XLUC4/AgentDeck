@@ -262,6 +262,7 @@ pub fn exit_bar(pane_id: &str, p: &Palette) -> Div {
         .gap_3()
         .border_t_1()
         .border_color(hsla(p.line))
+        .rounded_b(ui(RADIUS_XL - 1.0))
         .bg(hsla(p.panel))
         .px_3()
         .py(ui(6.0))

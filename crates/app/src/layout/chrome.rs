@@ -18,6 +18,25 @@ use super::DeckView;
 use crate::panes::{agent_logo, last_agent, runtime, spawn_agent};
 use crate::theme::{hsla, palette, ui};
 
+/// Amber count of agents waiting: a true circle for one digit, a pill for more, number centered.
+fn waiting_badge(count: usize, p: &Palette) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .h(ui(16.0))
+        .min_w(ui(16.0))
+        .px(ui(4.0))
+        .rounded_full()
+        .bg(hsla(p.wait))
+        .text_size(ui(10.0))
+        .line_height(ui(16.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(hsla(p.on_accent))
+        .child(count.to_string())
+}
+
 /// IconButton.tsx: a square ghost button with an icon and a tooltip.
 pub(super) fn icon_button(
     id: impl Into<ElementId>,
@@ -141,21 +160,7 @@ impl DeckView {
                     })),
             )
             .when(waiting > 0, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .top(ui(-2.0))
-                        .right(ui(-2.0))
-                        .min_w(ui(14.0))
-                        .px_1()
-                        .rounded_full()
-                        .bg(hsla(p.wait))
-                        .text_size(ui(10.0))
-                        .line_height(ui(14.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(hsla(p.on_accent))
-                        .child(waiting.to_string()),
-                )
+                el.child(waiting_badge(waiting, &p).absolute().top(ui(-2.0)).right(ui(-2.0)))
             })
             .when(failed, |el| {
                 el.child(
@@ -869,17 +874,7 @@ impl DeckView {
                         }))
                         .child(div().flex_1())
                         .when(waiting > 0, |el| {
-                            el.child(
-                                div()
-                                    .min_w(ui(14.0))
-                                    .px_1()
-                                    .rounded_full()
-                                    .bg(hsla(p.wait))
-                                    .text_size(ui(10.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(hsla(p.on_accent))
-                                    .child(waiting.to_string()),
-                            )
+                            el.child(waiting_badge(waiting, &p))
                         })
                         .when(failed, |el| el.child(div().size(ui(8.0)).rounded_full().bg(hsla(p.bad))))
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {

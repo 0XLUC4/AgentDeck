@@ -4,7 +4,6 @@
 //! Mouse down focuses the pane, double click toggles maximize.
 
 use agentdeck_core::agents::AgentKind;
-use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::{FONT_SIZE_MAX, FONT_SIZE_MIN, Pane, folder_name};
 use agentdeck_core::logic::text::{agent_name, format_elapsed, now_ms, short_action};
 use agentdeck_core::logic::theme::{FONT_MONO, RADIUS_LG, RADIUS_MD, RADIUS_XL, parse_hex};
@@ -390,6 +389,8 @@ impl Render for PaneHeader {
             .gap_2()
             .px(ui(10.0))
             .text_size(ui(13.0))
+            // GPUI does not clip children to the pane's rounded corners: round the fill itself.
+            .rounded_t(ui(RADIUS_XL - 1.0))
             .bg(hsla(if active { p.panel } else { p.base }))
             .text_color(hsla(if active { p.fg } else { p.muted }))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| runtime::focus_pane(&focus_id, cx))
@@ -485,10 +486,7 @@ impl Render for PaneHeader {
                         .on_click(move |window, cx| confirm_close(&close_id, window, cx)),
                 ),
             )
-            // Waiting for the user: a thin amber line on top. Color tag: a stripe on the left.
-            .when(pane.status == PaneStatus::Waiting, |h| {
-                h.child(div().absolute().top_0().left_0().right_0().h(px(1.0)).bg(hsla(p.wait)))
-            })
+            // Color tag: a stripe on the left (waiting = the pane frame's amber border).
             .when_some(pane.color.as_deref().and_then(parse_hex), |h, hex| {
                 // Left border of a box rounded like the pane: the stripe follows the pane's corner.
                 let mut tag = div().absolute().inset_0().rounded_tl(ui(RADIUS_XL - 1.0)).border_color(hsla(hex));
