@@ -83,12 +83,16 @@ pub fn quit(cx: &mut App) {
     cx.quit();
 }
 
-/// Update restart: same cleanup, then exit at once. The graceful GPUI quit can take longer than the
-/// new exe waits for the single-instance port (closing pseudoconsoles, MCP servers), and then the
-/// new exe thinks AgentDeck still runs and exits: nothing restarts.
-pub fn quit_for_update(cx: &mut App) {
+/// Update restart: same cleanup, then starts `exe` and exits at once. The new exe is started only
+/// after the cleanup: it waits a limited time for the single-instance port, and a slow cleanup
+/// (pseudoconsoles, MCP servers) made it give up and exit, so nothing restarted.
+pub fn quit_for_update(exe: &std::path::Path, cx: &mut App) -> Result<(), String> {
     stop_agents(cx);
     agentdeck_core::shutdown();
+    std::process::Command::new(exe)
+        .arg(super::instance::AFTER_UPDATE)
+        .spawn()
+        .map_err(|e| format!("cannot restart AgentDeck: {e}"))?;
     std::process::exit(0);
 }
 

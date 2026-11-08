@@ -152,9 +152,14 @@ impl Updater {
                 match result.and_then(|path| {
                     u.phase = UpdatePhase::Installing;
                     u.progress = Some(1.0);
-                    replace_and_restart(&path)
+                    replace_exe(&path)
                 }) {
-                    Ok(()) => super::window::quit_for_update(cx),
+                    Ok(exe) => {
+                        if let Err(e) = super::window::quit_for_update(&exe, cx) {
+                            u.phase = UpdatePhase::Error;
+                            u.error = Some(e);
+                        }
+                    }
                     Err(e) => {
                         u.phase = UpdatePhase::Error;
                         u.error = Some(e);
@@ -310,8 +315,8 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
 }
 
 /// Replaces the running exe with `new` (Windows lets a running exe be renamed, not overwritten),
-/// then starts it. On failure the old exe is put back.
-fn replace_and_restart(new: &std::path::Path) -> Result<(), String> {
+/// and returns its path. On failure the old exe is put back.
+fn replace_exe(new: &std::path::Path) -> Result<PathBuf, String> {
     let current = std::env::current_exe().map_err(|e| format!("cannot find AgentDeck's exe: {e}"))?;
     let old = current.with_extension("exe.old");
     let _ = std::fs::remove_file(&old);
@@ -321,11 +326,7 @@ fn replace_and_restart(new: &std::path::Path) -> Result<(), String> {
         return Err(format!("cannot install the update: {e}"));
     }
     let _ = std::fs::remove_file(new);
-    std::process::Command::new(&current)
-        .arg(super::instance::AFTER_UPDATE)
-        .spawn()
-        .map(drop)
-        .map_err(|e| format!("cannot restart AgentDeck: {e}"))
+    Ok(current)
 }
 
 /// Title bar button: a dot when a new release is out, a small panel to install it and restart.
