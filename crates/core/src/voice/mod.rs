@@ -8,7 +8,6 @@
 //!
 //! Events: `voice-level` (f32 0..1, ~30/s), `voice-state` ("idle" | "listening" |
 //! "downloading" | "transcribing" | "error"), `voice-download` ({model, received, total}),
-//! `voice-partial` (String, live preview while listening, local engine only),
 //! `voice-transcript` (String), `voice-error` (String).
 
 mod audio;
@@ -27,8 +26,6 @@ use audio::Capture;
 pub use config::{Engine, Shortcut, VoiceConfig, VoiceConfigView, WhisperModel};
 
 const MIN_CLIP_SECS: f32 = 0.3;
-/// Pause between live preview passes (each pass also takes a while on CPU).
-const PARTIAL_EVERY: Duration = Duration::from_millis(700);
 /// Auto-stop (and transcribe) if the key-up is lost.
 const MAX_RECORDING: Duration = Duration::from_secs(60);
 const HIDE_DELAY: Duration = Duration::from_millis(1500);
@@ -230,7 +227,7 @@ fn start(app: &AppHandle) -> Result<(), String> {
     drop(slot);
     set_state(app, "listening");
     show_pill(app);
-    start_partials(app, session);
+    warm_up(app);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(MAX_RECORDING);
@@ -241,9 +238,10 @@ fn start(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Local engine with the model on disk: re-transcribes the audio so far about once a second and emits
-/// `voice-partial`, so the pill shows the words while the user speaks. API engine: no preview (cost, latency).
-fn start_partials(app: &AppHandle, session: u64) {
+/// Local engine with the model on disk: one silent pass on key-down ramps the CPU clocks and pages
+/// the model back in while the user starts speaking. No live preview: it kept the CPU busy and
+/// delayed the final transcription.
+fn warm_up(app: &AppHandle) {
     let Ok(config) = config_snapshot(app) else {
         return;
     };
@@ -254,44 +252,11 @@ fn start_partials(app: &AppHandle, session: u64) {
         .ok()
         .and_then(|dir| local::downloaded(&dir, config.model))
     else {
-        return; // first use downloads the model on release; no preview this time
+        return; // first use downloads the model on release
     };
     local::allow_partials();
-    let app = app.clone();
-    std::thread::spawn(move || {
-        // Warm-up on key-down: ramps the CPU clocks and pages the model back in while the user
-        // starts speaking, instead of on the first real pass. Result discarded; aborted by stop().
-        let _ = local::transcribe_partial(&model, &[], &config.language);
-        loop {
-            std::thread::sleep(PARTIAL_EVERY);
-            // Ends with the recording: stop() takes the capture out of the slot.
-            let Some(Ok((samples, rate))) = recording_snapshot(&app, session) else {
-                return;
-            };
-            if (samples.len() as f32) < rate as f32 * MIN_CLIP_SECS * 3.0 {
-                continue;
-            }
-            // Whisper sees 30 s at most anyway; this also bounds each pass on long dictations.
-            let tail = &samples[samples.len().saturating_sub(rate as usize * 30)..];
-            let pcm = audio::resample(tail, rate, audio::TARGET_RATE);
-            if let Ok(text) = local::transcribe_partial(&model, &pcm, &config.language)
-                && !text.is_empty()
-                && recording_snapshot(&app, session).is_some()
-            {
-                let _ = app.emit("voice-partial", text);
-            }
-        }
-    });
-}
-
-/// Audio recorded so far, if `session` is still the running recording.
-fn recording_snapshot(app: &AppHandle, session: u64) -> Option<Result<audio::Recording, String>> {
-    let voice = app.state::<Voice>();
-    let slot = voice.capture.lock().ok()?;
-    match &*slot {
-        Some((id, capture)) if *id == session => Some(capture.snapshot()),
-        _ => None,
-    }
+    // Result discarded; aborted by stop() so the real transcription never waits behind it.
+    std::thread::spawn(move || drop(local::transcribe_partial(&model, &[], &config.language)));
 }
 
 /// Stops the running capture (only if it is `session`, when given) and transcribes it.

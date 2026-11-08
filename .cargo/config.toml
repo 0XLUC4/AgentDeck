@@ -1,0 +1,8 @@
+# whisper.cpp built with MSVC transcribes ~8x slower than with clang-cl (measured: 12 s vs 1.5 s for
+# the small model on an i9-14900K). Needs LLVM (clang-cl) and Ninja on PATH.
+[env]
+CMAKE_GENERATOR = "Ninja"
+CC_x86_64_pc_windows_msvc = "C:/Program Files/LLVM/bin/clang-cl.exe"
+CXX_x86_64_pc_windows_msvc = "C:/Program Files/LLVM/bin/clang-cl.exe"
+# clang-cl leaves C++ exceptions off unless asked; ggml uses try/catch.
+CXXFLAGS_x86_64_pc_windows_msvc = "-EHsc"

@@ -44,14 +44,19 @@ impl WhisperModel {
         Self::ALL.into_iter().find(|m| m.name() == name)
     }
 
-    /// 8-bit quantized: about half the size of f16, faster on CPU, near-identical accuracy.
-    pub fn file_name(self) -> String {
-        format!("ggml-{}-q8_0.bin", self.name())
+    /// Small ships unquantized (~466 MB, best accuracy for its speed); the others 8-bit quantized
+    /// (about half the size of f16, near-identical accuracy).
+    fn quantized(self) -> bool {
+        self != Self::Small
     }
 
-    /// Unquantized file from older versions, deleted once the quantized one is downloaded.
+    pub fn file_name(self) -> String {
+        if self.quantized() { format!("ggml-{}-q8_0.bin", self.name()) } else { format!("ggml-{}.bin", self.name()) }
+    }
+
+    /// The other variant of this model from older versions, deleted once this one is downloaded.
     pub fn legacy_file_name(self) -> String {
-        format!("ggml-{}.bin", self.name())
+        if self.quantized() { format!("ggml-{}.bin", self.name()) } else { format!("ggml-{}-q8_0.bin", self.name()) }
     }
 
     pub fn url(self) -> String {
@@ -302,7 +307,8 @@ mod tests {
 
     #[test]
     fn model_files_and_urls() {
-        assert_eq!(WhisperModel::Small.file_name(), "ggml-small-q8_0.bin");
+        assert_eq!(WhisperModel::Small.file_name(), "ggml-small.bin");
+        assert_eq!(WhisperModel::Small.legacy_file_name(), "ggml-small-q8_0.bin");
         assert_eq!(
             WhisperModel::LargeV3Turbo.file_name(),
             "ggml-large-v3-turbo-q8_0.bin"

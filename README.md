@@ -106,7 +106,8 @@ first, or set `AGENTDECK_DATA_DIR` to another folder to keep them apart.
 
 ## Build from source
 
-Requirements: Rust (the version is pinned in `rust-toolchain.toml`, MSVC on Windows), and LLVM + CMake for whisper.cpp.
+Requirements: Rust (the version is pinned in `rust-toolchain.toml`, MSVC on Windows), and LLVM (clang-cl) + CMake + Ninja for whisper.cpp: `.cargo/config.toml` builds it with clang-cl,
+which transcribes about 8x faster than an MSVC build.
 
 ```sh
 cargo build --release -p agentdeck   # binary in target/release/agentdeck.exe

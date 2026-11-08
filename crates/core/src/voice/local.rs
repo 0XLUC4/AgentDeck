@@ -122,12 +122,6 @@ fn load(loaded: &mut Option<(PathBuf, WhisperState)>, model_path: &Path) -> Resu
     Ok(())
 }
 
-/// Encoder frames for a clip: Whisper always encodes 30 s (1500 frames, 50/s) unless told
-/// otherwise, which dominates the cost of a short dictation. Margin keeps accuracy.
-fn audio_ctx(secs: f32) -> i32 {
-    ((secs * 50.0) as i32 + 128).clamp(256, 1500)
-}
-
 /// Set to stop an in-flight partial transcription: the final one must not wait behind it.
 static CANCEL_PARTIAL: AtomicBool = AtomicBool::new(false);
 
@@ -177,14 +171,13 @@ fn run(
     // whisper.cpp silently returns nothing for clips under 1 s: pad with silence.
     let mut samples = speech(samples).to_vec();
     samples.resize(samples.len().max(MIN_SAMPLES), 0.0);
-    let secs = samples.len() as f32 / 16_000.0;
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     // Hyperthreads slow whisper.cpp down: use about the physical cores, capped at 8.
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get() / 2);
     params.set_n_threads(threads.clamp(2, 8) as i32);
     params.set_language(Some(language));
-    params.set_audio_ctx(audio_ctx(secs));
+    // Full 30 s encoder context on purpose: stock models garble or repeat words with a shorter one.
     params.set_single_segment(true);
     // No temperature fallback: retries can re-decode a clip up to 5 times.
     params.set_temperature_inc(0.0);
@@ -365,13 +358,6 @@ mod tests {
     }
 
     #[test]
-    fn audio_ctx_scales_with_clip() {
-        assert_eq!(audio_ctx(1.2), 256);
-        assert_eq!(audio_ctx(5.0), 378);
-        assert_eq!(audio_ctx(60.0), 1500);
-    }
-
-    #[test]
     fn power_throttling_opt_out_is_harmless() {
         disable_power_throttling();
         disable_power_throttling();
@@ -405,5 +391,16 @@ mod tests {
         println!("warm 1 s silence: {:?} -> {second:?}", started.elapsed());
         assert_eq!(first, "");
         assert_eq!(second, "");
+        // Optional real speech: a 16 kHz 16-bit mono WAV (plain 44-byte header).
+        if let Ok(wav) = std::env::var("AGENTDECK_TEST_WAV") {
+            let bytes = fs::read(&wav).expect("read wav");
+            let pcm: Vec<f32> = bytes[44..]
+                .chunks_exact(2)
+                .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32_768.0)
+                .collect();
+            let started = std::time::Instant::now();
+            let text = transcribe(&path, &pcm, "fr").expect("transcribe");
+            println!("{:.1} s of speech in {:?} -> {text:?}", pcm.len() as f32 / 16_000.0, started.elapsed());
+        }
     }
 }
