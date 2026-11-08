@@ -22,8 +22,6 @@ pub type Recording = (Vec<f32>, u32);
 pub struct Capture {
     stop: Sender<()>,
     thread: JoinHandle<Result<Recording, String>>,
-    buffer: Shared,
-    rate: u32,
 }
 
 impl Capture {
@@ -32,24 +30,11 @@ impl Capture {
     pub fn start(on_level: impl Fn(f32) + Send + 'static) -> Result<Self, String> {
         let (stop, stop_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let buffer: Shared = Arc::default();
-        let shared = buffer.clone();
-        let thread = std::thread::spawn(move || run(ready_tx, stop_rx, shared, on_level));
-        let rate = ready_rx
+        let thread = std::thread::spawn(move || run(ready_tx, stop_rx, Shared::default(), on_level));
+        ready_rx
             .recv()
             .map_err(|_| "capture thread exited early".to_string())??;
-        Ok(Self {
-            stop,
-            thread,
-            buffer,
-            rate,
-        })
-    }
-
-    /// Copy of everything recorded so far (for live partial transcripts).
-    pub fn snapshot(&self) -> Result<Recording, String> {
-        let samples = self.buffer.lock().map_err(|e| e.to_string())?.clone();
-        Ok((samples, self.rate))
+        Ok(Self { stop, thread })
     }
 
     /// Stops recording and returns the mono samples with their sample rate.
