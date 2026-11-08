@@ -19,8 +19,10 @@ pub fn notify(settings: &Settings, title: &str, body: &str) {
     }
     if settings.notify.enabled {
         let (title, body) = (title.to_owned(), body.to_owned());
+        // Our chime already plays: a silent toast avoids two sounds per notification.
+        let silent = settings.notify.sound;
         std::thread::spawn(move || {
-            if let Err(e) = show_toast(&title, &body) {
+            if let Err(e) = show_toast(&title, &body, silent) {
                 eprintln!("notification failed: {e}");
             }
         });
@@ -29,14 +31,15 @@ pub fn notify(settings: &Settings, title: &str, body: &str) {
 
 /// Windows: AgentDeck's sender id plus its logo left of the text (the header icon alone is tiny
 /// and cached by Windows). Falls back to notify-rust's default sender if registration failed.
-fn show_toast(title: &str, body: &str) -> Result<(), String> {
+fn show_toast(title: &str, body: &str, silent: bool) -> Result<(), String> {
     #[cfg(windows)]
     if let Some(icon) = toast_icon() {
-        use tauri_winrt_notification::{IconCrop, Toast};
+        use tauri_winrt_notification::{IconCrop, Sound, Toast};
         return Toast::new(agentdeck_core::APP_IDENTIFIER)
             .title(title)
             .text1(body)
             .icon(icon, IconCrop::Square, "AgentDeck")
+            .sound(if silent { None } else { Some(Sound::Default) })
             .show()
             .map_err(|e| format!("{e:?}"));
     }

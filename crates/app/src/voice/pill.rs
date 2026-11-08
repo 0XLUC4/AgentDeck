@@ -1,5 +1,5 @@
-//! Floating dictation pill: live mic bars, model download progress, transcribing dots, errors and
-//! the last transcript. One entity for the whole run, shown in a borderless pop-up window.
+//! Dictation pill: live mic bars, model download progress, transcribing dots, errors and a check
+//! once the words land. One entity for the whole run, shown at the bottom of the target pane.
 
 use std::time::Instant;
 
@@ -16,15 +16,13 @@ const MIN_HEIGHT: f32 = 0.1;
 const NOISE_GATE: f32 = 0.2;
 /// Per-frame easing toward the target height, so bars glide instead of jumping.
 const EASE: f32 = 0.35;
-/// The pill keeps the end of long text (newest words), like the original rtl truncation.
-const TAIL_CHARS: usize = 56;
 
 pub struct VoicePill {
     pub deck: Entity<Deck>,
     state: String,
     error: String,
-    transcript: String,
-    partial: String,
+    /// A transcript landed since the last recording started: show the check.
+    delivered: bool,
     percent: Option<u64>,
     history: [f32; BAR_COUNT],
     shown: [f32; BAR_COUNT],
@@ -38,8 +36,7 @@ impl VoicePill {
             deck,
             state: "idle".into(),
             error: String::new(),
-            transcript: String::new(),
-            partial: String::new(),
+            delivered: false,
             percent: None,
             history: [0.0; BAR_COUNT],
             shown: [0.0; BAR_COUNT],
@@ -54,15 +51,13 @@ impl VoicePill {
             "voice-state" => {
                 self.state = text();
                 if self.state == "listening" {
-                    self.transcript.clear();
-                    self.partial.clear();
+                    self.delivered = false;
                     self.history = [0.0; BAR_COUNT];
                     self.shown = [0.0; BAR_COUNT];
                 }
             }
             "voice-error" => self.error = text(),
-            "voice-transcript" => self.transcript = text(),
-            "voice-partial" => self.partial = text(),
+            "voice-transcript" => self.delivered = !text().is_empty(),
             "voice-download" => {
                 let p = &event.payload;
                 self.percent = match (p["received"].as_u64(), p["total"].as_u64()) {
@@ -86,22 +81,18 @@ impl VoicePill {
 
     fn label(&self) -> String {
         match self.state.as_str() {
-            "listening" if !self.partial.is_empty() => self.partial.clone(),
-            "listening" => "Listening".into(),
             "downloading" => match self.percent {
                 Some(p) => format!("Downloading model {p}%"),
                 None => "Downloading model…".into(),
             },
-            "transcribing" => "Transcribing…".into(),
             "error" if !self.error.is_empty() => self.error.clone(),
             "error" => "Voice error".into(),
-            _ if !self.transcript.is_empty() => self.transcript.clone(),
             _ => "Ready".into(),
         }
     }
 
     fn waveform(&mut self) -> Div {
-        let mut bars = div().flex().h(px(28.0)).items_center().gap(px(2.0));
+        let mut bars = div().flex().h(px(24.0)).items_center().gap(px(2.0));
         for i in 0..BAR_COUNT {
             self.shown[i] += (self.history[i] - self.shown[i]) * EASE;
             let height = MIN_HEIGHT + self.shown[i] * (1.0 - MIN_HEIGHT);
@@ -123,91 +114,47 @@ impl VoicePill {
     }
 }
 
-/// Last `TAIL_CHARS` characters with a leading ellipsis.
-fn tail(text: &str) -> String {
-    let count = text.chars().count();
-    if count <= TAIL_CHARS {
-        return text.to_owned();
-    }
-    let rest: String = text.chars().skip(count - TAIL_CHARS + 1).collect();
-    format!("…{rest}")
-}
-
 impl Render for VoicePill {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
         let state = self.state.clone();
-        let label = self.label();
-        let animating = state == "listening" || state == "transcribing";
-        if animating {
+        if state == "listening" || state == "transcribing" {
             window.request_animation_frame();
         }
-        let tall = state == "listening" && !self.partial.is_empty();
         let text = |s: String, alpha: f32| div().truncate().text_sm().text_color(white().opacity(alpha)).child(s);
 
-        let mut pill = div()
+        let pill = div()
             .id("voice-pill")
             .flex()
             .items_center()
             .gap_3()
+            .h(px(40.0))
             .max_w(px(440.0))
             .px_5()
+            .rounded_full()
             .bg(black().opacity(0.9))
             .border_1()
             .border_color(white().opacity(0.1))
-            .shadow_lg()
-            .cursor_default()
-            .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move());
-        pill = if tall { pill.min_h(px(48.0)).rounded(px(24.0)).py(px(6.0)) } else { pill.h(px(48.0)).rounded_full() };
+            .shadow_lg();
 
         match state.as_str() {
-            "listening" => {
-                let mut column = div().flex().flex_col().items_center().min_w_0();
-                if !self.partial.is_empty() {
-                    column = column.child(text(tail(&self.partial), 0.85).max_w(px(400.0)).line_height(px(20.0)));
-                }
-                pill = pill.child(column.child(self.waveform()));
-            }
-            "transcribing" => {
-                if !self.partial.is_empty() {
-                    pill = pill.child(text(tail(&self.partial), 0.6).min_w_0());
-                }
-                pill = pill.child(self.dots());
-            }
-            "error" => pill = pill.child(div().truncate().text_sm().text_color(hsla(p.bad)).child(label)),
-            "downloading" => pill = pill.child(text(label, 0.7)),
-            _ => {
-                if !self.transcript.is_empty() {
-                    pill = pill.child(
-                        div()
-                            .size(px(24.0))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(hsla(p.ok))
-                            .text_color(white())
-                            .child(IconName::Check),
-                    );
-                }
-                pill = pill.child(text(tail(&label), 0.7));
-            }
+            "listening" => pill.child(self.waveform()),
+            "transcribing" => pill.child(self.dots()),
+            "error" => pill.child(div().truncate().text_sm().text_color(hsla(p.bad)).child(self.label())),
+            "downloading" => pill.child(text(self.label(), 0.7)),
+            _ if self.delivered => pill.child(
+                div()
+                    .size(px(24.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(hsla(p.ok))
+                    .text_color(white())
+                    .child(IconName::Check),
+            ),
+            _ => pill.child(text(self.label(), 0.7)),
         }
-        div().size_full().flex().items_center().justify_center().child(pill)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{TAIL_CHARS, tail};
-
-    #[test]
-    fn tail_keeps_the_end() {
-        assert_eq!(tail("short"), "short");
-        let long = "a".repeat(100) + "END";
-        let t = tail(&long);
-        assert_eq!(t.chars().count(), TAIL_CHARS);
-        assert!(t.starts_with('…') && t.ends_with("END"));
     }
 }

@@ -77,7 +77,7 @@ pub(super) fn toggle_main(cx: &mut App) {
     }
 }
 
-/// Kills every agent process, then exits (the pill window would otherwise keep the app alive).
+/// Kills every agent process, then exits.
 pub fn quit(cx: &mut App) {
     stop_agents(cx);
     cx.quit();
@@ -120,26 +120,6 @@ fn hwnd(window: &Window) -> Option<isize> {
 fn hwnd(_: &Window) -> Option<isize> {
     None
 }
-
-/// Removes the Windows 11 DWM frame (1px border + rounded corners) from a transparent pop-up.
-#[cfg(windows)]
-pub fn strip_frame(window: &Window) {
-    use windows_sys::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
-        DwmSetWindowAttribute,
-    };
-    let Some(hwnd) = hwnd(window) else { return };
-    let set = |attr, value: u32| {
-        // SAFETY: hwnd is live (we are inside its build callback); value outlives the call.
-        unsafe { DwmSetWindowAttribute(hwnd as _, attr as _, (&raw const value).cast(), 4) }
-    };
-    // Failures are cosmetic (older Windows): the pill still works.
-    set(DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
-    set(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND as u32);
-}
-
-#[cfg(not(windows))]
-pub fn strip_frame(_: &Window) {}
 
 /// Shows or hides the main window at the OS level. False when unsupported (no HWND).
 #[cfg(windows)]
