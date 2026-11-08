@@ -42,7 +42,7 @@ const PRESETS: [(&str, &str, &str); 2] = [
 fn model_size(model: WhisperModel) -> &'static str {
     match model {
         WhisperModel::Base => "82 MB",
-        WhisperModel::Small => "264 MB",
+        WhisperModel::Small => "466 MB",
         WhisperModel::Medium => "823 MB",
         WhisperModel::LargeV3Turbo => "874 MB",
     }
