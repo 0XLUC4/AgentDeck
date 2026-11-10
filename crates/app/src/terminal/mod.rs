@@ -581,8 +581,11 @@ impl TerminalView {
                 gate.output(&chunk);
             }
             let replay = runtime::pane_output_text(&self.pane_id, cx);
-            for (i, chunk) in gate.replay(&replay).into_iter().enumerate() {
-                self.feed(&chunk, i == 0 && !replay.is_empty(), cx);
+            if let Some((old, held)) = gate.replay(&replay) {
+                self.feed(&old, true, cx);
+                for chunk in held {
+                    self.feed(&chunk, false, cx);
+                }
             }
             self.tasks.push(cx.spawn(async move |this, cx| {
                 while let Ok(mut chunk) = output.recv().await {

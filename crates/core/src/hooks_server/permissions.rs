@@ -190,10 +190,15 @@ impl Permissions {
         if !whole_turn && !tool_done {
             return;
         }
+        // An `AskUserQuestion` answered in the terminal comes back with `answers` added to its input.
+        let mut done_input = body["tool_input"].clone();
+        if let Some(input) = done_input.as_object_mut() {
+            input.remove("answers");
+        }
         self.lock().retain(|_, p| {
             let stale = p.pane_id == pane_id
                 && (whole_turn
-                    || (p.tool_name == body["tool_name"] && p.tool_input == body["tool_input"]));
+                    || (p.tool_name == body["tool_name"] && p.tool_input == done_input));
             if stale {
                 let _ = p.tx.send(None);
             }
@@ -386,6 +391,19 @@ mod tests {
         assert_eq!(rx_a.recv_timeout(Duration::from_secs(1)), Ok(None));
         p.cancel_stale("p2", &json!({"hook_event_name": "Stop"}));
         assert_eq!(p.len(), 0);
+        // A question answered in the terminal: same call, now with `answers`.
+        let questions = json!([{"question": "Which DB?", "options": [{"label": "SQLite"}]}]);
+        let (_q, rx_q) = p.register(
+            "p1",
+            &json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": questions}}),
+        );
+        p.cancel_stale(
+            "p1",
+            &json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": questions, "answers": {"Which DB?": "SQLite"}}}),
+        );
+        assert_eq!(p.len(), 0);
+        assert_eq!(rx_q.recv_timeout(Duration::from_secs(1)), Ok(None));
     }
 
     #[test]

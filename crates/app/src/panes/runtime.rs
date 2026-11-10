@@ -953,6 +953,13 @@ pub fn pane_last_hook_at(id: &str, cx: &App) -> Option<i64> {
     cx.try_global::<Runtimes>()?.map.get(id)?.last_hook_at
 }
 
+/// Last time the pane printed anything (ms, 0 when unknown): Claude's spinner keeps printing while it works.
+pub fn pane_last_output_at(id: &str, cx: &App) -> i64 {
+    cx.try_global::<Runtimes>()
+        .and_then(|r| r.map.get(id))
+        .map_or(0, |rt| lock(&rt.output).last_output_at)
+}
+
 /// Buffered raw output of a pane ("" when unknown): replay for a new or detached terminal.
 pub fn pane_output_text(id: &str, cx: &App) -> String {
     cx.try_global::<Runtimes>()
