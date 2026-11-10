@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::Duration;
 
-use agentdeck_core::hooks_server::{AgentStatusEvent, PaneStatus};
+use agentdeck_core::hooks_server::{AgentStatusEvent, PaneStatus, Subagent};
 use agentdeck_core::logic::deck::{Pane, PaneSpec, new_pane};
 use agentdeck_core::logic::queue::{SUBMIT_DELAY_MS, prompt_text};
 use agentdeck_core::logic::ring_buffer::RingBuffer;
@@ -87,9 +87,13 @@ struct Runtimes {
     /// Last pane that edited each file (normalized path), to spot two agents editing the same file.
     editors: HashMap<String, Editor>,
     rate_limit_retries: HashSet<String>,
+    /// Claude subagents running inside each pane (`agent-subagents`); panes without any have no entry.
+    subagents: HashMap<String, Vec<Subagent>>,
     /// Pane the backend routes voice input to.
     backend_active: Option<String>,
     save_pending: bool,
+    /// The pending deck notify is the 1 s clock repaint: nothing to save.
+    clock_repaint: bool,
     last_saved: String,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -159,6 +163,8 @@ pub fn start(deck: &Entity<Deck>, cx: &mut App) {
         loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             cx.update(tick);
+            // Its own update: the notify of a status `tick` changed must reach the autosave.
+            cx.update(clock_repaint);
         }
     });
     let r = rts(cx);
@@ -196,7 +202,8 @@ fn restore(cx: &mut App) {
 /// archive, last folder or active tab changed. Runtime fields (status, last action) do not save.
 fn schedule_save(cx: &mut App) {
     let r = rts(cx);
-    if r.save_pending {
+    // Taken here: observers run after `clock_repaint` returned, so it cannot clear the flag itself.
+    if std::mem::take(&mut r.clock_repaint) || r.save_pending {
         return;
     }
     r.save_pending = true;
@@ -218,16 +225,23 @@ fn schedule_save(cx: &mut App) {
     .detach();
 }
 
-/// Every second: status from output for panes without hooks, and a repaint for timers and outlines.
+/// Every second: status from output for panes without hooks.
 fn tick(cx: &mut App) {
     let now = now_ms();
     derive_statuses(now, cx);
     forward_terminal_notices(now, cx);
+}
+
+/// Every second while an agent is live: a repaint for timers and outlines.
+fn clock_repaint(cx: &mut App) {
+    let now = now_ms();
     let Some(deck) = deck(cx) else { return };
     let live = deck.read(cx).state.panes.values().any(|p| {
         p.task_started_at.is_some() || matches!(p.status, PaneStatus::Working | PaneStatus::Waiting)
     });
     if live || super::frame::voice_flash_pending(now, cx) {
+        // Statuses and timers are not saved: the autosave skips this notify.
+        rts(cx).clock_repaint = true;
         deck.update(cx, |_, cx| cx.notify());
     }
 }
@@ -237,6 +251,17 @@ fn on_backend(event: &Event, cx: &mut App) {
         "agent-status" => {
             if let Ok(e) = serde_json::from_value::<AgentStatusEvent>(event.payload.clone()) {
                 on_status(e, cx);
+            }
+        }
+        // The deck notifies after every backend event: headers and the activity panel repaint.
+        "agent-subagents" => {
+            let list = serde_json::from_value::<Vec<Subagent>>(event.payload["subagents"].clone());
+            if let (Some(id), Ok(list)) = (event.payload["paneId"].as_str(), list) {
+                if list.is_empty() || !rts(cx).map.contains_key(id) {
+                    rts(cx).subagents.remove(id);
+                } else {
+                    rts(cx).subagents.insert(id.to_owned(), list);
+                }
             }
         }
         "voice-state" | "voice-level" => super::frame::on_voice_event(event, cx),
@@ -389,6 +414,8 @@ struct SpawnJob {
     trust: bool,
     /// Browser panel MCP args (Claude with a browser), filled on the main thread before the spawn.
     browser: Vec<String>,
+    /// `settings.worktree_setup`: run once in a worktree created by this spawn.
+    setup: String,
 }
 
 /// Blocking: MCP registration (orchestrator) and the PTY spawn.
@@ -411,6 +438,10 @@ fn run_spawn(job: SpawnJob) -> Result<(), String> {
         args.push(resume);
     }
     args.extend(pane.spec.args.iter().cloned());
+    // Creates the worktree and sets it up; spawn_pane then reuses it.
+    if pane.worktree && !job.setup.is_empty() {
+        agentdeck_core::agents::create_worktree_with(&pane.cwd, &pane.id, &job.setup)?;
+    }
     pty::spawn_pane(
         &job.backend,
         pane.id.clone(),
@@ -433,6 +464,7 @@ fn spawn(id: &str, cx: &mut App) {
     let backend = d.backend.clone();
     let base_port = d.settings.base_port;
     let trust = d.settings.trust_agent_folders;
+    let setup = d.settings.worktree_setup.clone();
     let resume = (pane.agent == agentdeck_core::agents::AgentKind::Claude && d.settings.resume_sessions)
         .then(|| pane.resume_id.clone())
         .flatten()
@@ -464,6 +496,7 @@ fn spawn(id: &str, cx: &mut App) {
         rows,
         trust,
         browser: Vec::new(),
+        setup,
     };
     let id = id.to_owned();
     cx.spawn(async move |cx| {
@@ -480,6 +513,17 @@ fn spawn(id: &str, cx: &mut App) {
                     cx.update(|cx| after_spawn(&id, token, Err(e), resumed, (cols, rows), cx));
                     return;
                 }
+            }
+        }
+        if job.pane.worktree && !job.setup.is_empty() {
+            let (cwd, pane_id) = (job.pane.cwd.clone(), job.pane.id.clone());
+            // The pane stays blank during a long install: say why. No worktree yet = the cwd comes back.
+            let is_new = cx
+                .background_spawn(async move { agentdeck_core::git::git_pane_dir(cwd.clone(), pane_id, true) == cwd })
+                .await;
+            if is_new {
+                let title = job.pane.title.clone();
+                cx.update(|cx| toast(format!("Setting up the worktree of {title}"), cx));
             }
         }
         let result = cx.background_spawn(async move { run_spawn(job) }).await;
@@ -587,6 +631,7 @@ pub fn restart_pane(id: &str, cx: &mut App) {
             };
             rt.restarting = false;
             lock(&rt.output).buffer.clear();
+            rts(cx).subagents.remove(&id);
             agentdeck_core::mcp::STATUS.set(&id, PaneStatus::Idle); // forget the old run's "done"
             let now = now_ms();
             update_pane(&id, cx, |p| {
@@ -611,6 +656,7 @@ pub fn close_pane(id: &str, cx: &mut App) {
     let rt = r.map.remove(id);
     r.editors.retain(|_, e| e.pane_id != id);
     r.rate_limit_retries.remove(id);
+    r.subagents.remove(id);
     let was_active = r.backend_active.as_deref() == Some(id);
     if was_active {
         r.backend_active = None;
@@ -638,6 +684,8 @@ pub fn close_pane(id: &str, cx: &mut App) {
 /// The process ended: wakes `stop_pane`, retries a vanished `--resume` fresh, or closes the pane
 /// when the agent quit by itself (Ctrl+C, /exit).
 fn on_exit(id: &str, cx: &mut App) {
+    // Its subagents died with the process (no SubagentStop comes).
+    rts(cx).subagents.remove(id);
     let Some(rt) = rt_mut(id, cx) else { return };
     if let Some(tx) = rt.on_exit.take() {
         let _ = tx.try_send(());
@@ -946,6 +994,13 @@ fn derive_statuses(now: i64, cx: &mut App) {
 /// Spawn time of the pane's current process (ms), or None before it starts.
 pub fn pane_started_at(id: &str, cx: &App) -> Option<i64> {
     cx.try_global::<Runtimes>()?.map.get(id)?.started_at
+}
+
+/// Claude subagents running inside the pane, oldest first.
+pub fn pane_subagents(id: &str, cx: &App) -> Vec<Subagent> {
+    cx.try_global::<Runtimes>()
+        .and_then(|r| r.subagents.get(id).cloned())
+        .unwrap_or_default()
 }
 
 /// Last hook event time of a pane (for stuck watchers).

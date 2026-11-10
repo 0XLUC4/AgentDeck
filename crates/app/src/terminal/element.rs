@@ -1,4 +1,4 @@
-//! Paints the terminal grid: background runs, selection, text shaped per style run and pinned to
+//! Paints the terminal grid: background runs, selection, search matches, text shaped per style run and pinned to
 //! its cell column, box/block glyphs as rectangles, and the cursor.
 
 use agentdeck_core::logic::theme::RADIUS_XL;
@@ -9,7 +9,7 @@ use alacritty_terminal::vte::ansi::CursorShape;
 use gpui_kit::*;
 
 use super::{Metrics, TerminalView, colors, glyphs};
-use crate::theme::{hsla, ui};
+use crate::theme::{hsla, hsla_a, palette, ui};
 
 /// Text style of a run of cells.
 #[derive(Clone, Copy, PartialEq)]
@@ -95,12 +95,20 @@ fn prepaint(
     let cols = ((f32::from(area.size.width) / f32::from(cell.width)) as usize).max(2);
     let rows = ((f32::from(area.size.height) / f32::from(cell.height)) as usize).max(1);
     let hidden = area.size.width <= px(0.0) || area.size.height <= px(0.0);
-    view.update(cx, |v, cx| {
+    let (matches, current_match) = view.update(cx, |v, cx| {
         // Hidden panes keep their size (no reflow of background tabs).
-        if !hidden {
-            v.resize_to(cols, rows, Metrics { origin: area.origin, cell }, cx);
+        if hidden {
+            return Default::default();
         }
+        v.resize_to(cols, rows, Metrics { origin: area.origin, cell }, cx);
+        v.visible_matches()
     });
+    if hidden {
+        // Nothing to paint: skip the grid walk and the shaping.
+        let focus = view.read(cx).focus_handle(cx);
+        let (rects, glyphs, lines) = (Vec::new(), Vec::new(), Vec::new());
+        return Frame { area, rects, glyphs, lines, cursor: None, preedit: None, cell_height: cell.height, font_size, focus };
+    }
 
     let theme = colors::theme(cx);
     let v = view.read(cx);
@@ -214,6 +222,22 @@ fn prepaint(
         }
     }
     flush_bg(bg_run.take(), &mut rects);
+
+    // Search matches, over the cell backgrounds and under the text: the current one is stronger.
+    let match_color = palette(cx).wait;
+    for found in &matches {
+        let alpha = if current_match.as_ref() == Some(found) { 0.6 } else { 0.25 };
+        let (start, end) = (found.start(), found.end());
+        for line in start.line.0..=end.line.0 {
+            let row = line + offset as i32;
+            if row < 0 || row as usize >= rows {
+                continue;
+            }
+            let from = if line == start.line.0 { start.column.0 } else { 0 };
+            let to = if line == end.line.0 { (end.column.0 + 1).min(screen_cols) } else { screen_cols };
+            rects.push((cell_bounds(row as usize, from, to.saturating_sub(from)), hsla_a(match_color, alpha)));
+        }
+    }
 
     let lines = runs
         .into_iter()

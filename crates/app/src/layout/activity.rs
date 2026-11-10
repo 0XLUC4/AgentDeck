@@ -211,6 +211,20 @@ impl DeckView {
                                 .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx)),
                         )
                     })
+                    // Claude subagents running inside the pane: what each one is doing.
+                    .children(runtime::pane_subagents(&pane.id, cx).into_iter().map(|sub| {
+                        let action = sub.last_action.unwrap_or_else(|| "Starting…".to_owned());
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(ui(6.0))
+                            .pl(ui(22.0))
+                            .text_size(ui(12.0))
+                            .text_color(hsla(p.subtle))
+                            .child(Icon::new(IconName::CornerDownRight).size(ui(12.0)))
+                            .child(div().flex_1().min_w_0().truncate().child(format!("{}: {action}", sub.label)))
+                            .child(div().flex_shrink_0().child(format_elapsed(now - sub.started_at)))
+                    }))
                     .on_click(cx.listener({
                         let id = id.clone();
                         move |this, _: &ClickEvent, _, cx| this.jump(&id, cx)

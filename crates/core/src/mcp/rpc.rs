@@ -12,9 +12,10 @@ use crate::hooks_server::PaneStatus;
 /// Versions we can speak (we only use initialize/ping/tools, unchanged across these).
 pub(super) const VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 pub const PAUSED_MSG: &str = "Orchestrator paused by the user";
-const MUTATING: [&str; 6] = [
+const MUTATING: [&str; 7] = [
     "spawn_agent",
     "send_prompt",
+    "queue_prompt",
     "interrupt",
     "merge_worktree",
     "restore_checkpoint",
@@ -23,6 +24,8 @@ const MUTATING: [&str; 6] = [
 const MAX_PROMPT: usize = 64 * 1024;
 const MAX_WAIT_S: u64 = 600;
 const MAX_LINES: u64 = 200;
+/// Characters of each finished agent's summary returned by wait_for.
+const MAX_SUMMARY: usize = 1500;
 
 /// What the tools need from the app. The real host bridges to the frontend; tests fake it.
 pub trait Host {
@@ -106,6 +109,18 @@ fn definitions() -> Value {
             &["paneId", "text"]
         ),
         tool(
+            "queue_prompt",
+            "Queues a follow-up prompt for an agent: sent right away when it is idle, else as soon as it finishes its current task. No need to wait_for it first. Claude and Codex only.",
+            json!({ "paneId": pane, "text": { "type": "string" } }),
+            &["paneId", "text"]
+        ),
+        tool(
+            "find_conflicts",
+            "Files with uncommitted changes in more than one agent's folder (worktrees): check before merge_worktree to see which merges will collide.",
+            json!({}),
+            &[]
+        ),
+        tool(
             "get_status",
             "An agent's status, last action and time spent in that status.",
             json!({ "paneId": pane }),
@@ -113,13 +128,13 @@ fn definitions() -> Value {
         ),
         tool(
             "get_result",
-            "An agent's last finished task: prompt, summary, actions (last 30), status.",
+            "An agent's last finished task: start of the prompt, full summary, actions (last 30), status.",
             json!({ "paneId": pane }),
             &["paneId"]
         ),
         tool(
             "wait_for",
-            "Waits until agents are finished (done), waiting for an answer (waiting), or either (any).",
+            "Waits until agents are finished (done), waiting for an answer (waiting), or either (any). Returns each finished agent's summary in `results`; `met: false` means it timed out.",
             json!({
                 "paneIds": { "type": "array", "items": { "type": "string" } },
                 "until": { "type": "string", "enum": ["done", "waiting", "any"] },
@@ -181,7 +196,8 @@ fn call(params: &Value, host: &impl Host) -> Result<Value, (i64, String)> {
     // Tool failures are results with isError so the model can read and recover from them.
     Ok(match outcome {
         Ok(value) => {
-            let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+            // Compact: the reader is a model, indentation only costs it context.
+            let text = serde_json::to_string(&value).unwrap_or_default();
             json!({ "content": [{ "type": "text", "text": text }] })
         }
         Err(message) => {
@@ -195,16 +211,15 @@ fn run(name: &str, args: &Value, host: &impl Host) -> Result<Value, String> {
         return Err(PAUSED_MSG.into());
     }
     match name {
-        "list_agents" => host.frontend(name, &json!({})),
+        "list_agents" | "find_conflicts" => host.frontend(name, &json!({})),
+        "queue_prompt" => host.frontend(
+            name,
+            &json!({ "paneId": pane_arg(args)?, "text": prompt_arg(args)? }),
+        ),
         "spawn_agent" => host.frontend(name, &spawn_args(args)?),
         "send_prompt" => {
             let pane_id = pane_arg(args)?;
-            let text = args["text"].as_str().ok_or("missing text")?;
-            if text.trim().is_empty() || text.len() > MAX_PROMPT {
-                return Err(format!(
-                    "text must be non-empty and at most {MAX_PROMPT} bytes"
-                ));
-            }
+            let text = prompt_arg(args)?;
             let submit = bool_arg(args, "submit", true)?;
             let result = host.frontend(
                 name,
@@ -274,7 +289,27 @@ fn wait_for(args: &Value, host: &impl Host) -> Result<Value, String> {
     let (met, statuses) = host
         .statuses()
         .wait(&ids, until, Duration::from_secs(timeout), |p| host.alive(p));
-    Ok(json!({ "met": met, "timedOut": !met, "statuses": statuses }))
+    // Saves one get_result round trip per finished agent. Agents without hooks have no summary.
+    let mut results = serde_json::Map::new();
+    for (id, label) in &statuses {
+        if !matches!(label.as_str(), Some("done" | "error")) {
+            continue;
+        }
+        let result = host.frontend("get_result", &json!({ "paneId": id }));
+        let summary = result.as_ref().ok().and_then(|r| r["result"]["summary"].as_str());
+        if let Some(summary) = summary {
+            results.insert(id.clone(), json!({ "summary": cut_summary(summary) }));
+        }
+    }
+    Ok(json!({ "met": met, "statuses": statuses, "results": results }))
+}
+
+/// First `MAX_SUMMARY` characters of a summary, with where to find the rest.
+fn cut_summary(summary: &str) -> String {
+    match summary.char_indices().nth(MAX_SUMMARY) {
+        Some((end, _)) => format!("{}... (cut: get_result has the rest)", &summary[..end]),
+        None => summary.to_owned(),
+    }
 }
 
 /// Validated `spawn_agent` arguments, normalized for the UI.
@@ -333,6 +368,13 @@ fn model_args_only(args: &[&str]) -> bool {
         }
     }
     true
+}
+
+fn prompt_arg(args: &Value) -> Result<&str, String> {
+    args["text"]
+        .as_str()
+        .filter(|t| !t.trim().is_empty() && t.len() <= MAX_PROMPT)
+        .ok_or_else(|| format!("text must be non-empty and at most {MAX_PROMPT} bytes"))
 }
 
 fn pane_arg(args: &Value) -> Result<&str, String> {
@@ -409,6 +451,7 @@ mod tests {
                 "read_output" => Ok(json!({ "raw": "\x1b[31ma\x1b[0m\r\nb\r\nc\r\n" })),
                 "wait_for" => Ok(json!({ "statuses": { "p1": "done", "p2": "working" } })),
                 "get_status" if args["paneId"] == "other-ws" => Err("outside workspace".into()),
+                "get_result" => Ok(json!({ "result": { "summary": "é".repeat(MAX_SUMMARY + 1) } })),
                 _ => Ok(json!({ "ok": true })),
             }
         }
@@ -475,11 +518,11 @@ mod tests {
     }
 
     #[test]
-    fn lists_twelve_tools_with_schemas() {
+    fn lists_all_tools_with_schemas() {
         let host = Fake::default();
         let r = handle(&req("tools/list", json!({})), &host).unwrap();
         let tools = r["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 14);
         assert!(tools.iter().all(|t| t["inputSchema"]["type"] == "object"));
     }
 
@@ -508,6 +551,7 @@ mod tests {
             json!({ "paneId": "p1", "text": "  " })
         )));
         assert!(err(tool(&host, "send_prompt", json!({ "text": "hi" }))));
+        assert!(err(tool(&host, "queue_prompt", json!({ "paneId": "p1", "text": "" }))));
         assert!(err(tool(
             &host,
             "read_output",
@@ -542,7 +586,7 @@ mod tests {
             sent,
             json!({ "agent": "codex", "title": "Tests", "cwd": null, "worktree": false, "args": ["--model", "o3"] })
         );
-        assert_eq!(host.log.borrow().len(), 10);
+        assert_eq!(host.log.borrow().len(), 11);
     }
 
     #[test]
@@ -619,6 +663,11 @@ mod tests {
         let body: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["met"], true);
         assert_eq!(body["statuses"], json!({ "p1": "done", "p2": "working" }));
+        // Only the finished agent gets its summary, cut on a char boundary.
+        let summary = body["results"]["p1"]["summary"].as_str().unwrap();
+        assert!(summary.starts_with(&"é".repeat(MAX_SUMMARY)) && summary.ends_with("the rest)"));
+        assert!(body["results"].get("p2").is_none());
+        assert_eq!(cut_summary("short"), "short");
     }
 
     #[test]

@@ -210,6 +210,11 @@ impl Permissions {
         self.lock().remove(id);
     }
 
+    /// True while `pane_id` still has a request the user has not answered.
+    pub fn has_pane(&self, pane_id: &str) -> bool {
+        self.lock().values().any(|p| p.pane_id == pane_id)
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.lock().len()

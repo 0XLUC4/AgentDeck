@@ -245,7 +245,7 @@ fn warm_up(app: &AppHandle) {
     let Ok(config) = config_snapshot(app) else {
         return;
     };
-    if config.engine != Engine::Local {
+    if config.engine != Engine::Local || local::is_warm() {
         return;
     }
     let Some((model, _)) = models_dir(app)
@@ -303,7 +303,8 @@ fn transcribe(app: &AppHandle, samples: &[f32], rate: u32) -> Result<(), String>
     let config = config_snapshot(app)?;
     let pcm = audio::resample(samples, rate, audio::TARGET_RATE);
     let text = match config.engine {
-        Engine::Api => transcribe_api(&config, audio::wav_16bit_mono(&pcm, audio::TARGET_RATE))?,
+        // Silence around the speech is cut first: a smaller upload and less audio for the server.
+        Engine::Api => transcribe_api(&config, audio::wav_16bit_mono(local::speech(&pcm), audio::TARGET_RATE))?,
         Engine::Local => transcribe_local(app, &config, &pcm)?,
     };
     let text = text.trim();

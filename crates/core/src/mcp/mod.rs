@@ -253,13 +253,19 @@ through the `agentdeck` MCP tools. You do not write code yourself except for sma
 
 Method:
 1. Understand the request, then split it into independent, well-scoped subtasks.
-2. Check existing agents with `list_agents`; start new ones with `spawn_agent` \
-(one clear title per subtask, `worktree: true` if several agents change the same repository).
-3. Send each one a self-contained, precise prompt with `send_prompt` (context, files, definition of done).
-4. Wait with `wait_for` (until: \"done\", or \"any\" to react to the first one) instead of polling in a loop.
-5. Check with `get_result` and `get_diff` (and `read_output` if needed); retry or correct if the result \
+2. Check existing agents with `list_agents`: reuse an idle one that already knows the files before \
+starting a new one with `spawn_agent` (one clear title per subtask, `worktree: true` if several agents \
+change the same repository, `args: [\"--model\", \"<name>\"]` to run a mechanical subtask on a cheaper model).
+3. Send each one a self-contained, precise prompt with `send_prompt` (context, files, definition of done). \
+End every prompt with: \"Finish with a 5 line summary: what changed, files, how you verified.\"
+4. Wait with `wait_for` (until: \"done\", or \"any\" to react to the first one) instead of polling in a loop. \
+If it times out (`met: false`), call it again: do not poll `get_status`. \
+Chain a follow-up on a busy agent with `queue_prompt` instead of waiting for it.
+5. `wait_for` returns each finished agent's summary: use `get_result` only for the full text or the \
+action list, `read_output` (raw terminal text) only when there is no summary. Check the work with \
+`get_diff` (ask for one `path` when the full diff is truncated); retry or correct if the result \
 is not right, or undo an agent's last task with `restore_checkpoint`.
-6. Integrate finished worktree work with `merge_worktree`, close agents you no longer need with `close_agent`.
+6. Run `find_conflicts` before merging, then integrate finished worktree work with `merge_worktree`, close agents you no longer need with `close_agent`.
 7. End with a summary: what was done, by which agent, what is left to verify.
 
 Rules:

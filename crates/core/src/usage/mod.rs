@@ -142,8 +142,14 @@ fn with_entries(path: &Path, len: u64, mtime: i64, source: Source, f: &mut impl 
     f(&state.entries);
     if let Ok(mut c) = cache().lock() {
         c.insert(path.to_path_buf(), state);
-        // Older files only matter to panes started over 30 days ago: let them re-parse.
-        let cutoff = local_midnight(30);
+    }
+}
+
+/// Drops cached files older than the 30-day window: they only matter to panes started before it,
+/// which re-parse them. Once per public call, not per file.
+fn prune() {
+    let cutoff = local_midnight(30);
+    if let Ok(mut c) = cache().lock() {
         c.retain(|_, s| s.mtime >= cutoff);
     }
 }
@@ -240,6 +246,7 @@ fn summarize(days: u64) -> UsageSummary {
             by_day.entry(day_key(e.ts)).or_default().add(e);
         }
     });
+    prune();
     UsageSummary {
         total,
         by_agent: keyed(by_agent),
@@ -321,6 +328,7 @@ pub fn pane_usage(
                 .for_each(&mut add);
         });
     }
+    prune();
     Ok(PaneUsage { totals, models })
 }
 

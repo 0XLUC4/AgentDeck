@@ -4,9 +4,10 @@
 //! Mouse down focuses the pane, double click toggles maximize.
 
 use agentdeck_core::agents::AgentKind;
+use agentdeck_core::hooks_server::Subagent;
 use agentdeck_core::logic::deck::{FONT_SIZE_MAX, FONT_SIZE_MIN, Pane, folder_name};
 use agentdeck_core::logic::text::{agent_name, format_elapsed, now_ms, short_action};
-use agentdeck_core::logic::theme::{FONT_MONO, RADIUS_LG, RADIUS_MD, RADIUS_XL, parse_hex};
+use agentdeck_core::logic::theme::{FONT_MONO, Palette, RADIUS_LG, RADIUS_MD, RADIUS_XL, parse_hex};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -86,6 +87,47 @@ fn runtime_pane_agent(id: &str, cx: &App) -> Option<AgentKind> {
     super::runtime::deck(cx)?.read(cx).state.panes.get(id).map(|p| p.agent)
 }
 
+/// "N agents" chip: the Claude subagents running inside the pane, each one detailed in the tooltip.
+fn subagents_chip(subagents: Vec<Subagent>, now: i64, p: &Palette) -> Option<Stateful<Div>> {
+    let count = subagents.len();
+    if count == 0 {
+        return None;
+    }
+    let rows: Vec<(String, String)> = subagents
+        .into_iter()
+        .map(|sub| {
+            let kind = if sub.label == sub.agent_type { String::new() } else { format!(" · {}", sub.agent_type) };
+            let title = format!("{}{kind} · {}", sub.label, format_elapsed(now - sub.started_at));
+            (title, sub.last_action.unwrap_or_else(|| "Starting…".to_owned()))
+        })
+        .collect();
+    Some(
+        div()
+            .id("subagents")
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(hsla(p.muted))
+            .tooltip(move |window, cx| {
+                let rows = rows.clone();
+                Tooltip::element(move |_, _| {
+                    div().flex().flex_col().gap_1().children(rows.iter().map(|(title, action)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(div().font_weight(FontWeight::MEDIUM).child(title.clone()))
+                            .child(div().opacity(0.7).child(action.clone()))
+                    }))
+                })
+                .build(window, cx)
+            })
+            .child(Icon::new(IconName::Bot).size(ui(12.0)))
+            .child(format!("{count} agent{}", if count == 1 { "" } else { "s" })),
+    )
+}
+
 #[derive(Clone, Copy)]
 enum MenuAction {
     Rename,
@@ -94,6 +136,7 @@ enum MenuAction {
     ZoomIn,
     ZoomOut,
     Detach,
+    OpenPort,
 }
 
 pub struct PaneHeader {
@@ -184,6 +227,16 @@ impl PaneHeader {
                 });
             }
             MenuAction::Detach => cx.emit(PaneHeaderEvent::ToggleDetach),
+            MenuAction::OpenPort => {
+                let Some(port) = pane.port else { return };
+                let url = format!("http://localhost:{port}");
+                // In the agent's browser panel when it has one, else in the system browser.
+                if pane.browser && crate::browser::go(&id, &url, cx).is_ok() {
+                    cx.emit(PaneHeaderEvent::ShowBrowser);
+                } else {
+                    cx.open_url(&url);
+                }
+            }
         }
     }
 
@@ -245,7 +298,7 @@ impl PaneHeader {
 
     fn menu(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
-        let items: [(IconName, &str, MenuAction, bool); 6] = [
+        let mut items: Vec<(IconName, SharedString, MenuAction, bool)> = [
             (IconName::Pencil, "Rename", MenuAction::Rename, false),
             (IconName::Copy, "Duplicate agent", MenuAction::Duplicate, false),
             (IconName::RotateCcw, "Restart in a new conversation", MenuAction::Restart, false),
@@ -256,7 +309,13 @@ impl PaneHeader {
             } else {
                 (IconName::ExternalLink, "Detach to a window", MenuAction::Detach, false)
             },
-        ];
+        ]
+        .map(|(icon, label, action, disabled)| (icon, label.into(), action, disabled))
+        .into();
+        // The agent's own PORT (Settings > Agents > Port per agent): its dev server, one click away.
+        if let Some(port) = pane.port.filter(|_| self.deck.read(cx).settings.base_port != 0) {
+            items.push((IconName::Globe, format!("Open localhost:{port}").into(), MenuAction::OpenPort, false));
+        }
         let rows = items.into_iter().enumerate().map(|(i, (icon, label, action, disabled))| {
             let row = div()
                 .id(("pane-menu-item", i))
@@ -428,6 +487,7 @@ impl Render for PaneHeader {
                         })
                         .child(short_action(pane.last_action.as_deref())),
                 )
+                .children(subagents_chip(runtime::pane_subagents(&pane.id, cx), now, &p))
                 .children(self.extras.iter().cloned())
                 .child(crate::palette::queue_button(&self.deck, &pane, active, cx))
                 .when_some(pane.task_started_at, |h, since| {

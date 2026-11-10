@@ -248,7 +248,11 @@ pub fn agent_file_write(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    std::fs::write(&path, text).map_err(|e| format!("cannot save {}: {e}", path.display()))
+    // A rename would replace a link (AGENTS.md -> CLAUDE.md) with a plain file: write through it.
+    if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+        return std::fs::write(&path, text).map_err(|e| format!("cannot save {}: {e}", path.display()));
+    }
+    crate::persist::write_atomic(&path, text.as_bytes()).map_err(|e| format!("cannot save {e}"))
 }
 
 /// GitHub source: repo, optional branch/tag, optional folder inside the repo.

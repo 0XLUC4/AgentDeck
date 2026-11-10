@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
@@ -94,6 +94,15 @@ fn download(url: &str, part: &Path, on_progress: &mut impl FnMut(u64, u64)) -> R
         ));
     }
     Ok(())
+}
+
+/// End of the last inference: a model used moments ago is still paged in and the CPU still clocked up.
+static LAST_RUN: Mutex<Option<Instant>> = Mutex::new(None);
+const WARM_FOR: Duration = Duration::from_secs(45);
+
+/// True when a warm-up pass would only burn CPU (and battery) for nothing.
+pub fn is_warm() -> bool {
+    LAST_RUN.lock().is_ok_and(|last| last.is_some_and(|at| at.elapsed() < WARM_FOR))
 }
 
 /// Loads the model ahead of the first dictation so the first press isn't slow.
@@ -196,6 +205,9 @@ fn run(
     state
         .full(params, &samples)
         .map_err(|e| format!("transcription failed: {e}"))?;
+    if let Ok(mut last) = LAST_RUN.lock() {
+        *last = Some(Instant::now());
+    }
     let text: String = state
         .as_iter()
         .filter_map(|segment| segment.to_str_lossy().ok().map(|s| s.into_owned()))
@@ -245,7 +257,7 @@ const SPEECH_MARGIN: usize = 16_000 * 3 / 10;
 
 /// Cuts the silence before and after speech (key held before talking, released late): a shorter
 /// clip means a smaller encoder context, the main cost on CPU. Returns everything if unsure.
-fn speech(samples: &[f32]) -> &[f32] {
+pub fn speech(samples: &[f32]) -> &[f32] {
     let rms: Vec<f32> = samples
         .chunks(FRAME)
         .map(|f| (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt())

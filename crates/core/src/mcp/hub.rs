@@ -56,10 +56,19 @@ pub fn init(app: &AppHandle, port: u16) {
     let Ok(dir) = app.app_data_dir().map(|d| d.join("hub")) else {
         return;
     };
-    let saved = std::fs::read_to_string(dir.join("servers.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Vec<HubServer>>(&text).ok())
-        .unwrap_or_default();
+    let file = dir.join("servers.json");
+    let saved: Vec<HubServer> = match std::fs::read_to_string(&file) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        read => read
+            .map_err(|e| e.to_string())
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+            .unwrap_or_else(|e| {
+                // The next hub_save would overwrite it: keep a copy the user can restore.
+                let _ = std::fs::copy(&file, dir.join("servers.json.bak"));
+                eprintln!("mcp hub: servers.json unreadable, copy kept as servers.json.bak: {e}");
+                Vec::new()
+            }),
+    };
     let _ = DIR.set((dir, port));
     *lock(&SERVERS) = saved;
     if let Err(e) = write_claude_config() {
@@ -145,8 +154,7 @@ fn claude_config(servers: &[HubServer]) -> Value {
 fn write_file(name: &str, text: &str) -> Result<(), String> {
     let (dir, _) = DIR.get().ok_or("hub not initialized")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = dir.join(name);
-    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+    crate::persist::write_atomic(&dir.join(name), text.as_bytes())
 }
 
 fn write_claude_config() -> Result<(), String> {

@@ -251,8 +251,13 @@ pub fn load_deck(dir: &Path, deck: &mut DeckState) -> Result<Vec<SavedSession>, 
 
 /// Saves the deck snapshot (store.json, key "deck").
 pub fn save_deck(dir: &Path, deck: &DeckState, now: i64) -> Result<(), String> {
+    save_snapshot(dir, &snapshot(deck, now))
+}
+
+/// The disk half of `save_deck`: take the `snapshot` on the UI thread, write it off it.
+pub fn save_snapshot(dir: &Path, saved: &Saved) -> Result<(), String> {
     let mut store = JsonStore::load(dir, DECK_FILE)?;
-    let value = serde_json::to_value(snapshot(deck, now)).map_err(|e| e.to_string())?;
+    let value = serde_json::to_value(saved).map_err(|e| e.to_string())?;
     store.set(DECK_KEY, value);
     store.save()
 }

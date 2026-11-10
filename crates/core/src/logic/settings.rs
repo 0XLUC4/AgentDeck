@@ -111,6 +111,9 @@ pub struct Settings {
     pub stuck_minutes: u32,
     pub remind_minutes: u32,
     pub base_port: u16,
+    /// Shell command run once in each new agent worktree (install deps, copy .env); "" = none.
+    #[serde(default)]
+    pub worktree_setup: String,
     pub retry_rate_limit_minutes: u32,
     pub speech: SpeechSettings,
     pub auto_allow: Vec<AutoAllowRule>,
@@ -164,6 +167,7 @@ impl Default for Settings {
             stuck_minutes: 10,
             remind_minutes: 5,
             base_port: 0,
+            worktree_setup: String::new(),
             retry_rate_limit_minutes: 0,
             auto_allow: Vec::new(),
             budget: BudgetSettings {
@@ -257,6 +261,7 @@ pub fn merge_settings(raw: &Value) -> Settings {
         stuck_minutes: minutes(&raw["stuckMinutes"], d.stuck_minutes),
         remind_minutes: minutes(&raw["remindMinutes"], d.remind_minutes),
         base_port: port(&raw["basePort"]),
+        worktree_setup: raw["worktreeSetup"].as_str().unwrap_or("").trim().to_owned(),
         retry_rate_limit_minutes: minutes(&raw["retryRateLimitMinutes"], d.retry_rate_limit_minutes),
         notify: NotifySettings {
             enabled: boolean(&n["enabled"], d.notify.enabled),
@@ -357,7 +362,7 @@ mod tests {
         let s = merge_settings(&json!({
             "autoAllow": [{ "rule": " Bash(ls) ", "folder": "D:\\p" }, { "rule": "" }, "Read", { "rule": "Edit", "folder": 3 }],
             "budget": { "dailyUsd": 5, "paneUsd": -1, "interrupt": "yes" },
-            "phoneUrl": " https://ntfy.sh/t ",
+            "phoneUrl": " https://ntfy.sh/t ", "worktreeSetup": " pnpm install ",
             "appearance": { "theme": "light", "accent": "#4F8FF7", "background": "#1E2A44" },
         }));
         assert_eq!(
@@ -369,6 +374,7 @@ mod tests {
         );
         assert_eq!(s.budget, BudgetSettings { daily_usd: 5.0, pane_usd: 0.0, interrupt: false });
         assert_eq!(s.phone_url, "https://ntfy.sh/t");
+        assert_eq!(s.worktree_setup, "pnpm install");
         assert_eq!(s.appearance.theme, ThemeMode::Light);
         assert_eq!(s.appearance.accent, "#4f8ff7");
         let bad = merge_settings(&json!({ "appearance": { "theme": "neon", "accent": "red", "background": 3 } }));

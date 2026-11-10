@@ -4,10 +4,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use agentdeck_core::agents::AgentKind;
 use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::Pane;
 use agentdeck_core::logic::queue::{ADVANCE_DELAY_MS, QUEUE_AGENTS, ready_for_next, review_prompt, should_advance};
-use agentdeck_core::logic::text::agent_name;
+use agentdeck_core::logic::text::{agent_name, now_ms};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -138,9 +139,19 @@ fn request_review(deck: &Entity<Deck>, author_id: &str, reviewer_id: &str, cx: &
 
 /// Sends the next queued prompt now. Puts it back and toasts if the write fails.
 pub fn send_next(deck: &Entity<Deck>, pane_id: &str, cx: &mut App) {
+    let before = deck.read(cx).state.panes.get(pane_id).map(|p| (p.agent, p.status));
     let Some(item) = deck.update(cx, |d, cx| {
         cx.notify();
-        d.queues.pop_next(pane_id)
+        let item = d.queues.pop_next(pane_id)?;
+        // Like the orchestrator's send_prompt: a wait_for called now must not return the previous "done".
+        agentdeck_core::mcp::STATUS.set(pane_id, PaneStatus::Working);
+        // Codex reports no start of turn: without this the pane stays "done" and the next end of
+        // task is no transition (queue stalls). Claude says so itself (UserPromptSubmit), and a
+        // queued slash command that starts no turn must not leave it "working" for good.
+        if before.is_some_and(|(agent, _)| agent != AgentKind::Claude) {
+            d.state.set_status(pane_id, PaneStatus::Working, None, now_ms());
+        }
+        Some(item)
     }) else {
         return;
     };
@@ -153,6 +164,15 @@ pub fn send_next(deck: &Entity<Deck>, pane_id: &str, cx: &mut App) {
     cx.spawn(async move |cx| {
         if let Err(e) = task.await {
             weak.update(cx, |d, cx| {
+                // Nothing was typed. Not back to "done": that would count as a finished task and
+                // send the requeued prompt again, in a loop.
+                agentdeck_core::mcp::STATUS.set(&pane_id, PaneStatus::Done);
+                if d.state.panes.get(&pane_id).is_some_and(|p| p.status == PaneStatus::Working)
+                    && before.is_some_and(|(agent, _)| agent != AgentKind::Claude)
+                {
+                    let back = before.map(|(_, s)| s).filter(|s| *s != PaneStatus::Done);
+                    d.state.set_status(&pane_id, back.unwrap_or(PaneStatus::Idle), None, now_ms());
+                }
                 d.queues.requeue_front(&pane_id, item);
                 d.toast(format!("Queue: could not send ({e})"), cx);
             })

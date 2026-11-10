@@ -13,7 +13,7 @@
 
 mod button;
 mod link;
-mod runtime;
+pub(crate) mod runtime;
 mod tools;
 mod wall;
 

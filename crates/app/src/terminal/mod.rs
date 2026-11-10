@@ -1,13 +1,15 @@
 //! Terminal emulator view for one pane (replaces xterm.js): alacritty_terminal parses the VT stream,
 //! [`element`] paints the grid on the GPU. Scrollback 5000, selection + copy, paste (text, images
 //! saved to a temp file, copied files), file drop as agent refs, zoom (Ctrl+= / Ctrl+- / Ctrl+0),
-//! bracketed paste, mouse reporting, Ctrl+click on URLs, resize reported to the pty.
+//! bracketed paste, mouse reporting, Ctrl+click on URLs, resize reported to the pty, find in the
+//! scrollback (Ctrl+Shift+F, [`search`]).
 //! Original: src/components/TerminalPane/TerminalPane.tsx, src/lib/{ringBuffer,wakeTerminal,fileRefs}.ts.
 
 mod colors;
 mod element;
 mod glyphs;
 mod input;
+mod search;
 
 use std::cell::{OnceCell, RefCell};
 use std::ops::Range;
@@ -113,6 +115,8 @@ pub struct TerminalView {
     scroll_px: f32,
     selecting: bool,
     last_mouse_cell: Option<(usize, usize)>,
+    /// Find in terminal, while its bar is open.
+    search: Option<search::Search>,
     resize_task: Option<Task<()>>,
     tasks: Vec<Task<()>>,
     subscriptions: Vec<Subscription>,
@@ -162,6 +166,7 @@ impl TerminalView {
             scroll_px: 0.0,
             selecting: false,
             last_mouse_cell: None,
+            search: None,
             resize_task: None,
             tasks: Vec::new(),
             subscriptions: Vec::new(),
@@ -177,7 +182,11 @@ impl TerminalView {
 
     /// Feeds pty output to the emulator. A replay's answers to old terminal queries are dropped.
     fn feed(&mut self, data: &str, replay: bool, cx: &mut Context<Self>) {
+        let history = self.term.history_size();
         self.parser.advance(&mut self.term, data.as_bytes());
+        if let Some(search) = &mut self.search {
+            search.scrolled(self.term.history_size().saturating_sub(history));
+        }
         let replies = std::mem::take(&mut *self.replies.0.borrow_mut());
         for reply in replies {
             if replay {
@@ -312,6 +321,10 @@ impl TerminalView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Keys coming up from the search input are not for the pty.
+        if !self.focus_handle(cx).is_focused(window) {
+            return;
+        }
         let key = &event.keystroke;
         let m = &key.modifiers;
         if m.control && !m.alt && !m.platform {
@@ -483,8 +496,11 @@ impl TerminalView {
         let mode = *self.term.mode();
         if self.reports_mouse(&event.modifiers) {
             let button = if lines > 0 { input::MOUSE_WHEEL_UP } else { input::MOUSE_WHEEL_DOWN };
-            for _ in 0..lines.unsigned_abs() {
-                self.report_mouse(button, event.position, true, &event.modifiers, cx);
+            // One report per line, sent in a single write.
+            if let Some((col, row, _)) = self.cell_at(event.position)
+                && let Some(seq) = input::mouse_report(button, col, row, true, &event.modifiers, mode)
+            {
+                self.send_input(&seq.repeat(lines.unsigned_abs() as usize), cx);
             }
         } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
             // Full-screen programs without mouse mode get arrow keys (xterm alternate scroll).
@@ -535,16 +551,22 @@ impl TerminalView {
     }
 
     /// Reads the pane state the terminal shows. A new generation (restart) clears the screen.
-    fn read_pane(&mut self, deck: &Entity<Deck>, cx: &mut Context<Self>) {
-        let generation = {
+    /// Returns whether the font changed (a repaint is needed; `reset` asks for its own).
+    fn read_pane(&mut self, deck: &Entity<Deck>, cx: &mut Context<Self>) -> bool {
+        let (generation, font_changed) = {
             let deck = deck.read(cx);
             let pane = deck.state.panes.get(&self.pane_id);
+            let family = mono_family(&deck.settings.font_family);
+            let mut font_changed = self.font_family.as_ref() != family;
+            if font_changed {
+                self.font_family = family.into();
+            }
             if let Some(pane) = pane {
                 self.agent = pane.agent;
+                font_changed |= self.font_size != pane.font_size;
                 self.font_size = pane.font_size;
             }
-            self.font_family = mono_family(&deck.settings.font_family).into();
-            pane.map(|p| p.generation)
+            (pane.map(|p| p.generation), font_changed)
         };
         if generation.is_some() {
             if self.generation.is_some() && generation != self.generation {
@@ -552,6 +574,7 @@ impl TerminalView {
             }
             self.generation = generation;
         }
+        font_changed
     }
 
     /// Finds the deck (main window root when unset) and starts the terminal on first render.
@@ -571,33 +594,39 @@ impl TerminalView {
         }
     }
 
-    /// Replays the output buffered before this view existed, then pumps live output, blinks the
-    /// cursor and follows the deck.
-    fn start(&mut self, deck: &Entity<Deck>, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(output) = self.output.take() {
-            // Live chunks already queued may also be in the runtime's buffer: the gate drops the overlap.
-            let mut gate = ReplayGate::new();
-            while let Ok(chunk) = output.try_recv() {
-                gate.output(&chunk);
-            }
-            let replay = runtime::pane_output_text(&self.pane_id, cx);
-            if let Some((old, held)) = gate.replay(&replay) {
-                self.feed(&old, true, cx);
-                for chunk in held {
-                    self.feed(&chunk, false, cx);
-                }
-            }
-            self.tasks.push(cx.spawn(async move |this, cx| {
-                while let Ok(mut chunk) = output.recv().await {
-                    while let Ok(more) = output.try_recv() {
-                        chunk.push_str(&more);
-                    }
-                    if this.update(cx, |view, cx| view.feed(&chunk, false, cx)).is_err() {
-                        break;
-                    }
-                }
-            }));
+    /// Replays the output buffered before this view existed, then pumps live output into the grid.
+    /// It needs no window: called when the view is created, a pane that is never shown parses its
+    /// output as it comes instead of queueing it all. Later calls do nothing.
+    pub fn start_output(&mut self, cx: &mut Context<Self>) {
+        let Some(output) = self.output.take() else { return };
+        // Live chunks already queued may also be in the runtime's buffer: the gate drops the overlap.
+        let mut gate = ReplayGate::new();
+        while let Ok(chunk) = output.try_recv() {
+            gate.output(&chunk);
         }
+        let replay = runtime::pane_output_text(&self.pane_id, cx);
+        if let Some((old, held)) = gate.replay(&replay) {
+            self.feed(&old, true, cx);
+            for chunk in held {
+                self.feed(&chunk, false, cx);
+            }
+        }
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            while let Ok(mut chunk) = output.recv().await {
+                while let Ok(more) = output.try_recv() {
+                    chunk.push_str(&more);
+                }
+                if this.update(cx, |view, cx| view.feed(&chunk, false, cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Starts the output (unless the owner already did), blinks the cursor and follows the deck.
+    fn start(&mut self, deck: &Entity<Deck>, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_output(cx);
+        search::bind_keys(cx);
         self.tasks.push(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(BLINK_MS)).await;
@@ -636,8 +665,9 @@ impl TerminalView {
         self.subscriptions.push(cx.observe_global::<crate::theme::AppTheme>(|_, cx| cx.notify()));
         // Checked on every deck change, before the restarted process prints.
         self.subscriptions.push(cx.observe(deck, |view, deck, cx| {
-            view.read_pane(&deck, cx);
-            cx.notify();
+            if view.read_pane(&deck, cx) {
+                cx.notify();
+            }
         }));
     }
 }
@@ -693,6 +723,7 @@ impl Render for TerminalView {
             .id(SharedString::from(format!("terminal-{}", self.pane_id)))
             .key_context("Terminal")
             .track_focus(&focus)
+            .relative()
             .size_full()
             .min_h_0()
             .overflow_hidden()
@@ -700,6 +731,7 @@ impl Render for TerminalView {
             .bg(hsla(p.base))
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(Self::open_search))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down))
@@ -717,6 +749,7 @@ impl Render for TerminalView {
                 view.paste_paths(&paths, window, cx);
             }))
             .child(element::terminal_canvas(cx.entity(), PAD_LEFT, PAD_Y))
+            .children(self.render_search(cx))
     }
 }
 

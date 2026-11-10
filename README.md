@@ -46,10 +46,14 @@ starts instantly and stays light on memory.
   (ntfy or any webhook)
 - Daily and per-agent cost limits that warn you, and can stop the agents
 - Token and cost estimates per agent, terminal history with search, a daily journal you can export
+- Claude subagents shown per pane: how many run, what each one is doing
+- Find in a terminal's scrollback (Ctrl+Shift+F)
 
 **Workspaces and sessions**
 - Link a folder, a git repo or a project already open in VS Code / Cursor / Explorer
 - Several sessions per workspace, archived and reopened with their layout
+- Race: the same prompt to 2 to 4 fresh agents, one worktree each, then keep the best result
+- A setup command run once in each new agent worktree (install dependencies...)
 - Session templates, a prompt queue per agent, broadcast one prompt to many agents, send one agent's
   result to another
 - Git panel: diff, commit, merge a worktree back or open a pull request (GitHub CLI), resolve merge conflicts
