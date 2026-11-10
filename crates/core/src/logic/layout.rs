@@ -27,7 +27,7 @@ pub fn forwards_input(in_detached_window: bool, pane_detached: bool) -> bool {
 }
 
 /// Orders scrollback replay before live output: live chunks received before the replay are held,
-/// then written after it, minus the leading chunks the replay already contains.
+/// then written after the part of the replay they are not already in.
 #[derive(Debug, Default)]
 pub struct ReplayGate {
     pending: Option<Vec<String>>,
@@ -51,22 +51,18 @@ impl ReplayGate {
         }
     }
 
-    /// The scrollback: returns what to write, in order. A second replay is ignored.
-    pub fn replay(&mut self, text: &str) -> Vec<String> {
-        let Some(pending) = self.pending.take() else {
-            return Vec::new();
-        };
+    /// The scrollback: returns the output older than this gate (its terminal queries were asked
+    /// before the view existed) and the chunks the gate held, which are new to it and must be
+    /// answered (ConPTY's startup `ESC[6n` blocks the agent until it is). A second replay is ignored.
+    pub fn replay(&mut self, text: &str) -> Option<(String, Vec<String>)> {
+        let pending = self.pending.take()?;
         // Overlap is detected by suffix match, so a repeated chunk (spinner frame) may be dropped once.
-        let mut skip = pending.len();
-        while skip > 0 && !text.ends_with(&pending[..skip].concat()) {
-            skip -= 1;
+        let mut overlap = pending.len();
+        while overlap > 0 && !text.ends_with(&pending[..overlap].concat()) {
+            overlap -= 1;
         }
-        let mut out = Vec::new();
-        if !text.is_empty() {
-            out.push(text.to_owned());
-        }
-        out.extend(pending.into_iter().skip(skip));
-        out
+        let old = &text[..text.len() - pending[..overlap].concat().len()];
+        Some((old.to_owned(), pending))
     }
 }
 
@@ -97,20 +93,22 @@ mod tests {
 
     #[test]
     fn replay_gate() {
+        let own = |old: &str, new: &[&str]| Some((old.to_owned(), new.iter().map(|s| s.to_string()).collect()));
         let mut g = ReplayGate::new();
         assert!(g.output("c").is_none());
-        assert_eq!(g.replay("ab").concat(), "abc");
+        assert_eq!(g.replay("ab"), own("ab", &["c"]));
         assert_eq!(g.output("d").as_deref(), Some("d"));
 
+        // Held chunks already in the scrollback come back as new, not as old replay.
         let mut g = ReplayGate::new();
         g.output("c");
         g.output("d");
-        assert_eq!(g.replay("abc").concat(), "abcd");
+        assert_eq!(g.replay("abc"), own("ab", &["c", "d"]));
 
         let mut g = ReplayGate::new();
-        g.output("x");
-        assert_eq!(g.replay(""), ["x"]);
-        assert!(g.replay("late").is_empty());
+        g.output("\x1b[6n");
+        assert_eq!(g.replay("\x1b[6n"), own("", &["\x1b[6n"]));
+        assert!(g.replay("late").is_none());
     }
 
     #[test]

@@ -95,7 +95,14 @@ impl Watch {
         let Some(pane) = d.state.panes.get(&e.pane_id) else {
             return;
         };
-        let (agent, title) = (agent_name(pane.agent), pane.title.clone());
+        let (agent, mut title) = (agent_name(pane.agent), pane.title.clone());
+        // Several agents share a title ("Claude"): the workspace says which one it is.
+        let workspace = d.state.tabs.iter().find(|t| t.pane_ids.contains(&e.pane_id)).and_then(|t| {
+            d.state.workspaces.iter().find(|w| w.id == t.workspace_id)
+        });
+        if let Some(ws) = workspace {
+            title = format!("{} · {title}", ws.name);
+        }
         let unseen = !focused || d.state.active_pane_id.as_deref() != Some(&e.pane_id);
         let settings = d.settings.clone();
 
@@ -168,8 +175,10 @@ impl Watch {
             let agent = agent_name(pane.agent);
             let mut due = None;
             if pane.status == PaneStatus::Working && stuck > 0 && count == 0 {
+                // A long command or a big write sends no hook for minutes: only silence on both counts is stuck.
                 let last_hook = self.last_hook_at.get(&pane.id).copied().unwrap_or(0);
-                if now - last_hook.max(pane.status_since) > stuck * 60_000 {
+                let last_output = crate::panes::runtime::pane_last_output_at(&pane.id, cx);
+                if now - last_hook.max(last_output).max(pane.status_since) > stuck * 60_000 {
                     due = Some(format!("{agent} looks stuck ({stuck} min without progress)"));
                 }
             } else if pane.status == PaneStatus::Waiting && remind > 0 && d.settings.notify.waiting {

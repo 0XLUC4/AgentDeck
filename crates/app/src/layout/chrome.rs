@@ -4,7 +4,7 @@
 
 use agentdeck_core::agents::AgentKind;
 use agentdeck_core::hooks_server::PaneStatus;
-use agentdeck_core::logic::deck::{ActivityKey, activity_key, can_archive};
+use agentdeck_core::logic::deck::{ActivityKey, activity_key, can_archive, session_status};
 use agentdeck_core::logic::text::{AGENT_KINDS, agent_name, now_ms, split_args};
 use agentdeck_core::logic::theme::Palette;
 use gpui_kit::assets::IconName;
@@ -15,7 +15,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::DeckView;
-use crate::panes::{agent_logo, last_agent, runtime, spawn_agent};
+use crate::panes::{agent_logo, last_agent, runtime, spawn_agent, status_badge};
 use crate::theme::{hsla, palette, ui};
 
 /// Amber count of agents waiting: a true circle for one digit, a pill for more, number centered.
@@ -784,6 +784,10 @@ impl DeckView {
                 .filter(|k| **k == ActivityKey::Status(PaneStatus::Waiting))
                 .count();
             let failed = keys.contains(&ActivityKey::Status(PaneStatus::Error));
+            // Green once every agent stopped and one finished unseen; blue while any still runs.
+            let ws_pane_ids: Vec<String> = tabs.iter().flat_map(|t| t.pane_ids.iter().cloned()).collect();
+            let ws_status = session_status(&ws_pane_ids, &deck.state.panes)
+                .filter(|s| matches!(s, PaneStatus::Working | PaneStatus::Done));
             let (toggle_id, select_id, new_id) = (ws.id.clone(), ws.id.clone(), ws.id.clone());
             let ws_group: SharedString = format!("ws-row-{}", ws.id).into();
             let rename_key = format!("ws:{}", ws.id);
@@ -877,6 +881,9 @@ impl DeckView {
                             el.child(waiting_badge(waiting, &p))
                         })
                         .when(failed, |el| el.child(div().size(ui(8.0)).rounded_full().bg(hsla(p.bad))))
+                        .when_some(ws_status, |el, status| {
+                            el.child(status_badge(&format!("ws-{}", ws.id), status, &p))
+                        })
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                             let id = select_id.clone();
                             if e.click_count() == 2 {
@@ -1003,6 +1010,10 @@ impl DeckView {
                                 el.text_color(hsla(p.muted)).hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
                             })
                             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(tab.name.clone()))
+                            .when_some(
+                                session_status(&tab.pane_ids, &deck.state.panes).filter(|s| *s != PaneStatus::Idle),
+                                |el, status| el.child(status_badge(&format!("tab-{}", tab.id), status, &p)),
+                            )
                             .when(!tab.pane_ids.is_empty(), |el| {
                                 el.child(
                                     div()
