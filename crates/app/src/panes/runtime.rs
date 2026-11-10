@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::Duration;
 
-use agentdeck_core::hooks_server::{AgentStatusEvent, PaneStatus, Subagent};
+use agentdeck_core::hooks_server::{AgentStatusEvent, PaneStatus, Step, Subagent};
 use agentdeck_core::logic::deck::{Pane, PaneSpec, new_pane};
 use agentdeck_core::logic::queue::{SUBMIT_DELAY_MS, prompt_text};
 use agentdeck_core::logic::ring_buffer::RingBuffer;
@@ -89,6 +89,8 @@ struct Runtimes {
     rate_limit_retries: HashSet<String>,
     /// Claude subagents running inside each pane (`agent-subagents`); panes without any have no entry.
     subagents: HashMap<String, Vec<Subagent>>,
+    /// Plan of each Claude pane (`agent-steps`); panes without any have no entry.
+    steps: HashMap<String, Vec<Step>>,
     /// Pane the backend routes voice input to.
     backend_active: Option<String>,
     save_pending: bool,
@@ -261,6 +263,16 @@ fn on_backend(event: &Event, cx: &mut App) {
                     rts(cx).subagents.remove(id);
                 } else {
                     rts(cx).subagents.insert(id.to_owned(), list);
+                }
+            }
+        }
+        "agent-steps" => {
+            let list = serde_json::from_value::<Vec<Step>>(event.payload["steps"].clone());
+            if let (Some(id), Ok(list)) = (event.payload["paneId"].as_str(), list) {
+                if list.is_empty() || !rts(cx).map.contains_key(id) {
+                    rts(cx).steps.remove(id);
+                } else {
+                    rts(cx).steps.insert(id.to_owned(), list);
                 }
             }
         }
@@ -632,9 +644,11 @@ pub fn restart_pane(id: &str, cx: &mut App) {
             rt.restarting = false;
             lock(&rt.output).buffer.clear();
             rts(cx).subagents.remove(&id);
+            rts(cx).steps.remove(&id);
             agentdeck_core::mcp::STATUS.set(&id, PaneStatus::Idle); // forget the old run's "done"
             let now = now_ms();
             update_pane(&id, cx, |p| {
+                p.topic = None;
                 p.status = PaneStatus::Idle;
                 p.last_action = None;
                 p.task_started_at = None;
@@ -657,6 +671,7 @@ pub fn close_pane(id: &str, cx: &mut App) {
     r.editors.retain(|_, e| e.pane_id != id);
     r.rate_limit_retries.remove(id);
     r.subagents.remove(id);
+    r.steps.remove(id);
     let was_active = r.backend_active.as_deref() == Some(id);
     if was_active {
         r.backend_active = None;
@@ -1001,6 +1016,21 @@ pub fn pane_subagents(id: &str, cx: &App) -> Vec<Subagent> {
     cx.try_global::<Runtimes>()
         .and_then(|r| r.subagents.get(id).cloned())
         .unwrap_or_default()
+}
+
+/// Plan of the pane: its task list, else the subagents it launched.
+pub fn pane_steps(id: &str, cx: &App) -> Vec<Step> {
+    cx.try_global::<Runtimes>()
+        .and_then(|r| r.steps.get(id).cloned())
+        .unwrap_or_default()
+}
+
+/// Terminal title of a pane: Claude Code names the conversation there, other agents show actions.
+pub fn set_topic(id: &str, title: &str, cx: &mut App) {
+    let Some(topic) = agentdeck_core::logic::text::topic(title) else { return };
+    if pane(id, cx).is_some_and(|p| p.agent == AgentKind::Claude && p.topic.as_deref() != Some(topic.as_str())) {
+        update_pane(id, cx, |p| p.topic = Some(topic));
+    }
 }
 
 /// Last hook event time of a pane (for stuck watchers).

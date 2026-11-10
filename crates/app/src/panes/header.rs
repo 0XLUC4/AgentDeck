@@ -40,10 +40,12 @@ pub enum PaneHeaderEvent {
     CloseBrowser,
 }
 
-/// Title shown for a pane: older panes were named after their folder, show the agent instead.
+/// Title shown for a pane: the name the user gave it, else the subject of its conversation, else
+/// the agent (older panes were named after their folder).
 pub fn display_title(pane: &Pane) -> String {
-    if pane.title.is_empty() || pane.title == folder_name(&pane.cwd) {
-        agent_name(pane.agent).to_owned()
+    let agent = agent_name(pane.agent);
+    if pane.title.is_empty() || pane.title == agent || pane.title == folder_name(&pane.cwd) {
+        pane.topic.clone().unwrap_or_else(|| agent.to_owned())
     } else {
         pane.title.clone()
     }
@@ -480,8 +482,7 @@ impl Render for PaneHeader {
                         .min_w_0()
                         .truncate()
                         .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(hsla(p.fg))
+                        .text_color(hsla(p.muted))
                         .when_some(full_action, |el, full| {
                             el.tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
                         })

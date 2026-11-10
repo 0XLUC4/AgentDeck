@@ -24,7 +24,7 @@ use gpui_kit::*;
 
 // Public surface for layout and the feature modules; not every item is wired yet.
 #[allow(unused_imports)]
-pub use frame::{VoiceGlow, exit_bar, pane_border, pane_frame, pane_overlays, working_outline};
+pub use frame::{VoiceGlow, exit_bar, pane_border, pane_frame, pane_overlays, steps_bar, working_outline};
 #[allow(unused_imports)]
 pub use header::{PANE_COLORS, PaneHeader, PaneHeaderEvent, confirm_close, display_title};
 #[allow(unused_imports)]

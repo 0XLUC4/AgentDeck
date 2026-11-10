@@ -91,6 +91,8 @@ pub struct Pane {
     pub spec: PaneSpec,
     pub status: PaneStatus,
     pub last_action: Option<String>,
+    /// Subject of the conversation (`text::topic`), shown as the title until the user names the pane.
+    pub topic: Option<String>,
     pub task_started_at: Option<i64>,
     /// When `status` (or `exited`) last changed.
     pub status_since: i64,
@@ -128,6 +130,7 @@ pub fn new_pane(mut spec: PaneSpec, now: i64) -> Pane {
         spec,
         status: PaneStatus::Idle,
         last_action: None,
+        topic: None,
         task_started_at: None,
         status_since: now,
         exited: false,

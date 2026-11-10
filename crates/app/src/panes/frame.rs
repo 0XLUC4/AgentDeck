@@ -5,13 +5,14 @@
 use std::time::Duration;
 
 use agentdeck_core::agents::AgentKind;
-use agentdeck_core::hooks_server::PaneStatus;
+use agentdeck_core::hooks_server::{PaneStatus, StepState};
 use agentdeck_core::logic::deck::Pane;
 use agentdeck_core::logic::text::now_ms;
-use agentdeck_core::logic::theme::{Palette, RADIUS_XL};
+use agentdeck_core::logic::theme::{FONT_MONO, Palette, RADIUS_XL};
 use agentdeck_core::Event;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -292,6 +293,54 @@ pub fn exit_bar(pane_id: &str, p: &Palette) -> Div {
         )
 }
 
+/// Plan of the pane, under its header: "3/7", one dot per step (green done, blue running, gray to
+/// do, red when the agent stopped on it), then the running step. The tooltip lists every step.
+pub fn steps_bar(pane: &Pane, cx: &App) -> Option<Stateful<Div>> {
+    let steps = runtime::pane_steps(&pane.id, cx);
+    if steps.is_empty() {
+        return None;
+    }
+    let p = palette(cx);
+    let stopped = pane.exited || pane.status == PaneStatus::Error;
+    let color = move |state: StepState| match state {
+        StepState::Done => p.ok,
+        StepState::Active if stopped => p.bad,
+        StepState::Active => p.busy,
+        StepState::Pending => p.subtle,
+    };
+    let dot = move |state: StepState| div().flex_shrink_0().size(ui(6.0)).rounded_full().bg(hsla(color(state)));
+    let done = steps.iter().filter(|s| s.state == StepState::Done).count();
+    let current = steps.iter().find(|s| s.state == StepState::Active).map(|s| s.label.clone());
+    let dots: Vec<Div> = steps.iter().map(|s| dot(s.state)).collect();
+    let total = steps.len();
+    Some(
+        div()
+            .id(SharedString::from(format!("pane-steps-{}", pane.id)))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .h(ui(22.0))
+            .px(ui(10.0))
+            .border_b_1()
+            .border_color(hsla(p.line))
+            .text_xs()
+            .text_color(hsla(p.muted))
+            .tooltip(move |window, cx| {
+                let steps = steps.clone();
+                Tooltip::element(move |_, _| {
+                    div().flex().flex_col().gap_1().children(
+                        steps.iter().map(|s| div().flex().items_center().gap_2().child(dot(s.state)).child(s.label.clone())),
+                    )
+                })
+                .build(window, cx)
+            })
+            .child(div().flex_shrink_0().font_family(FONT_MONO).child(format!("{done}/{total}")))
+            .child(div().flex().min_w_0().items_center().gap(ui(3.0)).overflow_hidden().children(dots))
+            .children(current.map(|label| div().flex_1().min_w_0().truncate().child(label))),
+    )
+}
+
 /// The whole pane box: rounded 14 px, amber border while waiting, header on top, then the body
 /// (terminal), the exit bar when the process is gone, and the overlays. Mouse down focuses the pane.
 pub fn pane_frame(pane: &Pane, deck: &Deck, header: impl IntoElement, body: impl IntoElement, cx: &App) -> Stateful<Div> {
@@ -323,6 +372,7 @@ pub fn pane_frame(pane: &Pane, deck: &Deck, header: impl IntoElement, body: impl
         })
         .on_mouse_down(MouseButton::Left, move |_, _, cx| runtime::focus_pane(&id, cx))
         .child(div().flex_shrink_0().h(ui(30.0)).border_b_1().border_color(hsla(p.line)).child(header))
+        .children(steps_bar(pane, cx))
         .child(div().relative().flex_1().min_h_0().child(body))
         .when(pane.exited, |el| el.child(exit_bar(&pane.id, &p)))
         .children(pane_overlays(pane, deck, cx))

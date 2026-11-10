@@ -113,6 +113,9 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
     }
     PENDING.cancel_stale(&hook.pane_id, &hook.json);
     let (running, changed) = track_subagents(&hook.pane_id, &hook.json, crate::logic::text::now_ms());
+    if let Some(steps) = track_steps(&hook.pane_id, &hook.json, changed.as_deref()) {
+        let _ = app.emit("agent-steps", json!({ "paneId": hook.pane_id, "steps": steps }));
+    }
     if let Some(subagents) = changed {
         let _ = app.emit(
             "agent-subagents",
@@ -269,6 +272,117 @@ fn track_subagents(pane_id: &str, body: &Value, now: i64) -> (usize, Option<Vec<
         map.remove(pane_id);
     }
     (running, changed)
+}
+
+/// One step of the plan a Claude pane works through (`agent-steps` event: `{ paneId, steps }`):
+/// an entry of its task list, or a subagent it launched when it keeps no list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Step {
+    pub id: String,
+    pub label: String,
+    pub state: StepState,
+    /// A subagent, not an entry of the task list.
+    pub agent: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepState {
+    Pending,
+    Active,
+    Done,
+}
+
+const MAX_STEPS: usize = 60;
+
+static STEPS: LazyLock<Mutex<HashMap<String, Vec<Step>>>> = LazyLock::new(Default::default);
+
+fn task_step(id: String, label: &Value, status: Option<&str>) -> Step {
+    let state = match status {
+        Some("completed") => StepState::Done,
+        Some("in_progress") => StepState::Active,
+        _ => StepState::Pending,
+    };
+    Step { id, label: truncate(label.as_str().unwrap_or("").trim(), 80), state, agent: false }
+}
+
+/// Id Claude gave a task it just created: `{task: {id}}`, else the "#3" of its text answer.
+fn created_task_id(response: &Value) -> Option<String> {
+    match &response["task"]["id"] {
+        Value::String(id) => Some(id.clone()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => {
+            let text = response.to_string();
+            let digits: String = text.split_once('#')?.1.chars().take_while(char::is_ascii_digit).collect();
+            (!digits.is_empty()).then_some(digits)
+        }
+    }
+}
+
+/// The task list when Claude keeps one, else the subagents it launched.
+fn shown_steps(steps: &[Step]) -> Vec<Step> {
+    let tasks = steps.iter().any(|s| !s.agent);
+    steps.iter().filter(|s| !tasks || !s.agent).cloned().collect()
+}
+
+/// Records what a hook says about the pane's plan; the new step list when it changed.
+/// `running`: the pane's subagents, when this hook changed them.
+fn track_steps(pane_id: &str, body: &Value, running: Option<&[Subagent]>) -> Option<Vec<Step>> {
+    let mut map = STEPS.lock().unwrap_or_else(PoisonError::into_inner);
+    let steps = map.entry(pane_id.to_owned()).or_default();
+    let before = shown_steps(steps);
+    if let Some(running) = running {
+        for step in steps.iter_mut().filter(|s| s.agent && s.state == StepState::Active) {
+            if !running.iter().any(|sub| sub.agent_id == step.id) {
+                step.state = StepState::Done;
+            }
+        }
+        for sub in running {
+            if !steps.iter().any(|s| s.agent && s.id == sub.agent_id) {
+                steps.push(Step { id: sub.agent_id.clone(), label: sub.label.clone(), state: StepState::Active, agent: true });
+            }
+        }
+    }
+    let input = &body["tool_input"];
+    // Subagents keep their own lists: only the main agent's plan is shown.
+    let main = body["agent_id"].as_str().is_none_or(str::is_empty);
+    match (body["hook_event_name"].as_str().unwrap_or(""), body["tool_name"].as_str().unwrap_or("")) {
+        ("SessionStart", _) => steps.clear(),
+        // A new request once everything is done: the old plan is history.
+        ("UserPromptSubmit", _) if steps.iter().all(|s| s.state == StepState::Done) => steps.clear(),
+        ("PostToolUse", "TodoWrite") if main => {
+            steps.retain(|s| s.agent);
+            let todos = input["todos"].as_array().map(Vec::as_slice).unwrap_or_default();
+            steps.extend(todos.iter().enumerate().map(|(i, t)| task_step(i.to_string(), &t["content"], t["status"].as_str())));
+        }
+        ("PostToolUse", "TaskCreate") if main => {
+            // shortcut: without an id in the answer, tasks are numbered in creation order like Claude does.
+            let id = created_task_id(&body["tool_response"])
+                .unwrap_or_else(|| (steps.iter().filter(|s| !s.agent).count() + 1).to_string());
+            steps.push(task_step(id, &input["subject"], None));
+        }
+        ("PostToolUse", "TaskUpdate") if main => {
+            let is_task = |s: &Step| !s.agent && Some(s.id.as_str()) == input["taskId"].as_str();
+            if input["status"] == "deleted" {
+                steps.retain(|s| !is_task(s));
+            } else if let Some(step) = steps.iter_mut().find(|s| is_task(s)) {
+                if let Some(status) = input["status"].as_str() {
+                    step.state = task_step(String::new(), &Value::Null, Some(status)).state;
+                }
+                if let Some(subject) = input["subject"].as_str() {
+                    step.label = truncate(subject.trim(), 80);
+                }
+            }
+        }
+        _ => {}
+    }
+    steps.truncate(MAX_STEPS);
+    let after = shown_steps(steps);
+    if steps.is_empty() {
+        map.remove(pane_id);
+    }
+    (after != before).then_some(after)
 }
 
 #[cfg(test)]
@@ -554,6 +668,42 @@ fn describe_tool(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracks_steps() {
+        use StepState::{Active, Done, Pending};
+        let pane = "steps-pane";
+        let states = |steps: Option<Vec<Step>>| steps.map(|s| s.iter().map(|s| s.state).collect::<Vec<_>>());
+        let post = |tool: &str, input: Value, response: Value| {
+            json!({"hook_event_name": "PostToolUse", "tool_name": tool, "tool_input": input, "tool_response": response})
+        };
+        // No list yet: a launched subagent is the step, done when it stops.
+        let sub = Subagent { agent_id: "a1".into(), agent_type: "Explore".into(), label: "Find it".into(), started_at: 0, last_action: None };
+        assert_eq!(states(track_steps(pane, &json!({}), Some(&[sub]))), Some(vec![Active]));
+        assert_eq!(states(track_steps(pane, &json!({}), Some(&[]))), Some(vec![Done]));
+        // A task list replaces the subagents; ids come from the answer, object or text.
+        let created = track_steps(pane, &post("TaskCreate", json!({"subject": "Parse"}), json!({"task": {"id": "7"}})), None);
+        assert_eq!(created.map(|s| (s.len(), s[0].label.clone())), Some((1, "Parse".to_owned())));
+        track_steps(pane, &post("TaskCreate", json!({"subject": "Test"}), json!("Task #8 created successfully")), None);
+        let update = |id: &str, status: &str| post("TaskUpdate", json!({"taskId": id, "status": status}), json!({}));
+        assert_eq!(states(track_steps(pane, &update("7", "completed"), None)), Some(vec![Done, Pending]));
+        assert_eq!(states(track_steps(pane, &update("8", "in_progress"), None)), Some(vec![Done, Active]));
+        // A subagent's own tasks and unknown ids change nothing.
+        let mut inner = update("8", "completed");
+        inner["agent_id"] = json!("a1");
+        assert_eq!(track_steps(pane, &inner, None), None);
+        assert_eq!(track_steps(pane, &update("99", "completed"), None), None);
+        // An unfinished plan survives the next prompt, a finished one does not.
+        let prompt = json!({"hook_event_name": "UserPromptSubmit"});
+        assert_eq!(track_steps(pane, &prompt, None), None);
+        track_steps(pane, &update("8", "completed"), None);
+        assert_eq!(track_steps(pane, &prompt, None), Some(vec![]));
+        // TodoWrite carries the whole list.
+        let todos = json!({"todos": [{"content": "A", "status": "completed"}, {"content": "B", "status": "pending"}]});
+        assert_eq!(states(track_steps(pane, &post("TodoWrite", todos, json!({})), None)), Some(vec![Done, Pending]));
+        track_steps(pane, &json!({"hook_event_name": "SessionStart"}), None);
+        assert!(!STEPS.lock().unwrap().contains_key(pane));
+    }
 
     #[test]
     fn session_id_and_edited_file() {
