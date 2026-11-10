@@ -48,7 +48,8 @@ starts instantly and stays light on memory.
 - Token and cost estimates per agent, terminal history with search, a daily journal you can export
 - Claude subagents shown per pane: how many run, what each one is doing
 - Plan under the pane header: steps done out of total, one colored dot per step
-- Pane title follows the subject of the Claude conversation
+- Subject of the Claude conversation next to the agent name, with a status pill (Working, Done, Waiting, Error)
+- Notes page per workspace: graph of links or list, with a Markdown reader; Assets opens as a page too
 - Find in a terminal's scrollback (Ctrl+Shift+F)
 
 **Workspaces and sessions**

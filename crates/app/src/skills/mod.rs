@@ -3,7 +3,8 @@
 //! Original: src/components/{Skills,Graph,Assets}. Backend: agentdeck_core::{skills,notes_graph,assets}.
 //!
 //! Dialogs do not need gpui-component's `Root`: the open one is kept in a global and drawn by
-//! [`overlay`], which the root view renders as its last child.
+//! [`overlay`], which the root view renders as its last child. Assets and the notes graph are
+//! pages: [`page`] gives the open one to the root view, which shows it in place of the panes.
 
 mod agent_dialog;
 mod assets;
@@ -36,6 +37,7 @@ const DIALOG_CONTEXT: &str = "SkillsDialog";
 /// Registers this module's key bindings and globals. Called once from `main`.
 pub fn init(cx: &mut App) {
     cx.set_global(OpenDialog(None));
+    cx.set_global(OpenPage(None));
     cx.bind_keys([
         KeyBinding::new("ctrl-s", SaveAgentFile, Some(EDITOR_CONTEXT)),
         KeyBinding::new("escape", CloseSkillsDialog, Some(DIALOG_CONTEXT)),
@@ -58,6 +60,28 @@ pub fn overlay(cx: &App) -> Option<AnyElement> {
     )
 }
 
+/// The page shown in place of the panes, and the session it was opened from.
+struct OpenPage(Option<(AnyView, String)>);
+
+impl Global for OpenPage {}
+
+/// The open page (assets, notes graph), to draw over the pane area. Switching session closes it.
+pub fn page(active_tab: &str, cx: &mut App) -> Option<AnyView> {
+    let (view, tab) = cx.try_global::<OpenPage>()?.0.clone()?;
+    if tab != active_tab {
+        cx.set_global(OpenPage(None));
+        return None;
+    }
+    Some(view)
+}
+
+fn show_page(deck: &Entity<Deck>, view: AnyView, focus: FocusHandle, window: &mut Window, cx: &mut App) {
+    let tab = deck.read(cx).state.active_tab_id.clone();
+    cx.set_global(OpenPage(Some((view, tab))));
+    focus.focus(window, cx);
+    window.refresh();
+}
+
 fn show(view: AnyView, focus: FocusHandle, window: &mut Window, cx: &mut App) {
     cx.set_global(OpenDialog(Some(view)));
     focus.focus(window, cx);
@@ -67,6 +91,13 @@ fn show(view: AnyView, focus: FocusHandle, window: &mut Window, cx: &mut App) {
 /// Closes the open dialog of this module (if any).
 /// Closes the open dialog; asks first when the notes editor has unsaved changes (Esc, X).
 pub fn close(window: &mut Window, cx: &mut App) {
+    // A dialog is above the page: it closes first.
+    let dialog = cx.try_global::<OpenDialog>().is_some_and(|open| open.0.is_some());
+    if !dialog {
+        cx.set_global(OpenPage(None));
+        window.refresh();
+        return;
+    }
     let unsaved = cx
         .try_global::<OpenDialog>()
         .and_then(|open| open.0.clone())
@@ -116,16 +147,16 @@ fn open_agent_dialog(
 
 /// Opens the 3D assets browser of a workspace (sidebar button).
 pub fn open_assets(deck: Entity<Deck>, workspace_id: &str, window: &mut Window, cx: &mut App) {
-    let view = cx.new(|cx| AssetsDialog::new(deck, workspace_id.to_string(), window, cx));
+    let view = cx.new(|cx| AssetsDialog::new(deck.clone(), workspace_id.to_string(), window, cx));
     let focus = view.read(cx).focus.clone();
-    show(view.into(), focus, window, cx);
+    show_page(&deck, view.into(), focus, window, cx);
 }
 
 /// Opens the notes graph of a workspace (sidebar button).
 pub fn open_graph(deck: Entity<Deck>, workspace_id: &str, window: &mut Window, cx: &mut App) {
-    let view = cx.new(|cx| GraphDialog::new(deck, workspace_id.to_string(), cx));
+    let view = cx.new(|cx| GraphDialog::new(deck.clone(), workspace_id.to_string(), cx));
     let focus = view.read(cx).focus.clone();
-    show(view.into(), focus, window, cx);
+    show_page(&deck, view.into(), focus, window, cx);
 }
 
 /// Pane header button (agent panes) opening the skills manager.
@@ -171,6 +202,34 @@ fn modal_frame(focus: &FocusHandle, width: f32, panel: Div, cx: &App) -> Statefu
                 .flex()
                 .flex_col()
                 .rounded(ui(agentdeck_core::logic::theme::RADIUS_LG))
+                .border_1()
+                .border_color(hsla(p.line))
+                .bg(hsla(p.panel))
+                .text_color(hsla(p.fg))
+                .text_size(ui(13.0))
+                .font_family(agentdeck_core::logic::theme::FONT_SANS)
+                .overflow_hidden(),
+        )
+}
+
+/// A page filling the pane area (assets, notes graph): same shell as a dialog, no backdrop.
+/// Esc and the close button go back to the panes.
+fn page_frame(focus: &FocusHandle, panel: Div, cx: &App) -> Stateful<Div> {
+    let p = palette(cx);
+    div()
+        .id("skills-page")
+        .track_focus(focus)
+        .key_context(DIALOG_CONTEXT)
+        .on_action(|_: &CloseSkillsDialog, window, cx| close(window, cx))
+        .size_full()
+        .p(ui(6.0))
+        .occlude()
+        .child(
+            panel
+                .size_full()
+                .flex()
+                .flex_col()
+                .rounded(ui(agentdeck_core::logic::theme::RADIUS_XL))
                 .border_1()
                 .border_color(hsla(p.line))
                 .bg(hsla(p.panel))

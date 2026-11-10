@@ -93,7 +93,19 @@ pub fn quit_for_update(exe: &std::path::Path, cx: &mut App) -> Result<(), String
         .arg(super::instance::AFTER_UPDATE)
         .spawn()
         .map_err(|e| format!("cannot restart AgentDeck: {e}"))?;
-    std::process::exit(0);
+    exit_now()
+}
+
+/// Ends the process at once, without exit handlers: one that hangs (audio, GPU, model teardown)
+/// keeps the single-instance port, and the restarted exe gives up waiting for it.
+fn exit_now() -> ! {
+    #[cfg(windows)]
+    // SAFETY: ends the current process; nothing runs after.
+    unsafe {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+    std::process::exit(0)
 }
 
 fn stop_agents(cx: &mut App) {

@@ -675,7 +675,8 @@ impl Render for DeckView {
             .is_none_or(|t| t.pane_ids.is_empty());
         let wall = crate::orchestrator::wall_overlay(&self.deck, cx);
         // The wall covers the whole pane area: no dock (terminals) behind it.
-        let dock = wall.is_none().then(|| self.render_dock(&active_tab, window, cx));
+        let page = crate::skills::page(&active_tab, cx);
+        let dock = (wall.is_none() && page.is_none()).then(|| self.render_dock(&active_tab, window, cx));
         let pane_area = div()
             .relative()
             .flex()
@@ -683,8 +684,9 @@ impl Render for DeckView {
             .min_h_0()
             .p(ui(6.0))
             .children(dock)
-            .when(empty, |el| el.child(self.empty_session(cx)))
-            .when_some(wall, |el, wall| el.child(div().absolute().inset_0().child(wall)));
+            .when(empty && page.is_none(), |el| el.child(self.empty_session(cx)))
+            .when_some(wall, |el, wall| el.child(div().absolute().inset_0().child(wall)))
+            .when_some(page, |el, page| el.child(div().absolute().inset_0().child(page)));
         let main = div()
             .flex()
             .flex_col()
