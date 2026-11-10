@@ -54,6 +54,8 @@ enum Reply {
     Clipboard(String),
     /// OSC 4/10/11/12 query, answered in `feed` with the current theme.
     Color(usize, ColorFormat),
+    /// OSC 0/2 window title: state, not an answer, so a replay applies it too.
+    Title(String),
 }
 
 type ColorFormat = std::sync::Arc<dyn Fn(alacritty_terminal::vte::ansi::Rgb) -> String + Sync + Send>;
@@ -68,6 +70,7 @@ impl EventListener for Listener {
             // OSC 4/10/11/12 queries: TUIs ask for the palette and background before choosing colors.
             AlacEvent::ColorRequest(index, format) => Reply::Color(index, format),
             AlacEvent::ClipboardStore(_, text) => Reply::Clipboard(text),
+            AlacEvent::Title(title) => Reply::Title(title),
             _ => return,
         };
         self.0.borrow_mut().push(reply);
@@ -189,10 +192,14 @@ impl TerminalView {
         }
         let replies = std::mem::take(&mut *self.replies.0.borrow_mut());
         for reply in replies {
+            if let Reply::Title(title) = &reply {
+                crate::panes::runtime::set_topic(&self.pane_id, title, cx);
+            }
             if replay {
                 continue;
             }
             match reply {
+                Reply::Title(_) => {}
                 Reply::Pty(text) => self.send_input(&text, cx),
                 Reply::Clipboard(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
                 Reply::Color(index, format) => self.send_input(&format(colors::query(index, colors::theme(cx))), cx),

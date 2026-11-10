@@ -47,6 +47,8 @@ starts instantly and stays light on memory.
 - Daily and per-agent cost limits that warn you, and can stop the agents
 - Token and cost estimates per agent, terminal history with search, a daily journal you can export
 - Claude subagents shown per pane: how many run, what each one is doing
+- Plan under the pane header: steps done out of total, one colored dot per step
+- Pane title follows the subject of the Claude conversation
 - Find in a terminal's scrollback (Ctrl+Shift+F)
 
 **Workspaces and sessions**

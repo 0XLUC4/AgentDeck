@@ -67,6 +67,15 @@ fn base(path: &str) -> &str {
     path.split('/').filter(|s| !s.is_empty()).last().unwrap_or(path)
 }
 
+/// Subject of a conversation, from the terminal title Claude Code sets ("✳ Fix the login bug"):
+/// the status glyph is dropped. Its default title and the process path conhost announces are none.
+pub fn topic(title: &str) -> Option<String> {
+    let text = title.trim_start_matches(|c: char| !c.is_alphanumeric()).trim();
+    let default = text.is_empty() || text.eq_ignore_ascii_case("claude code") || text.eq_ignore_ascii_case("claude");
+    let path = text.contains(":\\") || text.ends_with(".exe") || text.ends_with(".cmd");
+    (!default && !path).then(|| text.to_owned())
+}
+
 /// Few-word version of a pane's last action for the header ("Editing deck.ts", "Running pnpm test").
 pub fn short_action(action: Option<&str>) -> String {
     let Some(action) = action.filter(|a| !a.is_empty()) else {
@@ -400,6 +409,16 @@ mod tests {
         assert_eq!(file_refs(AgentKind::Codex, &[]), "");
         assert_eq!(image_ext("image/jpeg"), Some("jpg"));
         assert_eq!(image_ext("text/plain"), None);
+    }
+
+    #[test]
+    fn topic_from_terminal_title() {
+        use super::topic;
+        assert_eq!(topic("✳ Fix the login bug"), Some("Fix the login bug".into()));
+        assert_eq!(topic("⠂ Étapes des agents "), Some("Étapes des agents".into()));
+        for none in ["", "✳ Claude Code", "claude", "C:\\Windows\\system32\\cmd.exe", "node.exe"] {
+            assert_eq!(topic(none), None, "{none}");
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ use gpui_kit::*;
 use super::DeckView;
 use super::chrome::icon_button;
 use super::dock::{Axis, Branch, Dock, Edge, Group, Node};
-use crate::panes::{display_title, exit_bar, pane_border, pane_frame, pane_overlays};
+use crate::panes::{display_title, exit_bar, pane_border, pane_frame, pane_overlays, steps_bar};
 use crate::theme::{hsla, hsla_a, palette, ui};
 
 /// Gap between panes (dockview theme `gap: 6`); the sash lives in it.
@@ -187,6 +187,7 @@ impl DeckView {
                     .border_color(hsla(p.line))
                     .child(header),
             )
+            .children(active_pane.as_ref().and_then(|pane| steps_bar(pane, cx)))
             .child(div().relative().flex_1().min_h_0().child(body))
             .when_some(active_pane.filter(|pane| pane.exited), |el, pane| el.child(exit_bar(&pane.id, &p)))
             .children(overlays)
