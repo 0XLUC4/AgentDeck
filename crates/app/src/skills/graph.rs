@@ -1,5 +1,5 @@
-//! Notes graph: map of the workspace's Markdown notes and the links between them, with the
-//! selected note beside it. Original: components/Graph/{GraphDialog,forceLayout}.ts.
+//! Notes page: the workspace's Markdown notes as a graph of their links or as a list, with the
+//! selected note rendered beside it. Original: components/Graph/{GraphDialog,forceLayout}.ts.
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -11,7 +11,9 @@ use agentdeck_core::notes_graph::{NotesGraph, note_read, notes_graph};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{modal_frame, modal_header};
+use gpui_kit::component::text::TextView;
+
+use super::{modal_header, page_frame, segmented};
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
 
@@ -169,6 +171,8 @@ pub struct GraphDialog {
     sim: Option<Sim>,
     selected: Option<String>,
     text: String,
+    /// The notes as a list instead of the graph.
+    list: bool,
     /// Canvas bounds of the last paint, for pointer math.
     bounds: Rc<Cell<Bounds<Pixels>>>,
     ticking: Option<Task<()>>,
@@ -203,6 +207,7 @@ impl GraphDialog {
             sim: None,
             selected: None,
             text: String::new(),
+            list: false,
             bounds: Rc::new(Cell::new(Bounds::default())),
             ticking: None,
         }
@@ -390,12 +395,16 @@ impl GraphDialog {
 
     fn render_side(&self, cx: &mut Context<Self>) -> Div {
         let p = palette(cx);
-        let side = div().w(ui(320.0)).flex_shrink_0().flex().flex_col().gap_2().min_h_0();
+        let side = div().w(relative(0.42)).flex_shrink_0().flex().flex_col().gap_2().min_h_0();
         let Some(selected) = self.selected.clone() else {
             return side.child(div().text_color(hsla(p.subtle)).child(
                 "Click a note to read it. Drag the background to pan, scroll to zoom, drag a note to move it.",
             ));
         };
+        // One id per note: the view keeps its parsed text and scroll position by id.
+        let reader = TextView::markdown(SharedString::from(format!("note-{selected}")), self.text.clone())
+            .selectable(true)
+            .scrollable(true);
         let mut linked: Vec<String> = self
             .graph
             .iter()
@@ -429,25 +438,45 @@ impl GraphDialog {
             })
             .child(
                 div()
-                    .id("note-text")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_hidden()
                     .rounded(ui(12.0))
                     .border_1()
                     .border_color(hsla(p.line))
                     .bg(hsla(p.base))
-                    .p_3()
-                    .text_size(ui(12.0))
-                    .text_color(hsla(p.muted))
-                    .whitespace_normal()
-                    .child(self.text.clone()),
+                    .p_4()
+                    .text_size(ui(13.0))
+                    .child(reader),
             )
+    }
+
+    /// Every note of the workspace by path, the open one highlighted.
+    fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = palette(cx);
+        let notes = self.graph.iter().flat_map(|g| &g.nodes).enumerate().map(|(i, note)| {
+            let id = note.id.clone();
+            let current = self.selected.as_deref() == Some(id.as_str());
+            div()
+                .id(("note-row", i))
+                .flex()
+                .flex_col()
+                .rounded(ui(6.0))
+                .px_3()
+                .py(ui(6.0))
+                .cursor_pointer()
+                .when(current, |d| d.bg(hsla(p.raised)))
+                .when(!current, |d| d.hover(|s| s.bg(hsla(p.hover))))
+                .child(div().truncate().child(note.title.clone()))
+                .child(div().truncate().text_size(ui(11.0)).text_color(hsla(p.subtle)).child(note.id.clone()))
+                .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
+        });
+        div().id("notes-list").size_full().overflow_y_scroll().p_2().children(notes).into_any_element()
     }
 }
 
 impl Render for GraphDialog {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
         let Some(workspace) = self
             .deck
@@ -465,7 +494,21 @@ impl Render for GraphDialog {
             .as_ref()
             .map(|g| format!(" · {} notes, {} links", g.nodes.len(), g.edges.len()))
             .unwrap_or_default();
-        let title = format!("Graph · {}{counts}", workspace.name);
+        let title = format!("Notes · {}{counts}", workspace.name);
+        let this = cx.entity().downgrade();
+        let views = segmented(
+            "notes-view",
+            &[(false, "Graph"), (true, "List")],
+            self.list,
+            move |list, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.list = list;
+                    cx.notify();
+                });
+            },
+            cx,
+        )
+        .into_any_element();
         let body = if workspace.path.is_empty() {
             div().text_color(hsla(p.muted)).child("Link a folder to this workspace to map its notes.")
         } else {
@@ -479,7 +522,7 @@ impl Render for GraphDialog {
             div()
                 .flex()
                 .gap_4()
-                .h(window.viewport_size().height * 0.72)
+                .size_full()
                 .child(
                     div()
                         .relative()
@@ -490,7 +533,7 @@ impl Render for GraphDialog {
                         .border_1()
                         .border_color(hsla(p.line))
                         .bg(hsla(p.base))
-                        .when(!empty, |d| d.child(self.render_canvas(cx)))
+                        .when(!empty, |d| d.child(if self.list { self.render_list(cx) } else { self.render_canvas(cx) }))
                         .when(!message.is_empty(), |d| {
                             d.child(
                                 div()
@@ -507,9 +550,9 @@ impl Render for GraphDialog {
                 .child(self.render_side(cx))
         };
         let panel = div()
-            .child(modal_header(title, None, cx))
+            .child(modal_header(title, Some(views), cx))
             .child(div().min_h_0().flex_1().px_5().py_4().child(body));
-        modal_frame(&self.focus, 1280.0, panel, cx).into_any_element()
+        page_frame(&self.focus, panel, cx).into_any_element()
     }
 }
 

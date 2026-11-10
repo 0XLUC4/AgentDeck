@@ -23,7 +23,7 @@ use gpui_kit::*;
 
 use super::model3d::{self, Orbit};
 use super::viewer::{ModelViewer, PartSelected, render_image};
-use super::{modal_frame, modal_header, segmented};
+use super::{modal_header, page_frame, segmented};
 use crate::panes::agent_logo;
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
@@ -539,7 +539,7 @@ impl Render for AssetsDialog {
                     .py_4()
                     .child(body),
             );
-        modal_frame(&self.focus, 1152.0, panel, cx).into_any_element()
+        page_frame(&self.focus, panel, cx).into_any_element()
     }
 }
 

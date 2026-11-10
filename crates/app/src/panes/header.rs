@@ -4,7 +4,7 @@
 //! Mouse down focuses the pane, double click toggles maximize.
 
 use agentdeck_core::agents::AgentKind;
-use agentdeck_core::hooks_server::Subagent;
+use agentdeck_core::hooks_server::{PaneStatus, Subagent};
 use agentdeck_core::logic::deck::{FONT_SIZE_MAX, FONT_SIZE_MIN, Pane, folder_name};
 use agentdeck_core::logic::text::{agent_name, format_elapsed, now_ms, short_action};
 use agentdeck_core::logic::theme::{FONT_MONO, Palette, RADIUS_LG, RADIUS_MD, RADIUS_XL, parse_hex};
@@ -20,7 +20,7 @@ use super::picker::spawn_agent;
 use super::runtime::{self, is_busy};
 use super::widgets::icon_button;
 use crate::state::Deck;
-use crate::theme::{hsla, palette, ui};
+use crate::theme::{hsla, hsla_a, palette, ui};
 
 /// Tags to tell same-agent panes apart at a glance ("" = none).
 pub const PANE_COLORS: [&str; 7] = ["", "#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#a855f7", "#ec4899"];
@@ -40,12 +40,10 @@ pub enum PaneHeaderEvent {
     CloseBrowser,
 }
 
-/// Title shown for a pane: the name the user gave it, else the subject of its conversation, else
-/// the agent (older panes were named after their folder).
+/// Title shown for a pane: older panes were named after their folder, show the agent instead.
 pub fn display_title(pane: &Pane) -> String {
-    let agent = agent_name(pane.agent);
-    if pane.title.is_empty() || pane.title == agent || pane.title == folder_name(&pane.cwd) {
-        pane.topic.clone().unwrap_or_else(|| agent.to_owned())
+    if pane.title.is_empty() || pane.title == folder_name(&pane.cwd) {
+        agent_name(pane.agent).to_owned()
     } else {
         pane.title.clone()
     }
@@ -87,6 +85,28 @@ fn confirm_restart(pane_id: &str, window: &mut Window, cx: &mut App) {
 
 fn runtime_pane_agent(id: &str, cx: &App) -> Option<AgentKind> {
     super::runtime::deck(cx)?.read(cx).state.panes.get(id).map(|p| p.agent)
+}
+
+/// Status of an agent as a quiet pill in its header: blue "Working", green "Done", amber "Waiting",
+/// red "Error". Nothing for an idle agent or a plain shell.
+fn status_pill(pane: &Pane, p: &Palette) -> Option<Div> {
+    if pane.agent == AgentKind::Shell || pane.exited || pane.status == PaneStatus::Idle {
+        return None;
+    }
+    let color = super::status_color(pane.status, p);
+    Some(
+        div()
+            .flex_shrink_0()
+            .rounded_full()
+            .px(ui(7.0))
+            .py(ui(1.0))
+            .text_size(ui(11.0))
+            .font_weight(FontWeight::MEDIUM)
+            .bg(hsla_a(color, 0.15))
+            .text_color(hsla(color))
+            // "Working", "Waiting"...: the first word of the status label.
+            .child(super::status_label(pane.status).split(' ').next().unwrap_or_default()),
+    )
 }
 
 /// "N agents" chip: the Claude subagents running inside the pane, each one detailed in the tooltip.
@@ -289,8 +309,7 @@ impl PaneHeader {
         let tip: SharedString = format!("{} · {}", agent_name(pane.agent), pane.cwd).into();
         div()
             .id("pane-title")
-            .min_w_0()
-            .truncate()
+            .flex_shrink_0()
             .font_weight(FontWeight::MEDIUM)
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .child(display_title(pane))
@@ -463,6 +482,9 @@ impl Render for PaneHeader {
             .child(agent_logo(pane.agent, 14.0, None, &p))
             .children(crate::orchestrator::orchestrator_badge(&self.deck, &pane, cx))
             .child(self.title(&pane, cx))
+            // Subject of the conversation, next to the agent's name.
+            .children(pane.topic.clone().map(|topic| div().min_w_0().truncate().text_color(hsla(p.fg)).child(topic)))
+            .children(status_pill(&pane, &p))
             .when(voice_target, |h| {
                 h.child(
                     div()

@@ -15,7 +15,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::DeckView;
-use crate::panes::{agent_logo, last_agent, runtime, spawn_agent, status_badge};
+use crate::panes::{agent_logo, last_agent, runtime, spawn_agent, status_color, status_label};
 use crate::theme::{hsla, palette, ui};
 
 /// Amber count of agents waiting: a true circle for one digit, a pill for more, number centered.
@@ -783,11 +783,6 @@ impl DeckView {
                 .iter()
                 .filter(|k| **k == ActivityKey::Status(PaneStatus::Waiting))
                 .count();
-            let failed = keys.contains(&ActivityKey::Status(PaneStatus::Error));
-            // Green once every agent stopped and one finished unseen; blue while any still runs.
-            let ws_pane_ids: Vec<String> = tabs.iter().flat_map(|t| t.pane_ids.iter().cloned()).collect();
-            let ws_status = session_status(&ws_pane_ids, &deck.state.panes)
-                .filter(|s| matches!(s, PaneStatus::Working | PaneStatus::Done));
             let (toggle_id, select_id, new_id) = (ws.id.clone(), ws.id.clone(), ws.id.clone());
             let ws_group: SharedString = format!("ws-row-{}", ws.id).into();
             let rename_key = format!("ws:{}", ws.id);
@@ -879,10 +874,6 @@ impl DeckView {
                         .child(div().flex_1())
                         .when(waiting > 0, |el| {
                             el.child(waiting_badge(waiting, &p))
-                        })
-                        .when(failed, |el| el.child(div().size(ui(8.0)).rounded_full().bg(hsla(p.bad))))
-                        .when_some(ws_status, |el, status| {
-                            el.child(status_badge(&format!("ws-{}", ws.id), status, &p))
                         })
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                             let id = select_id.clone();
@@ -1012,7 +1003,17 @@ impl DeckView {
                             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(tab.name.clone()))
                             .when_some(
                                 session_status(&tab.pane_ids, &deck.state.panes).filter(|s| *s != PaneStatus::Idle),
-                                |el, status| el.child(status_badge(&format!("tab-{}", tab.id), status, &p)),
+                                |el, status| {
+                                    // "Working", "Waiting"...: the first word of the status label.
+                                    let label = status_label(status).split(' ').next().unwrap_or_default();
+                                    el.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_size(ui(12.0))
+                                            .text_color(hsla(status_color(status, &p)))
+                                            .child(label),
+                                    )
+                                },
                             )
                             .when(!tab.pane_ids.is_empty(), |el| {
                                 el.child(
