@@ -6,10 +6,13 @@ use agentdeck_core::agents::AgentKind;
 use agentdeck_core::git;
 use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::{Pane, PaneSpec, new_id};
+use agentdeck_core::logic::queue::{QUEUE_AGENTS, ready_for_next};
 use agentdeck_core::logic::orchestrator::{
     DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, OUTPUT_TAIL_CHARS, assert_can_type, resolve_inside, scope_of, target,
 };
 use agentdeck_core::mcp;
+use std::collections::BTreeMap;
+
 use chrono::{SecondsFormat, TimeZone, Utc};
 use gpui_kit::*;
 use serde_json::{Value, json};
@@ -106,7 +109,7 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
                 Ok((spec, scope.tab.id.clone()))
             })?;
             let id = spec.id.clone();
-            runtime::create_pane(deck, spec, tab_id, cx).await;
+            let started = runtime::create_pane(deck, spec, tab_id, cx).await;
             let pane = deck.read_with(cx, |d, _| d.state.panes.get(&id).cloned());
             let pane = pane.ok_or("The agent was closed while starting")?;
             if pane.status == PaneStatus::Error {
@@ -115,7 +118,12 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
                     pane.last_action.as_deref().unwrap_or("unknown error")
                 ));
             }
-            Ok(json!({ "paneId": id }))
+            if started {
+                Ok(json!({ "paneId": id }))
+            } else {
+                // Still queued for a spawn slot: the id lets the orchestrator wait instead of spawning again.
+                Ok(json!({ "paneId": id, "starting": true, "note": "queued behind other starting agents: do not spawn it again" }))
+            }
         }
         "send_prompt" => {
             let pane = target_pane(deck, orchestrator_id, args, cx)?;
@@ -123,6 +131,34 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
             let (text, submit) = (arg(args, "text"), args["submit"] != false);
             cx.update(|cx| runtime::send_prompt(&pane.id, &text, submit, cx));
             Ok(json!({ "ok": true }))
+        }
+        "queue_prompt" => {
+            let pane = target_pane(deck, orchestrator_id, args, cx)?;
+            if !QUEUE_AGENTS.contains(&pane.agent) {
+                return Err(format!("{} reports no end of task: use wait_for then send_prompt", pane.title));
+            }
+            let text = arg(args, "text");
+            let sent = cx.update(|cx| {
+                // Same rule as the review queue: straight away when idle with nothing ahead.
+                let idle = deck.update(cx, |d, cx| {
+                    let idle = ready_for_next(d.state.panes.get(&pane.id))
+                        && d.queues.get(&pane.id).is_none_or(|q| q.items.is_empty() && !q.paused);
+                    d.queues.add(&pane.id, &text);
+                    cx.notify();
+                    idle
+                });
+                if idle {
+                    crate::palette::send_next(deck, &pane.id, cx);
+                }
+                idle
+            });
+            Ok(json!({ "ok": true, "sent": sent, "queued": !sent }))
+        }
+        "find_conflicts" => {
+            let panes: Vec<Pane> = deck.read_with(cx, |d, _| -> Result<_, String> {
+                Ok(scope_of(&d.state, orchestrator_id)?.panes.iter().map(|(p, _)| (*p).clone()).collect())
+            })?;
+            blocking(cx, move || Ok(json!({ "conflicts": find_conflicts(&panes) }))).await
         }
         "read_output" => {
             let pane = target_pane(deck, orchestrator_id, args, cx)?;
@@ -191,6 +227,40 @@ fn pane_dir(pane: &Pane) -> String {
     git::git_pane_dir(pane.cwd.clone(), pane.id.clone(), pane.worktree)
 }
 
+/// Blocking: files changed in more than one git folder of `panes`. Agents sharing a folder share
+/// its changes, so only distinct folders (worktrees) count.
+fn find_conflicts(panes: &[Pane]) -> Vec<Value> {
+    let mut by_dir: BTreeMap<String, Vec<&Pane>> = BTreeMap::new();
+    for pane in panes.iter().filter(|p| !p.exited) {
+        by_dir.entry(pane_dir(pane)).or_default().push(pane);
+    }
+    let changed = by_dir.iter().filter_map(|(dir, owners)| {
+        // Not a repository (or git failed): nothing to merge from there.
+        let files = git::git_status(dir.clone()).ok()?.files;
+        Some((files.into_iter().map(|f| f.path).collect(), owners.as_slice()))
+    });
+    overlaps(changed.collect())
+}
+
+/// Paths present in at least two folders, with the agents of those folders.
+fn overlaps(changed: Vec<(Vec<String>, &[&Pane])>) -> Vec<Value> {
+    let mut by_path: BTreeMap<String, Vec<&[&Pane]>> = BTreeMap::new();
+    for (files, owners) in changed {
+        for path in files {
+            by_path.entry(path).or_default().push(owners);
+        }
+    }
+    by_path
+        .into_iter()
+        .filter(|(_, folders)| folders.len() > 1)
+        .map(|(path, folders)| {
+            let agents: Vec<Value> =
+                folders.concat().iter().map(|p| json!({ "paneId": p.id, "title": p.title })).collect();
+            json!({ "path": path, "agents": agents })
+        })
+        .collect()
+}
+
 /// Blocking: status, last checkpoints and unified diffs (capped) of the pane's folder.
 fn get_diff(pane: &Pane, path: &str) -> Result<Value, String> {
     let dir = pane_dir(pane);
@@ -202,12 +272,20 @@ fn get_diff(pane: &Pane, path: &str) -> Result<Value, String> {
         vec![path.to_owned()]
     };
     let mut diff = String::new();
+    let mut cut = Vec::new();
     for file in paths {
-        if diff.len() >= DIFF_CAP_CHARS {
-            diff.push_str("\n... (diff truncated: ask for one file with `path`)");
-            break;
+        // Past the cap: no git call, the file is only named in the note.
+        if diff.len() >= DIFF_CAP_CHARS || !push_capped(&mut diff, &git::git_diff(dir.clone(), file.clone())?) {
+            cut.push(file);
         }
-        diff.push_str(&git::git_diff(dir.clone(), file)?);
+    }
+    if !cut.is_empty() {
+        let more = if cut.len() > 20 { ", ..." } else { "" };
+        cut.truncate(20);
+        diff.push_str(&format!(
+            "\n... (diff truncated, cut or left out: {}{more}; ask for one file with `path`)",
+            cut.join(", ")
+        ));
     }
     let checkpoints: Vec<Value> = checkpoints
         .iter()
@@ -220,8 +298,15 @@ fn get_diff(pane: &Pane, path: &str) -> Result<Value, String> {
         "branch": status.branch,
         "files": status.files,
         "checkpoints": checkpoints,
-        "diff": truncate_chars(&diff, DIFF_CAP_CHARS + 100),
+        "diff": diff,
     }))
+}
+
+/// Appends as much of `file_diff` as still fits under the cap; false when part of it was cut.
+fn push_capped(diff: &mut String, file_diff: &str) -> bool {
+    let kept = truncate_chars(file_diff, DIFF_CAP_CHARS.saturating_sub(diff.len()));
+    diff.push_str(kept);
+    kept.len() == file_diff.len()
 }
 
 /// `new Date(ms).toISOString()`.
@@ -239,7 +324,32 @@ fn truncate_chars(text: &str, max: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{iso_date, truncate_chars};
+    use super::{DIFF_CAP_CHARS, iso_date, overlaps, push_capped, truncate_chars};
+    use agentdeck_core::agents::AgentKind;
+    use agentdeck_core::logic::deck::{PaneSpec, new_pane};
+
+    #[test]
+    fn overlaps_need_two_folders() {
+        let pane = |id: &str| new_pane(PaneSpec::new(AgentKind::Claude, id, "C:/proj"), 0);
+        let (a, b, c) = (pane("a"), pane("b"), pane("c"));
+        let found = overlaps(vec![
+            (vec!["src/x.rs".into(), "only-a.rs".into()], &[&a, &b]),
+            (vec!["src/x.rs".into()], &[&c]),
+        ]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0]["path"], "src/x.rs");
+        assert_eq!(found[0]["agents"].as_array().map(Vec::len), Some(3));
+    }
+
+    #[test]
+    fn diff_stops_at_the_cap() {
+        let mut diff = String::new();
+        assert!(push_capped(&mut diff, "small\n"));
+        assert!(!push_capped(&mut diff, &"x".repeat(DIFF_CAP_CHARS)));
+        assert_eq!(diff.len(), DIFF_CAP_CHARS);
+        assert!(!push_capped(&mut diff, "more"));
+        assert_eq!(diff.len(), DIFF_CAP_CHARS);
+    }
 
     #[test]
     fn iso_and_truncate() {

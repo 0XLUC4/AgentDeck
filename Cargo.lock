@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "agentdeck"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "agentdeck-core",
  "alacritty_terminal",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "agentdeck-core"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "chrono",
  "cpal",

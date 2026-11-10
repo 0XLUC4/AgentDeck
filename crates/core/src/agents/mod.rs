@@ -187,6 +187,50 @@ pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
 
 /// Creates (or reuses) the dedicated git worktree for the pane and returns its path.
 pub fn create_worktree(cwd: &str, pane_id: &str) -> Result<String, String> {
+    create_worktree_with(cwd, pane_id, "")
+}
+
+/// Runs the user's worktree setup command (install deps, copy .env) through the shell in `dir`.
+/// `AGENTDECK_ROOT` is the main checkout, where the git-ignored files live.
+fn run_setup(command: &str, dir: &Path, root: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("cmd");
+        // /S + outer quotes: cmd runs the text as typed, inner quotes included.
+        cmd.args(["/D", "/S", "/C"]).raw_arg(format!("\"{command}\""));
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        cmd
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    };
+    let out = cmd
+        .current_dir(dir)
+        .env("AGENTDECK_ROOT", root)
+        .stdin(std::process::Stdio::null()) // a prompt must fail, not hang the spawn
+        .output()
+        .map_err(|e| format!("cannot run worktree setup: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let text = if stderr.trim().is_empty() { stdout } else { stderr };
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    Err(format!(
+        "worktree setup failed ({}): {}. Restart the agent to continue without it.",
+        out.status,
+        lines[lines.len().saturating_sub(3)..].join(" | ")
+    ))
+}
+
+/// [`create_worktree`], then `setup` (a shell command, "" = none) once in the worktree it just created.
+/// A reused worktree is never set up again.
+pub fn create_worktree_with(cwd: &str, pane_id: &str, setup: &str) -> Result<String, String> {
     let short: String = pane_id.chars().take(8).collect();
     if short.is_empty()
         || !short.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
@@ -216,6 +260,9 @@ pub fn create_worktree(cwd: &str, pane_id: &str) -> Result<String, String> {
             &format!("agentdeck/{short}"),
         ],
     )?;
+    if !setup.trim().is_empty() {
+        run_setup(setup.trim(), &target, &root)?;
+    }
     Ok(target_str)
 }
 
@@ -753,6 +800,21 @@ mod tests {
         let path = create_worktree(&repo.join("sub").to_string_lossy(), "abcdef12-3456").unwrap();
         assert_eq!(Path::new(&path), base.join("proj-agentdeck-abcdef12"));
         assert!(Path::new(&path).join(".git").exists());
+
+        // Setup runs once in the new worktree, with the main checkout in AGENTDECK_ROOT.
+        let write_root = if cfg!(windows) {
+            "echo %AGENTDECK_ROOT%> root.txt"
+        } else {
+            "echo \"$AGENTDECK_ROOT\" > root.txt"
+        };
+        let cwd = repo.to_string_lossy();
+        let made = PathBuf::from(create_worktree_with(&cwd, "setup001", write_root).unwrap());
+        let seen = std::fs::read_to_string(made.join("root.txt")).unwrap();
+        assert_eq!(Path::new(seen.trim()), repo);
+        // Reused worktree: the command (failing here) is not run again.
+        assert!(create_worktree_with(&cwd, "setup001", "exit 3").is_ok());
+        let err = create_worktree_with(&cwd, "setup002", "echo no deps 1>&2 && exit 3").unwrap_err();
+        assert!(err.contains("worktree setup failed") && err.contains("no deps"), "{err}");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

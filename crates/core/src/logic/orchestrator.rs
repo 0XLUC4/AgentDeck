@@ -85,7 +85,7 @@ pub fn summarize_call(tool: &str, args: &Value, panes: &HashMap<String, Pane>) -
             s(&args["title"]),
             if args["worktree"] == true { " \u{b7} worktree" } else { "" }
         ),
-        "send_prompt" => {
+        "send_prompt" | "queue_prompt" => {
             let text = args["text"]
                 .as_str()
                 .unwrap_or("")
@@ -258,7 +258,9 @@ pub fn handle_read_tool(
                 "paneId": p.id,
                 "running": log.is_some_and(|l| l.current.is_some()),
                 "result": task.map(|t| json!({
-                    "prompt": t.prompt, "summary": t.summary, "status": t.status,
+                    // The orchestrator wrote the prompt itself: its start is enough to tell tasks apart.
+                    "prompt": t.prompt.as_deref().map(|p| p.chars().take(200).collect::<String>()),
+                    "summary": t.summary, "status": t.status,
                     "actions": t.actions.iter().rev().take(RESULT_ACTIONS).rev().map(|a| a.text.clone()).collect::<Vec<_>>(),
                     "durationSec": t.ended_at.map(|e| ((e - t.started_at) as f64 / 1000.0).round() as i64),
                 })),

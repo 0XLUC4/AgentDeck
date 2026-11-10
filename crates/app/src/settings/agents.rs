@@ -15,6 +15,7 @@ use crate::theme::{hsla, ui};
 
 pub(super) struct Agents {
     base_port: Entity<InputState>,
+    worktree_setup: Entity<InputState>,
     retry: Entity<InputState>,
     daily_usd: Entity<InputState>,
     pane_usd: Entity<InputState>,
@@ -58,6 +59,14 @@ impl Agents {
             |s| u32::from(s.base_port),
             |s, v| s.base_port = u16::try_from(v).unwrap_or(0),
         );
+        let worktree_setup = super::input(window, cx, "pnpm install", &s.worktree_setup);
+        // Saved on blur: a half-typed command must never be the one a spawn runs.
+        subs.push(cx.subscribe(&worktree_setup, |this, state, event: &InputEvent, cx| {
+            let command = state.read(cx).value().trim().to_owned();
+            if matches!(event, InputEvent::Blur) && command != this.settings(cx).worktree_setup {
+                this.set(cx, |s| s.worktree_setup = command);
+            }
+        }));
         let retry = super::number_input(
             window,
             cx,
@@ -102,6 +111,7 @@ impl Agents {
             .collect();
         Self {
             base_port,
+            worktree_setup,
             retry,
             daily_usd,
             pane_usd,
@@ -211,6 +221,15 @@ impl SettingsDialog {
                 "Port per agent",
                 Some("Each agent gets PORT=this+n so dev servers started in parallel don't collide"),
                 field(&a.base_port, Some(96.0), false),
+                &p,
+            ),
+            row(
+                "Worktree setup command",
+                Some(
+                    "Runs once in each new agent worktree, before the agent starts: install dependencies, copy \
+                     git-ignored files. AGENTDECK_ROOT is the main checkout (copy \"%AGENTDECK_ROOT%\\.env\" .env)",
+                ),
+                field(&a.worktree_setup, Some(256.0), true),
                 &p,
             ),
             row(

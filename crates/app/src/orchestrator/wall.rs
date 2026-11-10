@@ -1,5 +1,5 @@
 //! Wall mode: every pane of the workspace (or of all workspaces) as compact tiles, most urgent first.
-//! Overlays the session grids instead of replacing them: the real terminals stay mounted.
+//! Drawn in place of the session grid: the terminal views stay alive but are not laid out or painted.
 //! Original: src/components/Wall/{Wall,wallState,jump}.tsx.
 
 use std::collections::HashMap;
@@ -145,9 +145,11 @@ impl Wall {
             let tail = super::runtime::pane_output_tail(&id, TAIL_CHARS, cx);
             lines.insert(id, last_lines(&tail, TILE_LINES));
         }
-        self.lines = lines;
-        // Also ticks the "since" timers.
-        cx.notify();
+        // The "since" timers tick with the deck clock (`_observe`).
+        if lines != self.lines {
+            self.lines = lines;
+            cx.notify();
+        }
     }
 
     fn tile(&self, pane_id: &str, tab_id: &str, now: i64, cx: &App) -> Option<Stateful<Div>> {

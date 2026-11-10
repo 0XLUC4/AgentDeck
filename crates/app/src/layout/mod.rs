@@ -163,6 +163,8 @@ pub struct DeckView {
     view_subs: HashMap<String, Subscription>,
     /// One dock per session tab, created from the saved layout on first sight.
     docks: HashMap<String, Dock>,
+    /// What the last `sync_docks` applied: (tab id, wanted panel ids).
+    last_sync: Vec<(String, Vec<String>)>,
     /// Panes shown in their own window. Not persisted: panes reopen attached.
     detached: HashMap<String, AnyWindowHandle>,
     /// Tabs whose layout changed since the last save.
@@ -210,6 +212,7 @@ impl DeckView {
             browsers: HashMap::new(),
             view_subs: HashMap::new(),
             docks: HashMap::new(),
+            last_sync: Vec::new(),
             detached: HashMap::new(),
             dirty: HashSet::new(),
             save_task: None,
@@ -343,8 +346,21 @@ impl DeckView {
                     std::iter::once(id.clone()).chain(browser.then(|| format!("browser:{id}")))
                 })
                 .collect();
-            wanted_by_tab.push((tab.id.clone(), tab.layout.clone(), wanted));
+            wanted_by_tab.push((tab.id.clone(), wanted));
         }
+        // Runs on every deck notify (clock, hooks, toasts): nothing to do unless tabs or panes changed.
+        // The pane count covers a pane outside every tab: after a sync there is one terminal per pane.
+        if wanted_by_tab == self.last_sync && self.terminals.len() == deck.state.panes.len() {
+            return;
+        }
+        // The saved layout is only read to create a dock.
+        let layouts: HashMap<String, serde_json::Value> = deck
+            .state
+            .tabs
+            .iter()
+            .filter(|tab| !self.docks.contains_key(&tab.id))
+            .filter_map(|tab| Some((tab.id.clone(), tab.layout.clone()?)))
+            .collect();
         let alive: HashSet<String> = deck.state.panes.keys().cloned().collect();
         let with_browser: HashSet<String> = deck
             .state
@@ -356,19 +372,20 @@ impl DeckView {
 
         let tab_ids: HashSet<String> = wanted_by_tab.iter().map(|t| t.0.clone()).collect();
         self.docks.retain(|id, _| tab_ids.contains(id));
-        for (tab_id, layout, wanted) in wanted_by_tab {
+        for (tab_id, wanted) in &wanted_by_tab {
             let dock = self
                 .docks
                 .entry(tab_id.clone())
-                .or_insert_with(|| layout.as_ref().and_then(Dock::from_json).unwrap_or_default());
-            if dock.sync(&wanted) {
+                .or_insert_with(|| layouts.get(tab_id).and_then(Dock::from_json).unwrap_or_default());
+            if dock.sync(wanted) {
                 // Only when a pane was added or removed: a restored layout keeps the sizes the user dragged.
                 if auto_grid {
-                    dock.grid(&wanted);
+                    dock.grid(wanted);
                 }
-                self.dirty.insert(tab_id);
+                self.dirty.insert(tab_id.clone());
             }
         }
+        self.last_sync = wanted_by_tab;
 
         // Views of closed panes go; detached windows of closed panes close.
         self.terminals.retain(|id, _| alive.contains(id));
@@ -620,18 +637,23 @@ fn panel_title(deck: &Deck, id: &str) -> String {
         .unwrap_or_else(|| "Agent".into())
 }
 
-/// Once a second: elapsed times in the headers and the activity panel, and toast expiry.
+/// Once a second: toast expiry. Running agents repaint through the deck (`panes::runtime` clock);
+/// an idle window only needs the minute-grained "x min ago" labels, so it redraws twice a minute.
 fn ticker(cx: &mut Context<DeckView>) -> Task<()> {
     cx.spawn(async move |this, cx| {
+        let mut seconds = 0u32;
         loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
+            seconds = seconds.wrapping_add(1);
             let alive = this.update(cx, |this, cx| {
                 this.deck.update(cx, |deck, cx| {
                     if deck.state.prune_toasts(now_ms()) {
                         cx.notify();
                     }
                 });
-                cx.notify();
+                if seconds % 30 == 0 {
+                    cx.notify();
+                }
             });
             if alive.is_err() {
                 break;
@@ -652,13 +674,15 @@ impl Render for DeckView {
             .active_tab()
             .is_none_or(|t| t.pane_ids.is_empty());
         let wall = crate::orchestrator::wall_overlay(&self.deck, cx);
+        // The wall covers the whole pane area: no dock (terminals) behind it.
+        let dock = wall.is_none().then(|| self.render_dock(&active_tab, window, cx));
         let pane_area = div()
             .relative()
             .flex()
             .flex_1()
             .min_h_0()
             .p(ui(6.0))
-            .child(self.render_dock(&active_tab, window, cx))
+            .children(dock)
             .when(empty, |el| el.child(self.empty_session(cx)))
             .when_some(wall, |el, wall| el.child(div().absolute().inset_0().child(wall)));
         let main = div()

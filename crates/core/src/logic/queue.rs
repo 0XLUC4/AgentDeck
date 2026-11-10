@@ -36,6 +36,17 @@ pub fn prompt_text(text: &str) -> String {
     }
 }
 
+/// Title of the `n`th agent of a race: "Race 2: fix the login bug" (start of the flattened prompt).
+pub fn race_title(n: usize, prompt: &str) -> String {
+    let flat = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    let slug: String = flat.chars().take(24).collect();
+    if slug.is_empty() {
+        format!("Race {n}")
+    } else {
+        format!("Race {n}: {}", slug.trim_end())
+    }
+}
+
 /// True when a pane just finished and its queue has something to send.
 pub fn should_advance(prev: Option<PaneStatus>, next: PaneStatus, queue: Option<&PaneQueue>) -> bool {
     prev != Some(PaneStatus::Done)
@@ -222,6 +233,9 @@ mod tests {
         assert_eq!(qs.pop_next("p").unwrap().text, "first");
         assert_eq!(prompt_text(&qs.get("p").unwrap().items[0].text), "\x1b[200~multi\nline\x1b[201~");
         assert_eq!(prompt_text("one"), "one");
+        assert_eq!(race_title(2, "fix\n the  login"), "Race 2: fix the login");
+        assert_eq!(race_title(1, "  "), "Race 1");
+        assert_eq!(race_title(3, &"é".repeat(40)), format!("Race 3: {}", "é".repeat(24)));
         qs.forget("p");
         assert!(qs.get("p").is_none());
     }

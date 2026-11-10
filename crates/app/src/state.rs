@@ -148,8 +148,12 @@ impl Deck {
                 }
             }
         }
+        // These change nothing in the deck (about 30 levels a second while dictating): subscribers only.
+        let silent = matches!(event.name.as_str(), "voice-level" | "voice-partial" | "voice-download");
         cx.emit(DeckEvent::Backend(event));
-        cx.notify();
+        if !silent {
+            cx.notify();
+        }
     }
 
     /// Auto-allow rules answer at once (with a toast); other requests wait for a permission card.

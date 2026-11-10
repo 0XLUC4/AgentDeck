@@ -1,8 +1,10 @@
 //! Local HTTP server (127.0.0.1 only, secret token) receiving agent hook events
 //! and re-emitting them to the UI as `agent-status`.
 
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 pub mod permissions;
 
@@ -110,9 +112,15 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
         return no_decision();
     }
     PENDING.cancel_stale(&hook.pane_id, &hook.json);
-    if let Some(event) = status_event(hook) {
-        crate::mcp::STATUS.set(&event.pane_id, event.status);
-        let _ = app.emit("agent-status", event);
+    let (running, changed) = track_subagents(&hook.pane_id, &hook.json, crate::logic::text::now_ms());
+    if let Some(subagents) = changed {
+        let _ = app.emit(
+            "agent-subagents",
+            json!({ "paneId": hook.pane_id, "subagents": subagents }),
+        );
+    }
+    if let Some(event) = status_event_with(hook, running) {
+        emit_status(app, event);
     }
     if hook.json["hook_event_name"] != "PermissionRequest" {
         return no_decision();
@@ -123,6 +131,11 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
     let decision = wait_decision(&rx, PERMISSION_HOLD, || pane_exists(app, &hook.pane_id));
     PENDING.remove(&id);
     let _ = app.emit("agent-permission-resolved", json!({ "requestId": id }));
+    // Allowed or denied, Claude goes on with its turn and sends no hook before the tool ends:
+    // without this the pane stays "waiting" for the whole command. No decision: the terminal asks.
+    if decision.is_some() && !PENDING.has_pane(&hook.pane_id) {
+        emit_status(app, resolved_event(hook));
+    }
     match decision {
         Some(body) => {
             let ct = tiny_http::Header::from_bytes("Content-Type", "application/json")
@@ -132,6 +145,27 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
                 .boxed()
         }
         None => no_decision(),
+    }
+}
+
+/// The UI gets the event before `wait_for` wakes: its get_result then sees this turn's summary.
+fn emit_status(app: &AppHandle, event: AgentStatusEvent) {
+    let (pane_id, status) = (event.pane_id.clone(), event.status);
+    let _ = app.emit("agent-status", event);
+    crate::mcp::STATUS.set(&pane_id, status);
+}
+
+/// Status of a pane whose permission request was just answered: back to work on that tool.
+fn resolved_event(hook: &Hook) -> AgentStatusEvent {
+    AgentStatusEvent {
+        pane_id: hook.pane_id.clone(),
+        status: PaneStatus::Working,
+        last_action: describe_tool(&hook.json),
+        event: "PermissionResolved".into(),
+        prompt: None,
+        summary: None,
+        session_id: session_id(&hook.json),
+        edited_file: None,
     }
 }
 
@@ -155,8 +189,104 @@ struct Hook {
     json: Value,
 }
 
+/// A Claude subagent running inside a pane (`agent-subagents` event: `{ paneId, subagents }`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Subagent {
+    pub agent_id: String,
+    /// "Explore", "general-purpose"...
+    pub agent_type: String,
+    /// Description the main agent gave the Agent tool, else the agent type.
+    pub label: String,
+    pub started_at: i64,
+    /// Its latest tool event (`describe_tool`).
+    pub last_action: Option<String>,
+}
+
+#[derive(Default)]
+struct PaneSubagents {
+    /// SubagentStart minus SubagentStop, oldest first.
+    running: Vec<Subagent>,
+    /// (subagent_type, description) of Agent tool calls no SubagentStart has claimed yet.
+    unclaimed: Vec<(String, String)>,
+}
+
+/// Agent tool calls kept for pairing: a denied call never starts a subagent.
+const MAX_UNCLAIMED: usize = 16;
+const DEFAULT_AGENT_TYPE: &str = "general-purpose";
+
+static SUBAGENTS: LazyLock<Mutex<HashMap<String, PaneSubagents>>> = LazyLock::new(Default::default);
+
+/// Records what a hook says about the pane's subagents: how many still run, and the new list when it changed.
+fn track_subagents(pane_id: &str, body: &Value, now: i64) -> (usize, Option<Vec<Subagent>>) {
+    let mut map = SUBAGENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let pane = map.entry(pane_id.to_owned()).or_default();
+    let before = pane.running.clone();
+    let event = body["hook_event_name"].as_str().unwrap_or("");
+    let agent_id = body["agent_id"].as_str().filter(|id| !id.is_empty());
+    match (event, agent_id) {
+        ("SubagentStart", Some(id)) if !pane.running.iter().any(|s| s.agent_id == id) => {
+            let agent_type = body["agent_type"].as_str().unwrap_or(DEFAULT_AGENT_TYPE);
+            // Best effort: hooks carry no link between the Agent tool call and the subagent it starts.
+            let label = pane
+                .unclaimed
+                .iter()
+                .rposition(|(kind, _)| kind == agent_type)
+                .map_or_else(|| agent_type.to_owned(), |i| pane.unclaimed.remove(i).1);
+            pane.running.push(Subagent {
+                agent_id: id.to_owned(),
+                agent_type: agent_type.to_owned(),
+                label,
+                started_at: now,
+                last_action: None,
+            });
+        }
+        ("SubagentStop", Some(id)) => pane.running.retain(|s| s.agent_id != id),
+        // shortcut: a subagent killed without SubagentStop stays counted until the session restarts.
+        ("SessionStart", _) => *pane = PaneSubagents::default(),
+        ("PreToolUse" | "PostToolUse" | "PostToolUseFailure", Some(id)) => {
+            if let Some(sub) = pane.running.iter_mut().find(|s| s.agent_id == id)
+                && let Some(action) = describe_tool(body)
+            {
+                sub.last_action = Some(action);
+            }
+        }
+        ("PreToolUse", None) if matches!(body["tool_name"].as_str(), Some("Agent" | "Task")) => {
+            let input = &body["tool_input"];
+            if let Some(description) = input["description"].as_str().map(str::trim).filter(|d| !d.is_empty()) {
+                let kind = input["subagent_type"].as_str().unwrap_or(DEFAULT_AGENT_TYPE);
+                if pane.unclaimed.len() == MAX_UNCLAIMED {
+                    pane.unclaimed.remove(0);
+                }
+                pane.unclaimed.push((kind.to_owned(), truncate(description, 80)));
+            }
+        }
+        _ => {}
+    }
+    let running = pane.running.len();
+    let changed = (pane.running != before).then(|| pane.running.clone());
+    if running == 0 && pane.unclaimed.is_empty() {
+        map.remove(pane_id);
+    }
+    (running, changed)
+}
+
+#[cfg(test)]
 fn status_event(hook: &Hook) -> Option<AgentStatusEvent> {
-    let (status, last_action, event) = map_event(&hook.json)?;
+    let (running, _) = track_subagents(&hook.pane_id, &hook.json, 0);
+    status_event_with(hook, running)
+}
+
+/// `running`: subagents of the pane still running after this hook.
+fn status_event_with(hook: &Hook, running: usize) -> Option<AgentStatusEvent> {
+    let (mut status, mut last_action, event) = map_event(&hook.json)?;
+    // Claude ends its turn while background agents still run, and resumes when they report back:
+    // not finished yet, so no "finished" notification.
+    if status == PaneStatus::Done && event == "Stop" && running > 0 {
+        status = PaneStatus::Working;
+        let plural = if running == 1 { "" } else { "s" };
+        last_action = Some(format!("Waiting for {running} background agent{plural}"));
+    }
     let (prompt, summary) = details(&hook.json);
     Some(AgentStatusEvent {
         pane_id: hook.pane_id.clone(),
@@ -459,6 +589,91 @@ mod tests {
             status(json!({"hook_event_name": "SubagentStop", "agent_id": "a1"})),
             None
         );
+    }
+
+    #[test]
+    fn stop_with_background_agents_keeps_working() {
+        let hook = |event: &str, agent: &str| Hook {
+            pane_id: "bg-test".into(),
+            json: json!({"hook_event_name": event, "agent_id": agent}),
+        };
+        let stop = || status_event(&hook("Stop", "")).map(|e| (e.status, e.last_action));
+        assert!(status_event(&hook("SubagentStart", "a1")).is_none());
+        status_event(&hook("SubagentStart", "a2"));
+        assert_eq!(
+            stop(),
+            Some((PaneStatus::Working, Some("Waiting for 2 background agents".into())))
+        );
+        status_event(&hook("SubagentStop", "a1"));
+        status_event(&hook("SubagentStop", "a2"));
+        assert_eq!(stop(), Some((PaneStatus::Done, None)));
+        status_event(&hook("SubagentStart", "a3"));
+        status_event(&hook("SessionStart", ""));
+        assert_eq!(stop(), Some((PaneStatus::Done, None)));
+    }
+
+    #[test]
+    fn tracks_subagents() {
+        let pane = "sub-test";
+        let track = |body: Value, now: i64| track_subagents(pane, &body, now);
+        // The main agent's Agent call labels the subagent that starts next with the same type.
+        let (n, changed) = track(
+            json!({"hook_event_name": "PreToolUse", "tool_name": "Agent",
+                "tool_input": {"description": "Find the parser", "subagent_type": "Explore", "prompt": "x"}}),
+            1,
+        );
+        assert_eq!((n, changed), (0, None));
+        let start = |id: &str| json!({"hook_event_name": "SubagentStart", "agent_id": id, "agent_type": "Explore"});
+        let (n, list) = track(start("a1"), 10);
+        let list = list.unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            (list[0].label.as_str(), list[0].agent_type.as_str(), list[0].started_at),
+            ("Find the parser", "Explore", 10)
+        );
+        // Claimed once: the next one falls back to its type.
+        let (_, list) = track(start("a2"), 20);
+        assert_eq!(list.unwrap()[1].label, "Explore");
+
+        let tool = json!({"hook_event_name": "PreToolUse", "agent_id": "a1", "agent_type": "Explore",
+            "tool_name": "Grep", "tool_input": {"pattern": "fn parse"}});
+        let (n, list) = track(tool.clone(), 30);
+        assert_eq!(n, 2);
+        assert_eq!(list.unwrap()[0].last_action.as_deref(), Some("Grep fn parse"));
+        // Same action again, a main-agent tool, an unknown subagent: nothing to emit.
+        assert_eq!(track(tool, 31).1, None);
+        let main = json!({"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {}});
+        assert_eq!(track(main, 32).1, None);
+        let unknown = json!({"hook_event_name": "PreToolUse", "agent_id": "zz", "tool_name": "Read"});
+        assert_eq!(track(unknown, 33).1, None);
+
+        let (n, list) = track(json!({"hook_event_name": "SubagentStop", "agent_id": "a1"}), 40);
+        let list = list.unwrap();
+        assert_eq!((n, list.len(), list[0].agent_id.as_str()), (1, 1, "a2"));
+        let (n, list) = track(json!({"hook_event_name": "SessionStart"}), 50);
+        assert_eq!((n, list), (0, Some(Vec::new())));
+        assert!(!SUBAGENTS.lock().unwrap().contains_key(pane));
+        assert_eq!(track(json!({"hook_event_name": "SessionStart"}), 51).1, None);
+    }
+
+    #[test]
+    fn answered_permission_goes_back_to_working() {
+        let hook = Hook {
+            pane_id: "perm-test".into(),
+            json: json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash",
+                "tool_input": {"command": "cargo test"}}),
+        };
+        let waiting = status_event(&hook).unwrap();
+        assert_eq!(waiting.status, PaneStatus::Waiting);
+        let resolved = resolved_event(&hook);
+        assert_eq!(resolved.status, PaneStatus::Working);
+        assert_eq!(resolved.last_action, waiting.last_action);
+        assert_eq!(resolved.event, "PermissionResolved");
+        // A second request still open on the pane keeps it waiting.
+        let (request, _rx) = PENDING.register(&hook.pane_id, &hook.json);
+        assert!(PENDING.has_pane(&hook.pane_id));
+        PENDING.remove(&request.request_id);
+        assert!(!PENDING.has_pane(&hook.pane_id));
     }
 
     #[test]

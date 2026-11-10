@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -78,11 +78,32 @@ fn send_output(pane_id: &str, text: &str) {
     }
 }
 
-type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+/// Starts the thread that writes a pane's input in order. A child slow to read its input (large
+/// paste, busy agent) blocks this thread, never the caller. It ends when the sender is dropped
+/// with the pane, so input queued for an old process never reaches a restarted one.
+fn spawn_writer(
+    pane_id: &str,
+    mut writer: Box<dyn Write + Send>,
+) -> std::io::Result<mpsc::Sender<Vec<u8>>> {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let id = pane_id.to_owned();
+    std::thread::Builder::new()
+        .name(format!("pty-in-{pane_id}"))
+        .spawn(move || {
+            while let Ok(data) = rx.recv() {
+                if let Err(e) = writer.write_all(&data).and_then(|()| writer.flush()) {
+                    eprintln!("pane {id}: write failed: {e}");
+                    break;
+                }
+            }
+        })?;
+    Ok(tx)
+}
 
 pub struct Pane {
     master: Box<dyn MasterPty + Send>,
-    writer: SharedWriter,
+    /// Input queue drained by the pane's writer thread (`spawn_writer`).
+    writer: mpsc::Sender<Vec<u8>>,
     child: Box<dyn Child + Send + Sync>,
     run: u64,
     /// Dropped last: closing it kills the agent's whole process tree (MCP servers, dev servers...).
@@ -95,19 +116,17 @@ pub struct Panes(pub Mutex<HashMap<String, Pane>>);
 
 impl Panes {
     /// Writes raw bytes to a pane's PTY. Used by commands and by the voice module.
-    /// The map lock is released before the (possibly blocking) write.
+    /// Never blocks on the child: the bytes are queued for the pane's writer thread, which logs
+    /// write errors.
     pub fn write(&self, pane_id: &str, data: &[u8]) -> Result<(), String> {
-        let writer = self
-            .0
+        self.0
             .lock()
             .map_err(|e| e.to_string())?
             .get(pane_id)
             .ok_or("pane not found")?
             .writer
-            .clone();
-        let mut writer = writer.lock().map_err(|e| e.to_string())?;
-        writer.write_all(data).map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())
+            .send(data.to_vec())
+            .map_err(|_| "pane input closed".to_string())
     }
 }
 
@@ -204,6 +223,7 @@ pub fn spawn_pane(
     drop(pair.slave); // child owns it now; dropping lets EOF propagate on exit
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let writer = spawn_writer(&pane_id, writer).map_err(|e| e.to_string())?;
 
     let run = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
     // Insert before streaming so the exit handler always finds this run.
@@ -211,7 +231,7 @@ pub fn spawn_pane(
         pane_id.clone(),
         Pane {
             master: pair.master,
-            writer: Arc::new(Mutex::new(writer)),
+            writer,
             child,
             run,
             #[cfg(windows)]
@@ -507,6 +527,30 @@ mod tests {
         assert!(v(&env("PORT", "4100")).is_ok());
         assert!(v(&env("PORT", "80")).is_err());
         assert!(v(&env("PORT", "41a")).is_err());
+    }
+
+    /// Input is written in the order it was queued, and the thread ends with its sender.
+    #[test]
+    fn writer_thread_keeps_order_and_ends_with_the_pane() {
+        struct Out(std::sync::mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for Out {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.send(buf.to_vec()).map_err(std::io::Error::other)?;
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+        let input = super::spawn_writer("t", Box::new(Out(out_tx))).unwrap();
+        for chunk in ["ab", "cd", "ef"] {
+            input.send(chunk.as_bytes().to_vec()).unwrap();
+        }
+        drop(input);
+        // The iterator ends when the thread exits and drops the writer.
+        let written: Vec<u8> = out_rx.iter().flatten().collect();
+        assert_eq!(written, b"abcdef");
     }
 
     #[test]
