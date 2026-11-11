@@ -274,22 +274,17 @@ impl PaneHeader {
         });
     }
 
-    /// Off: turns the browser on (its MCP server is added at spawn, so the agent restarts). On: reveals it.
-    fn browser_button(&mut self, pane: &Pane, window: &mut Window, cx: &mut Context<Self>) {
+    /// Off: turns the browser on (the agent has its MCP server since its spawn, so it keeps running). On: reveals it.
+    fn browser_button(&mut self, pane: &Pane, cx: &mut Context<Self>) {
         if pane.browser {
             cx.emit(PaneHeaderEvent::ShowBrowser);
             return;
         }
-        let id = pane.id.clone();
-        let deck = self.deck.clone();
-        let message = format!("Give {} a browser it can drive? The agent restarts.", pane.title);
-        confirm(message, "OK", window, cx, move |cx| {
-            deck.update(cx, |d, cx| {
-                d.state.update_pane(&id, |p| p.spec.browser = true);
-                cx.notify();
-            });
-            runtime::restart_pane(&id, cx);
+        self.deck.update(cx, |d, cx| {
+            d.state.update_pane(&pane.id, |p| p.spec.browser = true);
+            cx.notify();
         });
+        runtime::show_browser(&pane.id, cx);
     }
 
     fn title(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
@@ -651,9 +646,9 @@ impl PaneHeader {
                 };
                 let mut button = icon_button("browser", IconName::Globe, hint)
                     .pressed(pane.browser)
-                    .on_click(move |window, cx| {
+                    .on_click(move |_, cx| {
                         let pane = browser_pane.clone();
-                        let _ = browser_weak.update(cx, |this, cx| this.browser_button(&pane, window, cx));
+                        let _ = browser_weak.update(cx, |this, cx| this.browser_button(&pane, cx));
                     });
                 if pane.browser {
                     button = button.on_right_click(emit(PaneHeaderEvent::CloseBrowser));

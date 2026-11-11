@@ -1097,14 +1097,6 @@ impl DeckView {
                             .rounded(ui(6.0))
                             .text_color(hsla(p.muted))
                             .when(!current, |el| el.hover(|s| s.bg(hsla(p.hover))))
-                            // The dot's place is kept when idle, so the names stay aligned.
-                            .child(
-                                div()
-                                    .size(ui(6.0))
-                                    .flex_shrink_0()
-                                    .rounded_full()
-                                    .when_some(status, |el, status| el.bg(hsla(status_color(status, &p)))),
-                            )
                             .child(
                                 div()
                                     .flex_1()

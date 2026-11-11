@@ -26,6 +26,14 @@ use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 fn main() {
+    // GPUI's DirectComposition surface is drawn above child windows: the browser's native webview
+    // would stay hidden behind it (black panel). Without it GPUI draws in the window itself.
+    // shortcut: gives up transparent window backgrounds; revisit if GPUI lets children sit above.
+    #[cfg(windows)]
+    if std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION").is_none() {
+        // SAFETY: first statement of main, no other thread exists yet.
+        unsafe { std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1") };
+    }
     if let Some(code) = system::run_cli() {
         std::process::exit(code);
     }

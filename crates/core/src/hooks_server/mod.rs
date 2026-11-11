@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 pub mod permissions;
 
@@ -26,6 +27,8 @@ pub(crate) const MAX_BODY: u64 = 1024 * 1024;
 const MAX_TEXT: usize = 8 * 1024;
 /// Only the end of a transcript is read when looking for the last assistant message.
 const TRANSCRIPT_TAIL: u64 = 256 * 1024;
+/// How long a browser tool call waits for its panel to open; under the Claude hooks' 5 s timeout.
+const BROWSER_HOLD: Duration = Duration::from_secs(4);
 
 pub struct HookServer {
     pub port: u16,
@@ -128,6 +131,9 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
     if let Some(event) = status_event_with(hook, running) {
         emit_status(app, event);
     }
+    if calls_browser(&hook.json) {
+        open_browser(app, &hook.pane_id);
+    }
     if hook.json["hook_event_name"] != "PermissionRequest" {
         return no_decision();
     }
@@ -151,6 +157,41 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
                 .boxed()
         }
         None => no_decision(),
+    }
+}
+
+/// A Claude pane is about to call a tool of its browser panel (MCP server "browser").
+fn calls_browser(body: &Value) -> bool {
+    body["hook_event_name"] == "PreToolUse"
+        && body["tool_name"].as_str().is_some_and(|tool| tool.starts_with("mcp__browser__"))
+}
+
+/// The port a pane's browser MCP config (`<data>/browser/<pane>.json`) points to: the one its
+/// running agent connects to.
+pub fn browser_config_port(text: &str) -> Option<u16> {
+    let config: Value = serde_json::from_str(text).ok()?;
+    let url = config["mcpServers"]["browser"]["args"].as_array()?.last()?.as_str()?;
+    url.rsplit(':').next()?.parse().ok()
+}
+
+/// Asks the UI to open the pane's browser panel (`agent-browser`) when its webview is not
+/// listening, and holds the hook until it is: Claude runs the tool after the reply, so
+/// chrome-devtools-mcp finds the browser. Gives up after `BROWSER_HOLD`: the tool then fails to connect.
+fn open_browser(app: &AppHandle, pane_id: &str) {
+    let config = app.app_data_dir().map(|dir| dir.join("browser").join(format!("{pane_id}.json")));
+    let Some(port) = config.ok().and_then(|path| std::fs::read_to_string(path).ok()).and_then(|t| browser_config_port(&t))
+    else {
+        return;
+    };
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let listening = || std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok();
+    if listening() {
+        return;
+    }
+    let _ = app.emit("agent-browser", json!({ "paneId": pane_id }));
+    let deadline = Instant::now() + BROWSER_HOLD;
+    while Instant::now() < deadline && !listening() {
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -671,6 +712,18 @@ fn describe_tool(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spots_browser_tool_calls() {
+        let call = |event: &str, tool: &str| calls_browser(&json!({"hook_event_name": event, "tool_name": tool}));
+        assert!(call("PreToolUse", "mcp__browser__navigate_page"));
+        assert!(!call("PostToolUse", "mcp__browser__navigate_page"));
+        assert!(!call("PreToolUse", "mcp__other__navigate_page"));
+        assert!(!call("PreToolUse", "WebFetch"));
+        let config = r#"{"mcpServers":{"browser":{"command":"npx","args":["--browserUrl","http://127.0.0.1:9333"]}}}"#;
+        assert_eq!(browser_config_port(config), Some(9333));
+        assert_eq!(browser_config_port("{}"), None);
+    }
 
     #[test]
     fn tracks_steps() {

@@ -272,6 +272,14 @@ fn on_backend(event: &Event, cx: &mut App) {
                 on_status(e, cx);
             }
         }
+        // The agent is about to use its browser tools: turns the panel on, as the globe button does.
+        // The hook is held meanwhile (`hooks_server::open_browser`).
+        "agent-browser" => {
+            if let Some(id) = event.payload["paneId"].as_str() {
+                update_pane(id, cx, |p| p.spec.browser = true);
+                show_browser(id, cx);
+            }
+        }
         // The deck notifies after every backend event: headers and the activity panel repaint.
         "agent-subagents" => {
             let list = serde_json::from_value::<Vec<Subagent>>(event.payload["subagents"].clone());
@@ -384,6 +392,10 @@ fn adopt_pane(id: &str, cx: &mut App) {
     if let Some((cols, rows)) = nudge {
         nudge_size(id, cols, rows, cx);
     }
+    // No spawn opened it: the webview takes the port the live agent was started with.
+    if pane(id, cx).is_some_and(|p| p.browser) {
+        show_browser(id, cx);
+    }
     let now = now_ms();
     update_pane(id, cx, |p| {
         p.exited = false;
@@ -416,13 +428,41 @@ fn free_port(base: u16, map: &HashMap<String, Runtime>) -> u16 {
     (base..=u16::MAX).find(|p| !used.contains(p)).unwrap_or(base)
 }
 
-/// Opens the pane's browser webview in the main window and returns the Claude args that connect to it.
-fn open_browser(id: &str, cx: &mut App) -> Result<Vec<String>, String> {
+/// Opens the pane's browser webview in the main window. Not from inside a window update.
+fn open_browser(id: &str, cx: &mut App) -> Result<(), String> {
     let dir = deck(cx).ok_or("deck not ready")?.read(cx).data_dir.clone();
     let window = crate::system::main_window(cx).ok_or("main window not ready")?;
     window
         .update(cx, |_, window, cx| crate::browser::open(id, &dir, window, cx))
         .map_err(|e| e.to_string())?
+}
+
+/// The Claude args that connect the pane to its browser, given at every spawn so that the panel
+/// opens and closes without a restart; the webview itself is only opened for a pane with its panel on.
+fn browser_args(id: &str, cx: &mut App) -> Result<Vec<String>, String> {
+    let dir = deck(cx).ok_or("deck not ready")?.read(cx).data_dir.clone();
+    let args = crate::browser::args(id, &dir, cx)?;
+    if pane(id, cx).is_some_and(|p| p.browser) {
+        open_browser(id, cx)?;
+    }
+    Ok(args)
+}
+
+/// The browser panel was turned on: opens its webview. The running agent already has the browser
+/// tools (see `browser_args`), so it is not restarted.
+pub fn show_browser(id: &str, cx: &mut App) {
+    let id = id.to_owned();
+    // Deferred: the caller may be inside a window update.
+    cx.spawn(async move |cx| {
+        cx.update(|cx| {
+            if let Err(e) = open_browser(&id, cx) {
+                toast(format!("Browser: {e}"), cx);
+            }
+            // Redraws the panel, which waits for the webview.
+            update_pane(&id, cx, |_| {});
+        });
+    })
+    .detach();
 }
 
 /// `mcp::Registration` fields are private; read them through its serde form.
@@ -442,7 +482,7 @@ struct SpawnJob {
     cols: u16,
     rows: u16,
     trust: bool,
-    /// Browser panel MCP args (Claude with a browser), filled on the main thread before the spawn.
+    /// Browser panel MCP args (Claude), filled on the main thread before the spawn.
     browser: Vec<String>,
     /// `settings.worktree_setup`: run once in a worktree created by this spawn.
     setup: String,
@@ -574,8 +614,8 @@ fn spawn(id: &str, cx: &mut App) {
             return;
         }
         // Outside any window update: the webview is created in the main window.
-        if job.pane.browser && job.pane.agent == agentdeck_core::agents::AgentKind::Claude {
-            match cx.update(|cx| open_browser(&id, cx)) {
+        if job.pane.agent == agentdeck_core::agents::AgentKind::Claude {
+            match cx.update(|cx| browser_args(&id, cx)) {
                 Ok(args) => job.browser = args,
                 Err(e) => {
                     cx.update(|cx| after_spawn(&id, token, Err(e), resumed, (cols, rows), cx));

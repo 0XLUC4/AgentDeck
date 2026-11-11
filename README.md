@@ -61,7 +61,8 @@ starts instantly and stays light on memory.
 - Status bar: usage of the day per agent, agents waiting, working and to review
 - Scheduled automations: prompts that start an agent every N hours or daily
 - Idle Claude agents can sleep to free memory and wake on the same conversation
-- Browser panel: annotate page elements and send the notes to the agent
+- Browser panel: annotate page elements and send the notes to the agent; mobile preview;
+  agents open it by themselves to test web and mobile apps
 - Find in a terminal's scrollback (Ctrl+Shift+F)
 
 **Workspaces and sessions**
