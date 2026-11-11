@@ -128,7 +128,8 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
             json!({ "paneId": hook.pane_id, "subagents": subagents }),
         );
     }
-    if let Some(event) = status_event_with(hook, running) {
+    let shells = track_shells(&hook.pane_id, &hook.json);
+    if let Some(event) = status_event_with(hook, running, shells) {
         emit_status(app, event);
     }
     if calls_browser(&hook.json) {
@@ -263,6 +264,34 @@ const MAX_UNCLAIMED: usize = 16;
 const DEFAULT_AGENT_TYPE: &str = "general-purpose";
 
 static SUBAGENTS: LazyLock<Mutex<HashMap<String, PaneSubagents>>> = LazyLock::new(Default::default);
+
+/// Per pane: background commands still running, and whether the user prompted since the last Stop.
+static SHELLS: LazyLock<Mutex<HashMap<String, (usize, bool)>>> = LazyLock::new(Default::default);
+
+/// Counts the pane's background commands (Bash `run_in_background`) after this hook. No hook fires
+/// when one ends: Claude resumes on its own to report it, so a Stop with no prompt before it means
+/// one finished.
+// shortcut: a resumed turn for another reason (subagent, Monitor) also counts as one finished;
+// track the task ids from the transcript if the count ever drifts.
+fn track_shells(pane_id: &str, body: &Value) -> usize {
+    let mut map = SHELLS.lock().unwrap_or_else(PoisonError::into_inner);
+    let (count, prompted) = map.entry(pane_id.to_owned()).or_default();
+    let tool = body["tool_name"].as_str().unwrap_or("");
+    match body["hook_event_name"].as_str().unwrap_or("") {
+        "SessionStart" => (*count, *prompted) = (0, false),
+        "UserPromptSubmit" => *prompted = true,
+        "PostToolUse" if tool == "Bash" && body["tool_input"]["run_in_background"] == true => *count += 1,
+        "PostToolUse" if matches!(tool, "KillShell" | "KillBash" | "TaskStop") => *count = count.saturating_sub(1),
+        "Stop" => {
+            if !*prompted {
+                *count = count.saturating_sub(1);
+            }
+            *prompted = false;
+        }
+        _ => {}
+    }
+    *count
+}
 
 /// Records what a hook says about the pane's subagents: how many still run, and the new list when it changed.
 fn track_subagents(pane_id: &str, body: &Value, now: i64) -> (usize, Option<Vec<Subagent>>) {
@@ -432,18 +461,23 @@ fn track_steps(pane_id: &str, body: &Value, running: Option<&[Subagent]>) -> Opt
 #[cfg(test)]
 fn status_event(hook: &Hook) -> Option<AgentStatusEvent> {
     let (running, _) = track_subagents(&hook.pane_id, &hook.json, 0);
-    status_event_with(hook, running)
+    let shells = track_shells(&hook.pane_id, &hook.json);
+    status_event_with(hook, running, shells)
 }
 
-/// `running`: subagents of the pane still running after this hook.
-fn status_event_with(hook: &Hook, running: usize) -> Option<AgentStatusEvent> {
+/// `running`: subagents of the pane still running after this hook; `shells`: its background commands.
+fn status_event_with(hook: &Hook, running: usize, shells: usize) -> Option<AgentStatusEvent> {
     let (mut status, mut last_action, event) = map_event(&hook.json)?;
-    // Claude ends its turn while background agents still run, and resumes when they report back:
-    // not finished yet, so no "finished" notification.
-    if status == PaneStatus::Done && event == "Stop" && running > 0 {
+    // Claude ends its turn while background agents or commands still run, and resumes when they
+    // report back: not finished yet, so no "finished" notification.
+    if status == PaneStatus::Done && event == "Stop" && running + shells > 0 {
         status = PaneStatus::Working;
-        let plural = if running == 1 { "" } else { "s" };
-        last_action = Some(format!("Waiting for {running} background agent{plural}"));
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        last_action = Some(if running > 0 {
+            format!("Waiting for {running} background agent{}", plural(running))
+        } else {
+            format!("Waiting for {shells} background command{}", plural(shells))
+        });
     }
     let (prompt, summary) = details(&hook.json);
     Some(AgentStatusEvent {
@@ -815,6 +849,24 @@ mod tests {
         assert_eq!(stop(), Some((PaneStatus::Done, None)));
         status_event(&hook("SubagentStart", "a3"));
         status_event(&hook("SessionStart", ""));
+        assert_eq!(stop(), Some((PaneStatus::Done, None)));
+    }
+
+    #[test]
+    fn stop_with_background_command_keeps_working() {
+        let event = |v: Value| status_event(&Hook { pane_id: "shell-test".into(), json: v }).map(|e| (e.status, e.last_action));
+        let stop = || event(json!({"hook_event_name": "Stop"}));
+        event(json!({"hook_event_name": "UserPromptSubmit", "prompt": "build it"}));
+        event(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "cargo build", "run_in_background": true}}));
+        assert_eq!(stop(), Some((PaneStatus::Working, Some("Waiting for 1 background command".into()))));
+        // Claude resumes alone when the command ends, then stops again: done.
+        assert_eq!(stop(), Some((PaneStatus::Done, None)));
+        // A killed command is finished too.
+        event(json!({"hook_event_name": "UserPromptSubmit", "prompt": "again"}));
+        event(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+            "tool_input": {"command": "npm run dev", "run_in_background": true}}));
+        event(json!({"hook_event_name": "PostToolUse", "tool_name": "KillShell", "tool_input": {}}));
         assert_eq!(stop(), Some((PaneStatus::Done, None)));
     }
 

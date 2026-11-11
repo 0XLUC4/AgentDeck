@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "agentdeck"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "agentdeck-core",
  "alacritty_terminal",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "agentdeck-core"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "chrono",
  "cpal",
@@ -3446,8 +3446,6 @@ checksum = "99b18b06f5026b3d312488eacfdddbe78f82b4bf32bb2d2bc3186e31e552b797"
 [[package]]
 name = "gpui-webview"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10995df6a65620593b2f8281bb8b691893343611faa11d4b6d302d6b9b2503f8"
 dependencies = [
  "anyhow",
  "gpui-kit",

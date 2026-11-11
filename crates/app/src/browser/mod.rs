@@ -190,7 +190,11 @@ pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -
     };
     // Different browser args need their own WebView2 environment, hence data directory.
     let mut context = wry::WebContext::new(Some(dir.join("profiles").join(pane_id)));
-    let builder = wry::WebViewBuilder::new_with_web_context(&mut context).with_url(START_URL);
+    // Theme background, not WebView2's default white, until the page paints (no white flash).
+    let [_, r, g, b] = palette(cx).base.to_be_bytes();
+    let builder = wry::WebViewBuilder::new_with_web_context(&mut context)
+        .with_url(START_URL)
+        .with_background_color((r, g, b, 255));
     #[cfg(windows)]
     let builder = {
         use wry::WebViewBuilderExtWindows as _;
@@ -464,7 +468,8 @@ impl BrowserPanel {
 
     fn hide_native(&self, cx: &App) {
         if let Ok(view) = browser_view(&self.pane_id, cx) {
-            let _ = view.read(cx).raw().set_visible(false);
+            // Through the wrapper: a raw hide would leave its "already shown" cache stale.
+            let _ = view.read(cx).set_visible(false);
         }
         self.hidden.set(true);
     }
