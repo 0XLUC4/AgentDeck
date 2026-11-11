@@ -275,6 +275,41 @@ pub fn save_settings(dir: &Path, settings: &Settings) -> Result<(), String> {
     store.save()
 }
 
+const QUEUES_KEY: &str = "queues";
+
+/// Prompts still waiting in each pane's queue: they survive a restart. Unreadable: no queue.
+pub fn load_queues(dir: &Path) -> crate::logic::queue::Queues {
+    JsonStore::load(dir, LOCAL_FILE)
+        .ok()
+        .and_then(|store| serde_json::from_value(store.get(QUEUES_KEY)).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_queues(dir: &Path, queues: &crate::logic::queue::Queues) -> Result<(), String> {
+    let mut store = JsonStore::load(dir, LOCAL_FILE)?;
+    store.set(QUEUES_KEY, serde_json::to_value(queues).map_err(|e| e.to_string())?);
+    store.save()
+}
+
+const AUTOMATIONS_KEY: &str = "automations";
+
+/// Scheduled prompts (local.json). Unreadable file or entries are skipped: never an error at startup.
+pub fn load_automations(dir: &Path) -> Vec<crate::logic::automations::Automation> {
+    JsonStore::load(dir, LOCAL_FILE)
+        .ok()
+        .and_then(|store| serde_json::from_value::<Vec<Value>>(store.get(AUTOMATIONS_KEY)).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect()
+}
+
+pub fn save_automations(dir: &Path, list: &[crate::logic::automations::Automation]) -> Result<(), String> {
+    let mut store = JsonStore::load(dir, LOCAL_FILE)?;
+    store.set(AUTOMATIONS_KEY, serde_json::to_value(list).map_err(|e| e.to_string())?);
+    store.save()
+}
+
 pub fn load_templates(dir: &Path) -> Result<Vec<SessionTemplate>, String> {
     Ok(parse_templates(&JsonStore::load(dir, TEMPLATES_FILE)?.get(TEMPLATES_KEY)))
 }

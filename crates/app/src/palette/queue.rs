@@ -319,7 +319,6 @@ impl Render for QueueDialog {
         };
         let count = queue.items.len();
         let empty_text = self.text.read(cx).value().trim().is_empty();
-        let (bad, hover_bg) = (hsla(p.bad), hsla(p.hover));
         let list = if count == 0 {
             div().py_3().text_center().text_color(hsla(p.muted)).child("Queue is empty.").into_any_element()
         } else {
@@ -364,7 +363,6 @@ impl Render for QueueDialog {
                         )
                         .child(
                             ui::icon_button(SharedString::from(format!("rm-{}", item.id)), IconName::Trash, &p)
-                                .hover(move |s| s.bg(hover_bg).text_color(bad))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let pane_id = this.pane_id.clone();
                                     this.deck.update(cx, |d, cx| {

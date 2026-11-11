@@ -86,16 +86,10 @@ pub fn init(cx: &mut App) {
     // Global fallbacks: actions dispatched from dialogs (palette) or with nothing focused never reach
     // DeckView's own listeners, which sit below gpui-kit's Root.
     cx.on_action(|_: &ToggleSidebar, cx| {
-        with_shell(cx, |this, cx| {
-            this.sidebar_open = !this.sidebar_open;
-            cx.notify();
-        })
+        with_shell(cx, |this, cx| this.toggle_sidebar(cx))
     });
     cx.on_action(|_: &ToggleActivity, cx| {
-        with_shell(cx, |this, cx| {
-            this.activity_open = !this.activity_open;
-            cx.notify();
-        })
+        with_shell(cx, |this, cx| this.toggle_activity(cx))
     });
     cx.on_action(|_: &NextWaiting, cx| with_shell(cx, |this, cx| this.next_waiting(cx)));
     cx.on_action(|_: &AddAgent, cx| with_shell_window(cx, |this, window, cx| this.open_picker(window, cx)));
@@ -189,8 +183,11 @@ pub struct DeckView {
     update_button: Entity<UpdateButton>,
     focus: FocusHandle,
     tabs_focus: FocusHandle,
+    /// Today's usage, total and per agent (status bar), refreshed every minute. None until the first read.
+    usage_today: Option<agentdeck_core::usage::UsageSummary>,
     _subs: Vec<Subscription>,
     _ticker: Task<()>,
+    _usage: Task<()>,
 }
 
 impl DeckView {
@@ -203,6 +200,8 @@ impl DeckView {
         });
         let settings = &deck.read(cx).settings;
         let (sidebar_open, activity_open) = (settings.sidebar_open, settings.activity_open);
+        // The rail shows one panel at a time.
+        let activity_open = activity_open && !sidebar_open;
         let permission_banner = cx.new(|cx| PermissionBanner::new(deck.clone(), cx));
         let update_button = cx.new(UpdateButton::new);
         let mut this = Self {
@@ -230,8 +229,10 @@ impl DeckView {
             update_button,
             focus: cx.focus_handle(),
             tabs_focus: cx.focus_handle(),
+            usage_today: None,
             _subs: vec![observe],
             _ticker: ticker(cx),
+            _usage: usage_ticker(cx),
         };
         this.sync_docks(cx);
         this
@@ -317,17 +318,35 @@ impl DeckView {
             }
             PaneHeaderEvent::OpenSkills => crate::skills::open_skills(self.deck.clone(), pane_id, window, cx),
             PaneHeaderEvent::OpenNotes => crate::skills::open_notes(self.deck.clone(), pane_id, window, cx),
-            PaneHeaderEvent::OpenGit => {
-                let deck = self.deck.clone();
-                let panel = cx.new(|cx| crate::git::GitPanel::new(deck, pane_id, window, cx));
-                let sub = cx.subscribe(&panel, |this, _, _: &DismissEvent, cx| {
-                    this.git_panel = None;
-                    cx.notify();
-                });
-                self.git_panel = Some((panel, sub));
-                cx.notify();
-            }
+            PaneHeaderEvent::OpenGit => self.open_git(pane_id, window, cx),
         }
+    }
+
+    /// Opens the Git panel of a pane (its header button, or the rail for the active pane).
+    pub(super) fn open_git(&mut self, pane_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let deck = self.deck.clone();
+        let pane_id = pane_id.to_owned();
+        let panel = cx.new(|cx| crate::git::GitPanel::new(deck, pane_id, window, cx));
+        let sub = cx.subscribe(&panel, |this, _, _: &DismissEvent, cx| {
+            this.git_panel = None;
+            cx.notify();
+        });
+        self.git_panel = Some((panel, sub));
+        cx.notify();
+    }
+
+    /// Projects and Activity share the panel next to the rail: opening one closes the other.
+    pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        // Behind a page the panel is hidden: asking for it closes the page and shows it.
+        self.sidebar_open = crate::skills::close_page(cx) || !self.sidebar_open;
+        self.activity_open &= !self.sidebar_open;
+        cx.notify();
+    }
+
+    pub(super) fn toggle_activity(&mut self, cx: &mut Context<Self>) {
+        self.activity_open = crate::skills::close_page(cx) || !self.activity_open;
+        self.sidebar_open &= !self.activity_open;
+        cx.notify();
     }
 
     /// Deck.tsx sync: every tab gets a dock holding its panes (and their browsers); panels of
@@ -662,6 +681,29 @@ fn ticker(cx: &mut Context<DeckView>) -> Task<()> {
     })
 }
 
+/// Every minute: today's usage for the status bar. It reads transcript files, so off the main thread.
+fn usage_ticker(cx: &mut Context<DeckView>) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        loop {
+            let summary = cx
+                .background_executor()
+                .spawn(async { agentdeck_core::usage::usage_summary("today".into()) })
+                .await;
+            let alive = this.update(cx, |this, cx| match summary {
+                Ok(summary) => {
+                    this.usage_today = Some(summary);
+                    cx.notify();
+                }
+                Err(e) => eprintln!("layout: usage of today: {e}"),
+            });
+            if alive.is_err() {
+                break;
+            }
+            cx.background_executor().timer(Duration::from_secs(60)).await;
+        }
+    })
+}
+
 impl Render for DeckView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
@@ -676,6 +718,9 @@ impl Render for DeckView {
         let wall = crate::orchestrator::wall_overlay(&self.deck, cx);
         // The wall covers the whole pane area: no dock (terminals) behind it.
         let page = crate::skills::page(&active_tab, cx);
+        // A page brings its own side column: the Projects or Activity panel steps aside for it.
+        let page_side = crate::skills::page_side(cx);
+        let page_open = crate::skills::page_kind(cx).is_some();
         let dock = (wall.is_none() && page.is_none()).then(|| self.render_dock(&active_tab, window, cx));
         let pane_area = div()
             .relative()
@@ -718,14 +763,8 @@ impl Render for DeckView {
             .on_action(cx.listener(|this, _: &FocusPane8, _, cx| this.focus_nth(7, cx)))
             .on_action(cx.listener(|this, _: &FocusPane9, _, cx| this.focus_nth(8, cx)))
             .on_action(cx.listener(|this, _: &NextWaiting, _, cx| this.next_waiting(cx)))
-            .on_action(cx.listener(|this, _: &ToggleActivity, _, cx| {
-                this.activity_open = !this.activity_open;
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar_open = !this.sidebar_open;
-                cx.notify();
-            }))
+            .on_action(cx.listener(|this, _: &ToggleActivity, _, cx| this.toggle_activity(cx)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &ArrangeInGrid, _, cx| {
                 let tab = this.deck.read(cx).state.active_tab_id.clone();
                 this.arrange(&tab, cx);
@@ -762,10 +801,13 @@ impl Render for DeckView {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .when(self.sidebar_open, |el| el.child(self.sidebar(cx)))
-                    .child(main)
-                    .when(self.activity_open, |el| el.child(self.activity_panel(cx))),
+                    .child(self.rail(cx))
+                    .when(self.sidebar_open && !page_open, |el| el.child(self.sidebar(cx)))
+                    .when(self.activity_open && !page_open, |el| el.child(self.activity_panel(cx)))
+                    .children(page_side)
+                    .child(main),
             )
+            .child(self.status_bar(cx))
             .when(!self.activity_open, |el| el.child(self.permission_banner.clone()))
             .child(self.toasts(cx))
             .when_some(picker, |el, picker| el.child(div().absolute().inset_0().child(picker)))

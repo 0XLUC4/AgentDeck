@@ -57,6 +57,11 @@ starts instantly and stays light on memory.
 - `agentdeck list | send | spawn` from a terminal while the app runs
 - Phone page on the local network (off by default): status, prompts, allow or deny permissions
 - Agents over SSH (`user@host:/folder` in the agent picker)
+- Navigation rail with one side panel at a time; files and notes open as a side column
+- Status bar: usage of the day per agent, agents waiting, working and to review
+- Scheduled automations: prompts that start an agent every N hours or daily
+- Idle Claude agents can sleep to free memory and wake on the same conversation
+- Browser panel: annotate page elements and send the notes to the agent
 - Find in a terminal's scrollback (Ctrl+Shift+F)
 
 **Workspaces and sessions**

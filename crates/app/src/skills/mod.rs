@@ -8,6 +8,7 @@
 
 mod agent_dialog;
 mod assets;
+mod files;
 mod graph;
 mod model3d;
 mod viewer;
@@ -60,24 +61,56 @@ pub fn overlay(cx: &App) -> Option<AnyElement> {
     )
 }
 
-/// The page shown in place of the panes, and the session it was opened from.
-struct OpenPage(Option<(AnyView, String)>);
+/// The page shown in place of the panes, the session it was opened from, and which page it is
+/// ("assets", "notes", "files", "automations").
+struct OpenPage(Option<(AnyView, String, &'static str)>);
 
 impl Global for OpenPage {}
 
 /// The open page (assets, notes graph), to draw over the pane area. Switching session closes it.
 pub fn page(active_tab: &str, cx: &mut App) -> Option<AnyView> {
-    let (view, tab) = cx.try_global::<OpenPage>()?.0.clone()?;
+    let (view, tab, kind) = cx.try_global::<OpenPage>()?.0.clone()?;
     if tab != active_tab {
         cx.set_global(OpenPage(None));
         return None;
     }
-    Some(view)
+    // Files and notes are a side column first: the panes stay in view until a file or a note is
+    // picked (or the notes graph is asked for).
+    let fills = match kind {
+        "files" => view.clone().downcast::<files::FilesPage>().is_ok_and(|page| page.read(cx).has_main()),
+        "notes" => view.clone().downcast::<GraphDialog>().is_ok_and(|page| page.read(cx).has_main()),
+        _ => true,
+    };
+    fills.then_some(view)
 }
 
-fn show_page(deck: &Entity<Deck>, view: AnyView, focus: FocusHandle, window: &mut Window, cx: &mut App) {
+/// The side column of the open page (files tree, notes list), for the panel next to the rail.
+pub fn page_side(cx: &mut App) -> Option<AnyElement> {
+    let (view, _, kind) = cx.try_global::<OpenPage>()?.0.clone()?;
+    match kind {
+        "files" => view.downcast::<files::FilesPage>().ok().map(|page| page.update(cx, |page, cx| page.side(cx))),
+        "notes" => view.downcast::<GraphDialog>().ok().map(|page| page.update(cx, |page, cx| page.side(cx))),
+        _ => None,
+    }
+}
+
+/// Which page is open, for the rail to mark its button.
+pub fn page_kind(cx: &App) -> Option<&'static str> {
+    cx.try_global::<OpenPage>()?.0.as_ref().map(|(_, _, kind)| *kind)
+}
+
+/// Closes the open page; false when there was none.
+pub fn close_page(cx: &mut App) -> bool {
+    let open = page_kind(cx).is_some();
+    if open {
+        cx.set_global(OpenPage(None));
+    }
+    open
+}
+
+pub(crate) fn show_page(deck: &Entity<Deck>, kind: &'static str, view: AnyView, focus: FocusHandle, window: &mut Window, cx: &mut App) {
     let tab = deck.read(cx).state.active_tab_id.clone();
-    cx.set_global(OpenPage(Some((view, tab))));
+    cx.set_global(OpenPage(Some((view, tab, kind))));
     focus.focus(window, cx);
     window.refresh();
 }
@@ -149,14 +182,23 @@ fn open_agent_dialog(
 pub fn open_assets(deck: Entity<Deck>, workspace_id: &str, window: &mut Window, cx: &mut App) {
     let view = cx.new(|cx| AssetsDialog::new(deck.clone(), workspace_id.to_string(), window, cx));
     let focus = view.read(cx).focus.clone();
-    show_page(&deck, view.into(), focus, window, cx);
+    show_page(&deck, "assets", view.into(), focus, window, cx);
 }
 
 /// Opens the notes graph of a workspace (sidebar button).
 pub fn open_graph(deck: Entity<Deck>, workspace_id: &str, window: &mut Window, cx: &mut App) {
     let view = cx.new(|cx| GraphDialog::new(deck.clone(), workspace_id.to_string(), cx));
     let focus = view.read(cx).focus.clone();
-    show_page(&deck, view.into(), focus, window, cx);
+    cx.observe(&view, |_, cx| cx.refresh_windows()).detach();
+    show_page(&deck, "notes", view.into(), focus, window, cx);
+}
+
+/// Opens the file explorer of a workspace: folder tree, file preview, path to the active pane.
+pub fn open_files(deck: Entity<Deck>, workspace_id: &str, window: &mut Window, cx: &mut App) {
+    let view = cx.new(|cx| files::FilesPage::new(deck.clone(), workspace_id.to_string(), window, cx));
+    let focus = view.read(cx).focus.clone();
+    cx.observe(&view, |_, cx| cx.refresh_windows()).detach();
+    show_page(&deck, "files", view.into(), focus, window, cx);
 }
 
 /// Pane header button (agent panes) opening the skills manager.
@@ -212,8 +254,8 @@ fn modal_frame(focus: &FocusHandle, width: f32, panel: Div, cx: &App) -> Statefu
         )
 }
 
-/// A page filling the pane area (assets, notes graph): same shell as a dialog, no backdrop.
-/// Esc and the close button go back to the panes.
+/// A page filling the pane area (assets, notes, files), flush with the window like the panes it
+/// replaces. Esc and the close button go back to the panes.
 fn page_frame(focus: &FocusHandle, panel: Div, cx: &App) -> Stateful<Div> {
     let p = palette(cx);
     div()
@@ -222,16 +264,12 @@ fn page_frame(focus: &FocusHandle, panel: Div, cx: &App) -> Stateful<Div> {
         .key_context(DIALOG_CONTEXT)
         .on_action(|_: &CloseSkillsDialog, window, cx| close(window, cx))
         .size_full()
-        .p(ui(6.0))
         .occlude()
         .child(
             panel
                 .size_full()
                 .flex()
                 .flex_col()
-                .rounded(ui(agentdeck_core::logic::theme::RADIUS_XL))
-                .border_1()
-                .border_color(hsla(p.line))
                 .bg(hsla(p.panel))
                 .text_color(hsla(p.fg))
                 .text_size(ui(13.0))

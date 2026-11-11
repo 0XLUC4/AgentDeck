@@ -28,10 +28,10 @@ use crate::panes::agent_logo;
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
 
-const MODEL_EXTS: &[&str] = &["glb", "gltf", "obj", "fbx", "stl", "blend"];
+pub(super) const MODEL_EXTS: &[&str] = &["glb", "gltf", "obj", "fbx", "stl", "blend"];
 
 /// Fixed light studio backdrop of the original viewer and thumbnails (not themed there either).
-const BACKDROP: u32 = 0xe8e8ea;
+pub(super) const BACKDROP: u32 = 0xe8e8ea;
 const THUMB_SIZE: u32 = 256;
 
 fn is_model(file: &AssetFile) -> bool {
@@ -147,7 +147,7 @@ impl AssetsDialog {
         .detach();
     }
 
-    /// Live agent panes of this workspace, in tab order.
+    /// Live agent panes of this project, in tab order.
     fn agents(&self, cx: &App) -> Vec<Pane> {
         let state = &self.deck.read(cx).state;
         state
@@ -318,7 +318,7 @@ impl AssetsDialog {
             .into_any_element()
     }
 
-    fn render_detail(&self, file: &AssetFile, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_detail(&self, file: &AssetFile, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let model = is_model(file);
         let agents = self.agents(cx);
@@ -414,7 +414,8 @@ impl AssetsDialog {
                 }))
         });
         div()
-            .h(window.viewport_size().height * 0.72)
+            // Fills the page: the agent choice and the prompt sit at its bottom edge.
+            .h_full()
             .flex()
             .flex_col()
             .gap_3()
@@ -423,6 +424,8 @@ impl AssetsDialog {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .px_4()
+                    .pt_3()
                     .child(
                         Button::new("assets-back")
                             .ghost()
@@ -447,31 +450,27 @@ impl AssetsDialog {
                     .justify_center()
                     .when(!model, |d| d.p_4())
                     .overflow_hidden()
-                    .rounded(ui(12.0))
-                    .border_1()
-                    .border_color(hsla(p.line))
                     .bg(hsla(BACKDROP))
                     .child(preview),
             )
+            // One line: who gets the change, what to change, send.
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
+                    .flex_shrink_0()
                     .items_center()
-                    .gap(ui(6.0))
+                    .gap_2()
+                    .px_4()
+                    .pb_3()
                     .when(agents.is_empty(), |d| {
                         d.child(
                             div()
+                                .flex_shrink_0()
                                 .text_color(hsla(p.subtle))
-                                .child("Start an agent in this workspace to send changes."),
+                                .child("Start an agent in this project to send changes."),
                         )
                     })
-                    .children(chips),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
+                    .children(chips)
                     .child(div().flex_1().min_w_0().child(Input::new(&self.instruction)))
                     .child(
                         Button::new("assets-send")
@@ -487,7 +486,7 @@ impl AssetsDialog {
 }
 
 impl Render for AssetsDialog {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
         let Some(workspace) = self
             .deck
@@ -520,10 +519,10 @@ impl Render for AssetsDialog {
         let body = if workspace.path.is_empty() {
             div()
                 .text_color(hsla(p.muted))
-                .child("Link a folder to this workspace to browse its 3D assets.")
+                .child("Link a folder to this project to browse its 3D assets.")
                 .into_any_element()
         } else if let Some(file) = opened {
-            self.render_detail(file, window, cx)
+            self.render_detail(file, cx)
         } else {
             self.render_grid(cx)
         };
@@ -535,8 +534,8 @@ impl Render for AssetsDialog {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .px_5()
-                    .py_4()
+                    // The grid keeps its margins; an opened asset goes edge to edge.
+                    .when(self.opened.is_none(), |d| d.px_5().py_4())
                     .child(body),
             );
         page_frame(&self.focus, panel, cx).into_any_element()

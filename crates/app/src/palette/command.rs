@@ -53,7 +53,7 @@ impl Section {
             Section::Recent => "Recent",
             Section::Agents => "Agents",
             Section::Sessions => "Sessions",
-            Section::Workspaces => "Workspaces",
+            Section::Workspaces => "Projects",
             Section::Actions => "Actions",
         }
     }
@@ -96,7 +96,7 @@ pub(super) struct Item {
 const ACTIONS: [(&str, &str, IconName, Option<&str>); 25] = [
     ("add-agent", "Add agent", IconName::Plus, None),
     ("new-session", "New session", IconName::SquarePlus, None),
-    ("link-workspace", "Link workspace", IconName::FolderPlus, None),
+    ("link-workspace", "Link project", IconName::FolderPlus, None),
     ("interrupt-all", "Interrupt all", IconName::Pause, None),
     ("stop-all", "Stop all", IconName::SquareStop, None),
     ("restart-all", "Restart all", IconName::RotateCcw, None),
@@ -595,7 +595,7 @@ impl Render for CommandPalette {
             }
         }
         let query = if self.query.is_empty() {
-            div().text_color(hsla(p.subtle)).child("Agent, session, workspace, action…")
+            div().text_color(hsla(p.subtle)).child("Agent, session, project, action…")
         } else {
             div().text_color(hsla(p.fg)).child(self.query.clone())
         };

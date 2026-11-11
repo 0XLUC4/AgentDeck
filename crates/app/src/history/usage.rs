@@ -330,7 +330,7 @@ impl UsageDialog {
         let workspaces = by_workspace(&data.by_workspace_cwd, &self.deck.read(cx).state.workspaces);
         body.when(data.by_day.len() > 1, |d| d.child(day_chart(&data.by_day, cx)))
             .children(bar_list("By agent", &data.by_agent, true, cx))
-            .children(bar_list("By workspace", &workspaces, false, cx))
+            .children(bar_list("By project", &workspaces, false, cx))
     }
 }
 

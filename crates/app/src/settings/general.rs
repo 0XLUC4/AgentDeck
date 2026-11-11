@@ -18,6 +18,7 @@ use crate::theme::{hsla, ui};
 pub(super) struct General {
     font_size: Entity<SliderState>,
     font_family: Entity<InputState>,
+    sleep: Entity<InputState>,
     /// OS registration (source of truth), read once at open.
     autostart: bool,
     autostart_error: Option<String>,
@@ -51,6 +52,9 @@ impl General {
                 this.set(cx, |s| s.font_family = family);
             }
         }));
+        let sleep = super::number_input(window, cx, subs, s.sleep_minutes, (0, 1440), |s| s.sleep_minutes, |s, v| {
+            s.sleep_minutes = v
+        });
         let (autostart, autostart_error) = match autostart_enabled() {
             Ok(on) => (on, None),
             Err(e) => (false, Some(e)),
@@ -58,6 +62,7 @@ impl General {
         Self {
             font_size,
             font_family,
+            sleep,
             autostart,
             autostart_error,
             history: history::history_get_enabled(),
@@ -185,7 +190,7 @@ impl SettingsDialog {
                 &p,
             ),
             row(
-                "Show workspaces on startup",
+                "Show projects on startup",
                 None,
                 flag("set-sidebar", s.sidebar_open, |s, v| s.sidebar_open = v, cx),
                 &p,
@@ -248,6 +253,12 @@ impl SettingsDialog {
             "Close to system tray",
             Some("Closing the window hides it; Quit from the tray icon stops everything"),
             flag("set-close-tray", s.close_to_tray, |s, v| s.close_to_tray = v, cx),
+            &p,
+        ));
+        rows.push(row(
+            "Put idle Claude agents to sleep",
+            Some("After this many minutes without activity (0 = never). Frees their memory; a key wakes them on the same conversation"),
+            field(&g.sleep, Some(96.0), false),
             &p,
         ));
         rows.push(row(

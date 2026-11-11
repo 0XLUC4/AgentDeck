@@ -1,6 +1,7 @@
 //! Browser panel for a Claude pane: a native webview (gpui-webview, Wry/WebView2) laid over the panel body,
 //! driven by the agent through chrome-devtools-mcp on a per-pane DevTools port. URL bar, back/forward,
-//! reload, close. The only web view in the app.
+//! reload, close. The only web view in the app. The user can annotate elements of the page: the
+//! notes go to the agent's prompt, to ask for precise changes.
 //! Original: src/components/Browser/BrowserPanel.tsx, src-tauri/src/browser.rs
 //! (browser_open -> Claude args, browser_bounds, browser_go, browser_url, browser_close).
 //!
@@ -17,7 +18,8 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Icon, Sizable as _, WindowExt as _};
+use gpui_kit::base::Selectable as _;
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_webview::WebView;
@@ -34,6 +36,105 @@ const WRY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProt
 const FOLLOW_MS: u64 = 150;
 /// How often the address bar reads the page URL.
 const URL_POLL_MS: u64 = 1000;
+/// Told to an agent that has a browser, so it checks its web work instead of assuming it.
+const ROLE: &str = "You have a browser panel in AgentDeck, shown next to your terminal and driven with the \
+browser MCP tools. Use it by default for anything on the web: when the user asks to look something up online, \
+open a site, read a page or check a link, navigate there in that browser instead of fetching or searching in \
+the background, so the user sees the page you are on. After changing a web interface, open it in that browser, \
+try what you changed and report what you saw. The user may send you notes about elements of the page: each one \
+names the element by its CSS selector.";
+
+/// Run in the page: turns annotating on, or off when it is already on. Hovering outlines an
+/// element; a click asks for a note and keeps it in `window.__agentdeckNotes` with the element's
+/// selector, text and HTML. Notes are lost when the page reloads.
+const ANNOTATE_JS: &str = r#"(() => {
+  if (window.__agentdeckAnnotate) { window.__agentdeckAnnotate.stop(); return; }
+  const notes = window.__agentdeckNotes = window.__agentdeckNotes || [];
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #3b82f6;background:rgba(59,130,246,.12);border-radius:3px;';
+  const badge = document.createElement('div');
+  badge.style.cssText = 'position:fixed;z-index:2147483647;right:12px;bottom:12px;padding:6px 10px;border-radius:8px;background:#111;color:#fff;font:12px system-ui;pointer-events:none;';
+  const label = () => { badge.textContent = 'Annotating: click an element (' + notes.length + (notes.length === 1 ? ' note)' : ' notes)'); };
+  const selector = (el) => {
+    const parts = [];
+    while (el && el.nodeType === 1 && parts.length < 5) {
+      let s = el.tagName.toLowerCase();
+      if (el.id) { parts.unshift(s + '#' + el.id); break; }
+      const cls = [...el.classList].slice(0, 2).join('.');
+      if (cls) s += '.' + cls;
+      const same = el.parentElement ? [...el.parentElement.children].filter(c => c.tagName === el.tagName) : [];
+      if (same.length > 1) s += ':nth-of-type(' + (same.indexOf(el) + 1) + ')';
+      parts.unshift(s);
+      el = el.parentElement;
+    }
+    return parts.join(' > ');
+  };
+  const move = (e) => {
+    const r = e.target.getBoundingClientRect();
+    Object.assign(box.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  };
+  const click = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.target;
+    const note = window.prompt('Note for the agent about this element');
+    if (note && note.trim()) {
+      notes.push({ selector: selector(el), text: (el.innerText || el.value || '').trim().slice(0, 120), html: el.outerHTML.slice(0, 400), note: note.trim().slice(0, 1000), url: location.href });
+      label();
+    }
+  };
+  document.addEventListener('mousemove', move, true);
+  document.addEventListener('click', click, true);
+  document.body.append(box, badge);
+  label();
+  window.__agentdeckAnnotate = { stop() {
+    document.removeEventListener('mousemove', move, true);
+    document.removeEventListener('click', click, true);
+    box.remove();
+    badge.remove();
+    delete window.__agentdeckAnnotate;
+  } };
+})()"#;
+
+/// Reads the notes and empties the list.
+const TAKE_NOTES_JS: &str = "(() => { const n = window.__agentdeckNotes || []; window.__agentdeckNotes = []; return JSON.stringify(n); })()";
+
+/// The prompt carrying the page notes, or None when there is none. `json` is what the page
+/// answered: the notes as JSON, possibly wrapped in a JSON string once more by the webview.
+// The page owns that list, so a hostile site could write notes of its own: the prompt is typed
+// into the agent's box without being submitted, for the user to read first.
+fn notes_prompt(json: &str) -> Option<String> {
+    let mut value: Value = serde_json::from_str(json).ok()?;
+    if let Some(inner) = value.as_str() {
+        value = serde_json::from_str(inner).ok()?;
+    }
+    // One line each, without control characters: a note must not break out of its place.
+    let clean = |v: &Value, max: usize| -> String {
+        let text = v.as_str().unwrap_or("");
+        text.chars().map(|c| if c.is_control() { ' ' } else { c }).take(max).collect::<String>().trim().to_owned()
+    };
+    let notes: Vec<String> = value
+        .as_array()?
+        .iter()
+        .take(20)
+        .enumerate()
+        .filter_map(|(i, n)| {
+            let note = clean(&n["note"], 1000);
+            (!note.is_empty()).then(|| {
+                format!(
+                    "{}. {}\n   Element: `{}` (\"{}\")\n   HTML: `{}`\n   Note: {note}",
+                    i + 1,
+                    clean(&n["url"], 300),
+                    clean(&n["selector"], 300),
+                    clean(&n["text"], 120),
+                    clean(&n["html"], 400),
+                )
+            })
+        })
+        .collect();
+    (!notes.is_empty())
+        .then(|| format!("Changes asked on the page, from notes made in the browser:\n\n{}\n", notes.join("\n\n")))
+}
 
 pub fn init(cx: &mut App) {
     cx.set_global(Browsers::default());
@@ -102,7 +203,11 @@ pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -
     let config = dir.join(format!("{pane_id}.json"));
     let text = serde_json::to_string_pretty(&config_for(port)).map_err(|e| e.to_string())?;
     std::fs::write(&config, text).map_err(|e| format!("{}: {e}", config.display()))?;
-    Ok(vec!["--mcp-config".into(), config.to_string_lossy().into_owned()])
+    // A file, not an inline argument: spawn args cannot hold quotes on Windows.
+    let role = dir.join("role.md");
+    std::fs::write(&role, ROLE).map_err(|e| format!("{}: {e}", role.display()))?;
+    let path = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
+    Ok(vec!["--mcp-config".into(), path(config), "--append-system-prompt-file".into(), path(role)])
 }
 
 /// Header controls: "back", "forward", "reload", or an http(s) URL to open.
@@ -185,6 +290,8 @@ pub struct BrowserPanel {
     pub pane_id: String,
     address: Entity<InputState>,
     editing: bool,
+    /// The page is in annotating mode (see `ANNOTATE_JS`).
+    annotating: bool,
     /// Set by the body's prepaint: the panel was drawn in the last frame.
     seen: Rc<Cell<bool>>,
     /// The webview was hidden natively because the panel left the screen.
@@ -236,6 +343,7 @@ impl BrowserPanel {
             pane_id,
             address,
             editing: false,
+            annotating: false,
             seen: Rc::new(Cell::new(false)),
             hidden: Rc::new(Cell::new(true)),
             _subscriptions: subscriptions,
@@ -247,6 +355,46 @@ impl BrowserPanel {
         if let Err(e) = go(&self.pane_id, to, cx) {
             self.deck.update(cx, |d, cx| d.toast(format!("Browser: {e}"), cx));
         }
+    }
+
+    /// Turns annotating on or off in the page.
+    fn annotate(&mut self, cx: &mut Context<Self>) {
+        let run = browser_view(&self.pane_id, cx).and_then(|view| {
+            view.read(cx).raw().evaluate_script(ANNOTATE_JS).map_err(|e| e.to_string())
+        });
+        match run {
+            Ok(()) => self.annotating = !self.annotating,
+            Err(e) => self.deck.update(cx, |d, cx| d.toast(format!("Browser: {e}"), cx)),
+        }
+        cx.notify();
+    }
+
+    /// Types the page notes into the agent's prompt, for the user to read and submit.
+    fn send_notes(&mut self, cx: &mut Context<Self>) {
+        let (tx, rx) = smol::channel::bounded::<String>(1);
+        let asked = browser_view(&self.pane_id, cx).and_then(|view| {
+            view.read(cx)
+                .raw()
+                .evaluate_script_with_callback(TAKE_NOTES_JS, move |json| {
+                    let _ = tx.try_send(json);
+                })
+                .map_err(|e| e.to_string())
+        });
+        if let Err(e) = asked {
+            self.deck.update(cx, |d, cx| d.toast(format!("Browser: {e}"), cx));
+            return;
+        }
+        let pane_id = self.pane_id.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(json) = rx.recv().await else { return };
+            let _ = this.update(cx, |this, cx| match notes_prompt(&json) {
+                Some(prompt) => crate::orchestrator::runtime::send_prompt(&pane_id, &prompt, false, cx),
+                None => this.deck.update(cx, |d, cx| {
+                    d.toast("No note on this page: turn annotating on and click an element.", cx)
+                }),
+            });
+        })
+        .detach();
     }
 
     fn read_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -324,14 +472,10 @@ impl BrowserPanel {
     fn header(&self, cx: &mut Context<Self>) -> Div {
         let p = palette(cx);
         let title = self.deck.read(cx).state.panes.get(&self.pane_id).map(|p| p.spec.title.clone());
-        let label = match &title {
-            Some(t) => format!("{t} · Browser"),
-            None => "Browser".into(),
-        };
         let nav = |id: &'static str, icon: IconName, tip: &'static str, to: &'static str| {
             Button::new(id)
                 .ghost()
-                .xsmall()
+                
                 .icon(icon)
                 .tooltip(tip)
                 .on_click(cx.listener(move |this, _, _, cx| this.go(to, cx)))
@@ -344,16 +488,14 @@ impl BrowserPanel {
             .flex_none()
             .items_center()
             .gap(ui(6.0))
-            .h(ui(32.0))
-            .px(ui(10.0))
+            .h(ui(46.0))
+            .px(ui(12.0))
             .min_w_0()
             .bg(hsla(p.panel))
             .border_b_1()
             .border_color(hsla(p.line))
-            .text_size(ui(13.0))
+            .text_size(ui(14.0))
             .text_color(hsla(p.fg))
-            .child(Icon::new(IconName::Globe).size(ui(14.0)))
-            .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(label))
             .child(back)
             .child(forward)
             .child(reload)
@@ -361,14 +503,31 @@ impl BrowserPanel {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_size(ui(12.0))
-                    .child(Input::new(&self.address).xsmall()),
+                    .text_size(ui(14.0))
+                    .child(Input::new(&self.address)),
+            )
+            .child(
+                Button::new("browser-annotate")
+                    .ghost()
+                    
+                    .icon(IconName::Pencil)
+                    .selected(self.annotating)
+                    .tooltip("Annotate: click an element of the page and write a note for the agent")
+                    .on_click(cx.listener(|this, _, _, cx| this.annotate(cx))),
+            )
+            .child(
+                Button::new("browser-send-notes")
+                    .ghost()
+                    
+                    .icon(IconName::Send)
+                    .tooltip("Put the page notes in the agent's prompt")
+                    .on_click(cx.listener(|this, _, _, cx| this.send_notes(cx))),
             )
             .when(title.is_some(), |el| {
                 el.child(
                     Button::new("browser-close")
                         .ghost()
-                        .xsmall()
+                        
                         .icon(IconName::X)
                         .tooltip("Close browser")
                         .on_click(cx.listener(|this, _, window, cx| this.remove(window, cx))),
@@ -424,7 +583,22 @@ impl Render for BrowserPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Value, config_for, parse_url, valid_id};
+    use super::{Value, config_for, notes_prompt, parse_url, valid_id};
+
+    #[test]
+    fn page_notes_become_a_prompt() {
+        let notes = r##"[{"selector": "form > input#zip", "text": "94105", "html": "<input id=\"zip\">", "note": "Accept Canadian\ncodes", "url": "http://localhost:3000/checkout"}, {"note": "  "}]"##;
+        let prompt = notes_prompt(notes).unwrap();
+        assert!(prompt.contains("1. http://localhost:3000/checkout"));
+        assert!(prompt.contains("Element: `form > input#zip` (\"94105\")"));
+        // A line break in a note cannot start a line of its own.
+        assert!(prompt.contains("Note: Accept Canadian codes"));
+        // The webview hands the JSON back as a JSON string.
+        let wrapped = serde_json::to_string(notes).unwrap();
+        assert_eq!(notes_prompt(&wrapped), Some(prompt));
+        assert_eq!(notes_prompt("[]"), None);
+        assert_eq!(notes_prompt("not json"), None);
+    }
 
     #[test]
     fn config_connects_to_the_webview_port() {

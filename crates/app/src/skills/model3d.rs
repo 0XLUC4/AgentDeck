@@ -118,10 +118,10 @@ pub fn load(path: &Path, ext: &str) -> Result<Model, String> {
 
 fn load_model(path: &Path, ext: &str) -> Result<Model, String> {
     let parts = match ext {
-        "glb" | "gltf" | "blend" => load_gltf(path)?,
+        // .blend and .fbx arrive as the GLB Blender exported (core::assets::asset_source).
+        "glb" | "gltf" | "blend" | "fbx" => load_gltf(path)?,
         "obj" => load_obj(path)?,
         "stl" => load_stl(path)?,
-        "fbx" => return Err("FBX models cannot be previewed here. Describe the change below.".into()),
         other => return Err(format!("Unsupported format: .{other}")),
     };
     Model::new(parts)

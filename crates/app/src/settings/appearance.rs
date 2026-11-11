@@ -154,7 +154,7 @@ impl SettingsDialog {
             }
         });
         let rows = vec![
-            row("Theme", Some("System follows Windows' light/dark setting. Terminals stay dark."), modes, &p),
+            row("Theme", Some("System follows Windows' light/dark setting. Terminals follow the theme."), modes, &p),
             row(
                 "Interface zoom",
                 Some("Scales the whole interface. Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0"),

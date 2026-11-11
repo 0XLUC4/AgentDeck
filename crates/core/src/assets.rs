@@ -149,7 +149,13 @@ except TypeError:
     bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', export_apply=True)
 ";
 
-/// Exports the .blend to a cached GLB in %TEMP% (keyed by path + modification time).
+/// Run by Blender before the export: an empty scene with the FBX imported. The export script
+/// reads the last two arguments, so the FBX path is the third from the end.
+const IMPORT_FBX: &str = "import bpy, sys
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.import_scene.fbx(filepath=sys.argv[-3])";
+
+/// Exports the .blend or .fbx to a cached GLB in %TEMP% (keyed by path + modification time).
 // shortcut: cached GLBs are never cleaned; add cleanup if %TEMP%/agentdeck-assets ever grows noticeably.
 fn blend_to_glb(file: &Path, workspace: &Path) -> Result<PathBuf, String> {
     let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok();
@@ -165,13 +171,19 @@ fn blend_to_glb(file: &Path, workspace: &Path) -> Result<PathBuf, String> {
     let blender =
         find_blender().ok_or("Blender not found: install it or add blender.exe to PATH")?;
     let mut cmd = Command::new(blender);
-    cmd.arg("-b")
-        .arg(file)
-        .arg("--python-expr")
-        .arg(EXPORT_SCRIPT)
-        .arg("--")
-        .arg(&out)
-        .arg(workspace);
+    // A .blend is opened as the scene; an FBX is imported into an empty one.
+    let fbx = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("fbx"));
+    cmd.arg("-b");
+    if fbx {
+        cmd.arg("--python-expr").arg(IMPORT_FBX);
+    } else {
+        cmd.arg(file);
+    }
+    cmd.arg("--python-expr").arg(EXPORT_SCRIPT).arg("--");
+    if fbx {
+        cmd.arg(file);
+    }
+    cmd.arg(&out).arg(workspace);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -195,9 +207,10 @@ fn blend_to_glb(file: &Path, workspace: &Path) -> Result<PathBuf, String> {
 /// File the preview loads (through the asset protocol): the model itself, or the GLB export of a .blend.
 pub fn asset_source(cwd: String, path: String) -> Result<String, String> {
     let file = inside(&cwd, &path)?;
+    // Blender reads both and hands back a GLB the viewer can load.
     let is_blend = file
         .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("blend"));
+        .is_some_and(|e| e.eq_ignore_ascii_case("blend") || e.eq_ignore_ascii_case("fbx"));
     let source = if is_blend {
         blend_to_glb(&file, Path::new(&cwd))?
     } else {

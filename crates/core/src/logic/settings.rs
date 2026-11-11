@@ -120,6 +120,9 @@ pub struct Settings {
     pub resume_sessions: bool,
     pub stuck_minutes: u32,
     pub remind_minutes: u32,
+    /// Idle Claude agents are put to sleep after this many minutes (0 = never).
+    #[serde(default)]
+    pub sleep_minutes: u32,
     pub base_port: u16,
     /// Shell command run once in each new agent worktree (install deps, copy .env); "" = none.
     #[serde(default)]
@@ -178,6 +181,7 @@ impl Default for Settings {
             resume_sessions: true,
             stuck_minutes: 10,
             remind_minutes: 5,
+            sleep_minutes: 0,
             base_port: 0,
             worktree_setup: String::new(),
             retry_rate_limit_minutes: 0,
@@ -273,6 +277,7 @@ pub fn merge_settings(raw: &Value) -> Settings {
         resume_sessions: boolean(&raw["resumeSessions"], d.resume_sessions),
         stuck_minutes: minutes(&raw["stuckMinutes"], d.stuck_minutes),
         remind_minutes: minutes(&raw["remindMinutes"], d.remind_minutes),
+        sleep_minutes: minutes(&raw["sleepMinutes"], d.sleep_minutes),
         base_port: port(&raw["basePort"]),
         worktree_setup: raw["worktreeSetup"].as_str().unwrap_or("").trim().to_owned(),
         retry_rate_limit_minutes: minutes(&raw["retryRateLimitMinutes"], d.retry_rate_limit_minutes),

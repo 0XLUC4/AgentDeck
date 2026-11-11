@@ -12,6 +12,7 @@ Usage:
   agentdeck send <agent id or title> <prompt>  types a prompt to an agent
   agentdeck spawn <agent> [--cwd <folder>] [prompt]
                                                starts claude, codex, gemini, grok or opencode
+  agentdeck toggle <wall|activity|projects>    shows or hides that view
 AgentDeck must be running.";
 
 /// The exit code when the arguments are a command; None: start the app as usual.
@@ -21,7 +22,8 @@ pub fn run() -> Option<i32> {
         "list" => Ok(json!({ "op": "list" })),
         "send" if args.len() >= 3 => Ok(json!({ "op": "send", "pane": args[1], "text": args[2..].join(" ") })),
         "spawn" if args.len() >= 2 => Ok(spawn_request(&args[1..])),
-        "help" | "--help" | "-h" | "send" | "spawn" => Err(USAGE.to_owned()),
+        "toggle" if args.len() == 2 => Ok(json!({ "op": "toggle", "view": args[1] })),
+        "help" | "--help" | "-h" | "send" | "spawn" | "toggle" => Err(USAGE.to_owned()),
         _ => return None, // --after-update and the like
     };
     let outcome = request.and_then(|body| call(&body));
@@ -92,14 +94,19 @@ fn render(result: &Value) -> String {
         .join("\n")
 }
 
-/// The release build has no console of its own: write to the terminal that started it.
-// shortcut: output goes to that console even when redirected (`agentdeck list > file` stays
-// empty); switch to a console-subsystem launcher if scripts need pipes.
+/// A pipe or a file gets the text on stdout. The release build has no console of its own: with
+/// nothing redirected, it writes to the terminal that started it.
 fn print(text: &str) {
     #[cfg(windows)]
     {
         use std::io::Write;
+        use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+        // A windowed program started without redirection has no stdout handle at all.
+        if !std::io::stdout().as_raw_handle().is_null() {
+            println!("{text}");
+            return;
+        }
         // SAFETY: plain Win32 call, no pointers.
         unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
         if let Ok(mut console) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
