@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/app"]
 
 [workspace.package]
-version = "0.2.17"
+version = "0.2.18"
 edition = "2024"
 authors = ["Luca"]
 
@@ -17,3 +17,7 @@ codegen-units = 1
 lto = true
 opt-level = 3
 strip = true
+
+# Local fix: skips re-sending unchanged bounds/visibility to WebView2 on every frame (lag, flicker).
+[patch.crates-io]
+gpui-webview = { path = "vendor/gpui-webview" }
