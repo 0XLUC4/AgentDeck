@@ -24,7 +24,7 @@ use agentdeck_core::persist::SAVE_DEBOUNCE_MS;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::browser::{BrowserPanel, BrowserRemoved};
+use crate::browser::BrowserPanel;
 use crate::panes::runtime;
 use crate::panes::{AgentPicker, PaneHeader, PaneHeaderEvent, PermissionBanner};
 use crate::state::Deck;
@@ -258,16 +258,13 @@ impl DeckView {
             .clone()
     }
 
-    /// The browser panel of a pane, created on first use. Closing it for good restarts the agent
-    /// without its browser tools.
+    /// The browser panel of a pane, created on first use.
     fn browser(&mut self, pane_id: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<BrowserPanel> {
         if let Some(browser) = self.browsers.get(pane_id) {
             return browser.clone();
         }
         let deck = self.deck.clone();
         let browser = cx.new(|cx| BrowserPanel::new(deck, pane_id, window, cx));
-        let sub = cx.subscribe(&browser, |_, _, e: &BrowserRemoved, cx| runtime::restart_pane(&e.pane_id, cx));
-        self.view_subs.insert(format!("browser:{pane_id}"), sub);
         self.browsers.insert(pane_id.to_owned(), browser.clone());
         browser
     }
@@ -314,7 +311,6 @@ impl DeckView {
                     cx.notify();
                 });
                 crate::browser::close(pane_id, cx);
-                runtime::restart_pane(pane_id, cx);
             }
             PaneHeaderEvent::OpenSkills => crate::skills::open_skills(self.deck.clone(), pane_id, window, cx),
             PaneHeaderEvent::OpenNotes => crate::skills::open_notes(self.deck.clone(), pane_id, window, cx),
@@ -410,10 +406,7 @@ impl DeckView {
         self.terminals.retain(|id, _| alive.contains(id));
         self.headers.retain(|id, _| alive.contains(id));
         self.browsers.retain(|id, _| with_browser.contains(id));
-        self.view_subs.retain(|id, _| match id.strip_prefix("browser:") {
-            Some(pane) => with_browser.contains(pane),
-            None => alive.contains(id),
-        });
+        self.view_subs.retain(|id, _| alive.contains(id));
         let gone: Vec<String> = self.detached.keys().filter(|id| !alive.contains(*id)).cloned().collect();
         for id in gone {
             self.reattach(&id, cx);

@@ -49,6 +49,8 @@ chrono = "0.4"
 # Raw Wry builder (profile dir, DevTools port) for gpui-webview; same lb-wry it wraps.
 wry = { package = "lb-wry", version = "0.53" }
 url = "2"
+# Strings for WebView2's DevTools protocol call (mobile emulation); the version webview2-com uses.
+windows-core = "0.61"
 # --- end browser module ---
 
 # --- palette module (app/src/palette) ---

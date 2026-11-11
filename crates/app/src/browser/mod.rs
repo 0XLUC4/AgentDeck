@@ -23,6 +23,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_webview::WebView;
+use agentdeck_core::hooks_server::browser_config_port;
 use serde_json::{Value, json};
 
 use crate::state::Deck;
@@ -36,13 +37,21 @@ const WRY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProt
 const FOLLOW_MS: u64 = 150;
 /// How often the address bar reads the page URL.
 const URL_POLL_MS: u64 = 1000;
-/// Told to an agent that has a browser, so it checks its web work instead of assuming it.
-const ROLE: &str = "You have a browser panel in AgentDeck, shown next to your terminal and driven with the \
-browser MCP tools. Use it by default for anything on the web: when the user asks to look something up online, \
-open a site, read a page or check a link, navigate there in that browser instead of fetching or searching in \
-the background, so the user sees the page you are on. After changing a web interface, open it in that browser, \
-try what you changed and report what you saw. The user may send you notes about elements of the page: each one \
-names the element by its CSS selector.";
+/// Told to every Claude agent, so that it checks its web work in the browser instead of assuming it.
+const ROLE: &str = "AgentDeck has a browser panel next to your terminal, driven with the browser MCP tools; it \
+opens by itself on your first browser tool call. To test or check a web app, a site, a change to a web interface, \
+or a mobile app that has a web or dev-server preview, use the browser tools first, before any other way of \
+testing: open it there, try what you changed and report what you saw. While the panel is open, use it for \
+anything else on the web too (look something up, read a page, check a link), so the user sees the page you are \
+on; while it is closed, plain lookups may use search or fetch. The panel has a mobile preview mode (phone width), \
+toggled by the user in its bar: for mobile apps, check the layout at phone width. The user may send you notes \
+about elements of the page: each one names the element by its CSS selector.";
+/// Phone viewport of the mobile preview, in logical pixels.
+const PHONE_WIDTH: f32 = 390.0;
+const PHONE_HEIGHT: f32 = 844.0;
+/// What the page is told in mobile preview, so that sites serve their phone layout.
+const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 \
+(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
 
 /// Run in the page: turns annotating on, or off when it is already on. Hovering outlines an
 /// element; a click asks for a note and keeps it in `window.__agentdeckNotes` with the element's
@@ -166,38 +175,46 @@ fn valid_id(pane_id: &str) -> Result<(), String> {
     ok.then_some(()).ok_or_else(|| "invalid pane id".into())
 }
 
-/// Creates (or reuses) the pane's browser webview in `window`, hidden until its panel is drawn, writes the
-/// MCP config and returns the Claude args that connect the agent to it (`--mcp-config <file>`).
-pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -> Result<Vec<String>, String> {
+/// Creates the pane's browser webview in `window` (nothing to do when it exists), hidden until its panel
+/// is drawn, on the port its running agent was given by `args`.
+pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -> Result<(), String> {
+    valid_id(pane_id)?;
+    if cx.try_global::<Browsers>().is_some_and(|b| b.0.contains_key(pane_id)) {
+        return Ok(());
+    }
+    let dir = data_dir.join("browser");
+    let told = std::fs::read_to_string(dir.join(format!("{pane_id}.json"))).ok().and_then(|text| browser_config_port(&text));
+    let port = match told {
+        Some(port) => port,
+        None => free_port()?,
+    };
+    // Different browser args need their own WebView2 environment, hence data directory.
+    let mut context = wry::WebContext::new(Some(dir.join("profiles").join(pane_id)));
+    let builder = wry::WebViewBuilder::new_with_web_context(&mut context).with_url(START_URL);
+    #[cfg(windows)]
+    let builder = {
+        use wry::WebViewBuilderExtWindows as _;
+        builder.with_additional_browser_args(format!("{WRY_ARGS} --remote-debugging-port={port}"))
+    };
+    let webview = WebView::build(builder, window, cx).map_err(|e| format!("cannot open the browser: {e}"))?;
+    // Hidden natively only: the panel's prepaint shows it again at its bounds.
+    let _ = webview.raw().set_visible(false);
+    let view = cx.new(|_| webview);
+    cx.default_global::<Browsers>().0.insert(pane_id.to_owned(), Browser { view, port, _context: context });
+    Ok(())
+}
+
+/// Writes the pane's MCP config and returns the Claude args that connect the agent to its browser
+/// (`--mcp-config <file>`). Every Claude pane starts with them: chrome-devtools-mcp only connects on a
+/// tool call, so the webview is opened and closed later without restarting the agent.
+// shortcut: the port is only bound when the panel is opened, another program could take it meanwhile;
+// reserve it (or restart on a clash) if that ever shows up.
+pub fn args(pane_id: &str, data_dir: &Path, cx: &App) -> Result<Vec<String>, String> {
     valid_id(pane_id)?;
     let dir = data_dir.join("browser");
-    let known = cx
-        .try_global::<Browsers>()
-        .and_then(|b| b.0.get(pane_id))
-        .map(|b| b.port);
-    let port = match known {
-        Some(port) => port,
-        None => {
-            let port = free_port()?;
-            // Different browser args need their own WebView2 environment, hence data directory.
-            let mut context = wry::WebContext::new(Some(dir.join("profiles").join(pane_id)));
-            let builder = wry::WebViewBuilder::new_with_web_context(&mut context).with_url(START_URL);
-            #[cfg(windows)]
-            let builder = {
-                use wry::WebViewBuilderExtWindows as _;
-                builder.with_additional_browser_args(format!("{WRY_ARGS} --remote-debugging-port={port}"))
-            };
-            let webview =
-                WebView::build(builder, window, cx).map_err(|e| format!("cannot open the browser: {e}"))?;
-            // Hidden natively only: the panel's prepaint shows it again at its bounds.
-            let _ = webview.raw().set_visible(false);
-            let view = cx.new(|_| webview);
-            cx.default_global::<Browsers>().0.insert(
-                pane_id.to_owned(),
-                Browser { view, port, _context: context },
-            );
-            port
-        }
+    let port = match cx.try_global::<Browsers>().and_then(|b| b.0.get(pane_id)) {
+        Some(browser) => browser.port,
+        None => free_port()?,
     };
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let config = dir.join(format!("{pane_id}.json"));
@@ -277,8 +294,34 @@ fn config_for(port: u16) -> Value {
     json!({ "mcpServers": { "browser": { "command": command, "args": args } } })
 }
 
+/// DevTools protocol calls that turn mobile emulation on or off: user agent and touch.
+fn mobile_emulation(on: bool) -> [(&'static str, Value); 2] {
+    [
+        // An empty user agent gives the page its own back.
+        ("Emulation.setUserAgentOverride", json!({ "userAgent": if on { MOBILE_UA } else { "" } })),
+        ("Emulation.setTouchEmulationEnabled", json!({ "enabled": on })),
+    ]
+}
+
+/// Switches the page to mobile emulation or back, and reloads it so the site answers for that device.
+// shortcut: emulation on Windows (WebView2) only; elsewhere the preview is the narrow viewport alone.
+fn set_mobile(webview: &wry::WebView, on: bool) {
+    #[cfg(windows)]
+    {
+        use wry::WebViewExtWindows as _;
+        let page = webview.webview();
+        for (method, params) in mobile_emulation(on) {
+            let method = windows_core::HSTRING::from(method);
+            let params = windows_core::HSTRING::from(params.to_string());
+            // SAFETY: a COM call on the UI thread that owns the webview.
+            let _ = unsafe { page.CallDevToolsProtocolMethod(&method, &params, None) };
+        }
+    }
+    let _ = webview.reload();
+}
+
 /// Emitted when the user closed the browser for good: the pane is saved with `browser: false` and its
-/// webview is gone; the owner restarts the agent without its browser tools.
+/// webview is gone. The agent keeps running.
 #[derive(Debug, Clone)]
 pub struct BrowserRemoved {
     pub pane_id: String,
@@ -292,6 +335,8 @@ pub struct BrowserPanel {
     editing: bool,
     /// The page is in annotating mode (see `ANNOTATE_JS`).
     annotating: bool,
+    /// Mobile preview: the page is laid out as a phone viewport, with mobile emulation.
+    mobile: bool,
     /// Set by the body's prepaint: the panel was drawn in the last frame.
     seen: Rc<Cell<bool>>,
     /// The webview was hidden natively because the panel left the screen.
@@ -344,6 +389,7 @@ impl BrowserPanel {
             address,
             editing: false,
             annotating: false,
+            mobile: false,
             seen: Rc::new(Cell::new(false)),
             hidden: Rc::new(Cell::new(true)),
             _subscriptions: subscriptions,
@@ -365,6 +411,15 @@ impl BrowserPanel {
         match run {
             Ok(()) => self.annotating = !self.annotating,
             Err(e) => self.deck.update(cx, |d, cx| d.toast(format!("Browser: {e}"), cx)),
+        }
+        cx.notify();
+    }
+
+    /// Turns the mobile preview on or off.
+    fn toggle_mobile(&mut self, cx: &mut Context<Self>) {
+        self.mobile = !self.mobile;
+        if let Ok(view) = browser_view(&self.pane_id, cx) {
+            set_mobile(view.read(cx).raw(), self.mobile);
         }
         cx.notify();
     }
@@ -446,7 +501,7 @@ impl BrowserPanel {
             .unwrap_or_else(|| "Agent".into());
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Close {title}'s browser? The agent restarts."),
+            &format!("Close {title}'s browser?"),
             None,
             &["Close browser", "Cancel"],
             cx,
@@ -507,6 +562,14 @@ impl BrowserPanel {
                     .child(Input::new(&self.address)),
             )
             .child(
+                Button::new("browser-mobile")
+                    .ghost()
+                    .icon(IconName::Smartphone)
+                    .selected(self.mobile)
+                    .tooltip("Mobile preview: show the page at phone width")
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_mobile(cx))),
+            )
+            .child(
                 Button::new("browser-annotate")
                     .ghost()
                     
@@ -560,7 +623,12 @@ impl Render for BrowserPanel {
                 )
                 .absolute()
                 .size_full();
-                div().relative().flex_1().min_h_0().child(guard).child(view)
+                // Mobile preview: a phone viewport centered in the body, the rest keeps the panel background.
+                let page = match self.mobile {
+                    true => div().w(px(PHONE_WIDTH)).max_w_full().h_full().max_h(px(PHONE_HEIGHT)),
+                    false => div().size_full(),
+                };
+                div().relative().flex().justify_center().flex_1().min_h_0().child(guard).child(page.child(view))
             }
             Err(_) => div()
                 .flex()
@@ -583,7 +651,7 @@ impl Render for BrowserPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Value, config_for, notes_prompt, parse_url, valid_id};
+    use super::{MOBILE_UA, Value, browser_config_port, config_for, mobile_emulation, notes_prompt, parse_url, valid_id};
 
     #[test]
     fn page_notes_become_a_prompt() {
@@ -608,8 +676,20 @@ mod tests {
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         assert!(args.ends_with(&["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9333"]));
+        // The webview opened later takes the port the running agent was told.
+        assert_eq!(browser_config_port(&c.to_string()), Some(9333));
         assert!(valid_id("a-1").is_ok());
         assert!(valid_id("a b").is_err());
+    }
+
+    #[test]
+    fn mobile_emulation_sets_and_clears_the_user_agent() {
+        let [(method, on), (_, touch)] = mobile_emulation(true);
+        assert_eq!(method, "Emulation.setUserAgentOverride");
+        assert_eq!(on["userAgent"], MOBILE_UA);
+        assert_eq!(touch["enabled"], true);
+        let [(_, off), _] = mobile_emulation(false);
+        assert_eq!(off["userAgent"], "");
     }
 
     #[test]
