@@ -50,6 +50,13 @@ starts instantly and stays light on memory.
 - Plan under the pane header: steps done out of total, one colored dot per step
 - Subject of the Claude conversation next to the agent name, with a status pill (Working, Done, Waiting, Error)
 - Notes page per workspace: graph of links or list, with a Markdown reader; Assets opens as a page too
+- Remarks on diff lines in the Git panel, sent to the agent as one prompt
+- Pull request and CI state of an agent worktree, in the pane header and the Git panel
+- New agent from a GitHub issue link (command palette)
+- Conversation fill ("ctx 71%") next to each Claude pane's usage
+- `agentdeck list | send | spawn` from a terminal while the app runs
+- Phone page on the local network (off by default): status, prompts, allow or deny permissions
+- Agents over SSH (`user@host:/folder` in the agent picker)
 - Find in a terminal's scrollback (Ctrl+Shift+F)
 
 **Workspaces and sessions**

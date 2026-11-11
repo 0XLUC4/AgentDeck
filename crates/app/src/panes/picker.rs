@@ -55,7 +55,7 @@ fn remember_agent(agent: AgentKind, dir: &std::path::Path) {
 }
 
 /// Starts an agent in the active session tab and remembers it as the quick "Add agent" choice.
-pub fn spawn_agent(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: bool, cx: &mut App) {
+pub fn spawn_agent(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: bool, ssh: Option<String>, cx: &mut App) {
     let Some(deck) = runtime::deck(cx) else { return };
     let (tab, font_size, dir) = deck.update(cx, |d, cx| {
         d.state.last_cwd = cwd.to_owned();
@@ -66,6 +66,7 @@ pub fn spawn_agent(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: boo
     let mut spec = PaneSpec::new(agent, agent_name(agent), cwd);
     spec.args = args;
     spec.worktree = worktree;
+    spec.ssh = ssh;
     spec.font_size = font_size;
     runtime::create_pane(spec, &tab, false, cx);
 }
@@ -79,6 +80,8 @@ pub struct AgentPicker {
     agent: AgentKind,
     cwd: Entity<InputState>,
     args: Entity<InputState>,
+    /// "user@host:/folder": run the agent on that machine.
+    ssh: Entity<InputState>,
     worktree: bool,
     error: Option<String>,
     focus: FocusHandle,
@@ -105,6 +108,7 @@ impl AgentPicker {
                 .placeholder("--model sonnet --append \"text with spaces\"")
                 .default_value(defaults.args)
         });
+        let ssh = cx.new(|cx| InputState::new(window, cx).placeholder("user@host:/folder/on/that/machine"));
         let detect = cx.spawn(async move |this, cx| {
             let list = cx.background_spawn(async { detect_agents() }).await;
             let infos = list.into_iter().map(|info| (info.kind, info)).collect();
@@ -121,6 +125,7 @@ impl AgentPicker {
             agent: AgentKind::Claude,
             cwd,
             args,
+            ssh,
             worktree: defaults.worktree,
             error: None,
             focus,
@@ -163,13 +168,16 @@ impl AgentPicker {
 
     fn submit(&mut self, cx: &mut Context<Self>) {
         let cwd = self.cwd.read(cx).value().trim().to_owned();
+        let ssh = self.ssh.read(cx).value().trim().to_owned();
         if cwd.is_empty() {
             self.error = Some("Choose a working folder.".into());
-        } else if !self.installed(self.agent) {
+        } else if !ssh.is_empty() && agentdeck_core::pty::ssh_target(&ssh).is_none() {
+            self.error = Some("SSH: user@host:/folder, without spaces or quotes.".into());
+        } else if ssh.is_empty() && !self.installed(self.agent) {
             self.error = Some(format!("{} is not installed.", agent_name(self.agent)));
         } else {
             let args = split_args(&self.args.read(cx).value());
-            spawn_agent(self.agent, &cwd, args, self.worktree, cx);
+            spawn_agent(self.agent, &cwd, args, self.worktree, (!ssh.is_empty()).then_some(ssh), cx);
             cx.emit(DismissEvent);
         }
         cx.notify();
@@ -388,6 +396,31 @@ impl Render for AgentPicker {
                                             .child(div().font_weight(FontWeight::NORMAL).text_color(hsla(p.subtle)).child("(optional)")),
                                     )
                                     .child(div().font_family(FONT_MONO).text_xs().child(field(&self.args))),
+                            )
+                            // SSH
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(ui(6.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(ui(6.0))
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(hsla(p.muted))
+                                            .child(Icon::new(IconName::Globe).size(ui(13.0)))
+                                            .child("Run over SSH")
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::NORMAL)
+                                                    .text_color(hsla(p.subtle))
+                                                    .child("(optional; no status hooks, Git panel or worktree there)"),
+                                            ),
+                                    )
+                                    .child(div().font_family(FONT_MONO).text_xs().child(field(&self.ssh))),
                             )
                             // Worktree
                             .child(

@@ -621,7 +621,7 @@ impl DeckView {
         let deck = self.deck.read(cx);
         let path = deck.state.active_workspace().path.clone();
         let defaults = deck.settings.agent(kind);
-        spawn_agent(kind, &path, split_args(&defaults.args), defaults.worktree, cx);
+        spawn_agent(kind, &path, split_args(&defaults.args), defaults.worktree, None, cx);
         cx.notify();
     }
 

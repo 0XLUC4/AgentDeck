@@ -74,6 +74,8 @@ pub struct PaneUsage {
     #[serde(flatten)]
     pub totals: Totals,
     pub models: Vec<String>,
+    /// Tokens the latest Claude request sent: what the conversation holds now (0 = unknown).
+    pub context: u64,
 }
 
 type Cache = Mutex<HashMap<PathBuf, FileState>>;
@@ -293,8 +295,15 @@ pub fn pane_usage(
     let dir = crate::git::git_pane_dir(cwd, pane_id, true);
     let mut totals = Totals::default();
     let mut models = Vec::<String>::new();
+    // shortcut: subagent transcripts share the folder, so one of their requests can be the latest
+    // for a moment; read only the main transcript if that ever misleads.
+    let mut latest = (0i64, 0u64);
     let mut add = |e: &Entry| {
         totals.add(e);
+        if e.ts >= latest.0 {
+            let t = &e.tokens;
+            latest = (e.ts, t.input + t.cache_read + t.cache_write_5m + t.cache_write_1h);
+        }
         if !e.model.is_empty() && !models.iter().any(|m| **m == *e.model) {
             models.push(e.model.to_string());
         }
@@ -305,10 +314,10 @@ pub fn pane_usage(
             claude_projects().map(|p| p.join(claude_slug(&dir))),
         ),
         "codex" => (Source::Codex, codex_sessions()),
-        _ => return Ok(PaneUsage { totals, models }),
+        _ => return Ok(PaneUsage { totals, models, context: 0 }),
     };
     let Some(root) = root else {
-        return Ok(PaneUsage { totals, models });
+        return Ok(PaneUsage { totals, models, context: 0 });
     };
     let mut files = Vec::new();
     let today = Local::now().date_naive();
@@ -329,7 +338,8 @@ pub fn pane_usage(
         });
     }
     prune();
-    Ok(PaneUsage { totals, models })
+    let context = if source == Source::Claude { latest.1 } else { 0 };
+    Ok(PaneUsage { totals, models, context })
 }
 
 #[cfg(test)]

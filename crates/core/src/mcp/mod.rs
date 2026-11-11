@@ -68,7 +68,7 @@ pub fn serve(app: &AppHandle, mut req: Request, token: &str) {
     let _ = req.respond(reply);
 }
 
-fn json_reply(code: u16, body: &Value) -> tiny_http::ResponseBox {
+pub(crate) fn json_reply(code: u16, body: &Value) -> tiny_http::ResponseBox {
     let ct = Header::from_bytes("Content-Type", "application/json").expect("static header");
     Response::from_string(body.to_string())
         .with_status_code(code)
@@ -103,7 +103,7 @@ fn parse(req: &mut Request, token: &str) -> Result<(String, Value), u16> {
 }
 
 /// Reads a JSON body of at most `MAX_BODY` bytes; `Err` is the HTTP status to answer.
-fn read_json(req: &mut Request) -> Result<Value, u16> {
+pub(crate) fn read_json(req: &mut Request) -> Result<Value, u16> {
     let mut body = Vec::new();
     req.as_reader()
         .take(MAX_BODY + 1)
@@ -115,6 +115,24 @@ fn read_json(req: &mut Request) -> Result<Value, u16> {
     serde_json::from_slice(&body).map_err(|_| 400u16)
 }
 
+/// Sends `payload` to the UI as `event` (with a `requestId`) and waits for its `mcp_respond`.
+pub(crate) fn ask_ui(app: &AppHandle, event: &str, mut payload: Value) -> Result<Value, String> {
+    let (tx, rx) = channel();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    lock(&WAITING).insert(request_id.clone(), tx);
+    payload["requestId"] = json!(request_id);
+    let sent = app.emit_to(MAIN_WINDOW, event, payload);
+    let answer = sent
+        .ok()
+        .and_then(|()| wait_decision(&rx, FRONTEND_HOLD, || true));
+    lock(&WAITING).remove(&request_id);
+    let answer = answer.ok_or("AgentDeck did not answer in time")?;
+    match answer["error"].as_str() {
+        Some(e) => Err(e.to_owned()),
+        None => Ok(answer["result"].clone()),
+    }
+}
+
 struct AppHost<'a> {
     app: &'a AppHandle,
     pane_id: String,
@@ -122,25 +140,7 @@ struct AppHost<'a> {
 
 impl rpc::Host for AppHost<'_> {
     fn frontend(&self, tool: &str, args: &Value) -> Result<Value, String> {
-        let (tx, rx) = channel();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        lock(&WAITING).insert(request_id.clone(), tx);
-        let event = json!({
-            "requestId": request_id,
-            "orchestratorId": self.pane_id,
-            "tool": tool,
-            "args": args,
-        });
-        let sent = self.app.emit_to(MAIN_WINDOW, "mcp-request", event);
-        let answer = sent
-            .ok()
-            .and_then(|()| wait_decision(&rx, FRONTEND_HOLD, || true));
-        lock(&WAITING).remove(&request_id);
-        let answer = answer.ok_or("AgentDeck did not answer in time")?;
-        match answer["error"].as_str() {
-            Some(e) => Err(e.to_owned()),
-            None => Ok(answer["result"].clone()),
-        }
+        ask_ui(self.app, "mcp-request", json!({ "orchestratorId": self.pane_id, "tool": tool, "args": args }))
     }
 
     fn paused(&self) -> bool {

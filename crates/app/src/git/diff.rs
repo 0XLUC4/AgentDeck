@@ -43,6 +43,64 @@ pub fn diff_lines(text: &str) -> Vec<&str> {
     text.strip_suffix('\n').unwrap_or(text).split('\n').collect()
 }
 
+/// A review remark on one diff line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Comment {
+    pub path: String,
+    /// Index of the line in the shown diff.
+    pub index: usize,
+    /// Line number in the file (the old file for a deleted line).
+    pub line: Option<u32>,
+    /// The diff line, marker included.
+    pub code: String,
+    pub text: String,
+}
+
+/// File line number of each diff line: the new file's, or the old file's for a deleted line.
+pub fn line_numbers(lines: &[&str], kinds: &[DiffLineKind]) -> Vec<Option<u32>> {
+    let (mut old, mut new) = (0u32, 0u32);
+    lines
+        .iter()
+        .zip(kinds)
+        .map(|(line, kind)| match kind {
+            DiffLineKind::Hunk => {
+                // "@@ -12,3 +14,4 @@": where each side starts.
+                let start = |sign: char| -> Option<u32> {
+                    line.split(' ').find_map(|part| part.strip_prefix(sign)?.split(',').next()?.parse().ok())
+                };
+                (old, new) = (start('-').unwrap_or(0), start('+').unwrap_or(0));
+                None
+            }
+            DiffLineKind::Meta => None,
+            DiffLineKind::Del => {
+                old += 1;
+                Some(old - 1)
+            }
+            DiffLineKind::Add => {
+                new += 1;
+                Some(new - 1)
+            }
+            DiffLineKind::Context => {
+                old += 1;
+                new += 1;
+                Some(new - 1)
+            }
+        })
+        .collect()
+}
+
+/// One prompt carrying every remark, for the agent that wrote the changes.
+pub fn review_prompt(comments: &[Comment]) -> String {
+    let mut prompt =
+        String::from("Review remarks on your changes. Address each one, then summarize what you changed.\n");
+    for c in comments {
+        let place = c.line.map_or_else(|| c.path.clone(), |n| format!("{}:{n}", c.path));
+        let code: String = c.code.trim().chars().take(120).collect();
+        prompt.push_str(&format!("\n- {place} `{code}`\n  {}\n", c.text));
+    }
+    prompt
+}
+
 #[cfg(test)]
 mod tests {
     use super::DiffLineKind::*;
@@ -70,6 +128,16 @@ mod tests {
             classify_diff(&diff),
             [Meta, Meta, Meta, Meta, Hunk, Context, Del, Add, Del, Add, Meta, Meta, Meta, Meta]
         );
+    }
+
+    #[test]
+    fn numbers_lines_and_builds_the_review_prompt() {
+        let diff = ["diff --git a/a b/a", "@@ -10,3 +20,3 @@ fn x()", " same", "-old", "+new", " end"];
+        let numbers = line_numbers(&diff, &classify_diff(&diff));
+        assert_eq!(numbers, [None, None, Some(20), Some(11), Some(21), Some(22)]);
+        let remark =
+            Comment { path: "src/a.rs".into(), index: 4, line: Some(21), code: "+new".into(), text: "Use a constant".into() };
+        assert!(review_prompt(&[remark]).ends_with("\n- src/a.rs:21 `+new`\n  Use a constant\n"));
     }
 
     #[test]

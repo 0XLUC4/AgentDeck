@@ -50,6 +50,9 @@ pub fn create_orchestrator(deck: &Entity<Deck>, cx: &mut App) {
 
 pub fn on_deck_event(deck: &Entity<Deck>, event: &DeckEvent, cx: &mut App) {
     let DeckEvent::Backend(event) = event;
+    if event.name == "user-request" {
+        return super::user::on_request(deck, &event.payload, cx);
+    }
     if event.name != "mcp-request" {
         return;
     }

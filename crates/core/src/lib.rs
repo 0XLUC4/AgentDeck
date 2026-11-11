@@ -16,6 +16,7 @@ pub mod notes_graph;
 pub mod notify;
 pub mod persist;
 pub mod pty;
+pub mod remote;
 pub mod skills;
 pub mod trust;
 pub mod usage;
@@ -135,6 +136,7 @@ pub fn start(data_dir: PathBuf) -> AppHandle {
     let app = AppHandle::new(data_dir);
     let hooks = hooks_server::start(app.clone());
     mcp::hub::init(&app, hooks.port);
+    remote::init(&app, hooks.port);
     app.manage(AppState {
         panes: pty::Panes::default(),
         active_pane: Mutex::new(None),

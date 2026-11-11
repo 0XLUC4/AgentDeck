@@ -26,7 +26,8 @@ use crate::layout::DeckView;
 use crate::state::Deck;
 use crate::theme::{hsla, palette, ui};
 
-pub use broadcast::{Broadcast, open_broadcast, open_race};
+pub use broadcast::{Broadcast, agent_from_issue, open_broadcast, open_race};
+pub(crate) use broadcast::race_one;
 pub use command::CommandPalette;
 #[allow(unused_imports)] // public API for the panes and settings modules
 pub use queue::{QUEUE_HOVER_GROUP, QueueDialog, open_queue, queue_button, send_next};

@@ -15,6 +15,7 @@ mod button;
 mod link;
 pub(crate) mod runtime;
 mod tools;
+mod user;
 mod wall;
 
 use gpui_kit::*;

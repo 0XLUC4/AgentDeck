@@ -3,15 +3,15 @@
 
 use agentdeck_core::history;
 use agentdeck_core::logic::deck::{FONT_SIZE_MAX, FONT_SIZE_MIN};
-use agentdeck_core::logic::settings::{DEFAULT_FONT_FAMILY, Settings};
-use agentdeck_core::logic::theme::FONT_MONO;
+use agentdeck_core::logic::settings::{DEFAULT_FONT_FAMILY, RemoteSettings, Settings};
+use agentdeck_core::logic::theme::{FONT_MONO, Palette};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::*;
 
 use super::SettingsDialog;
-use super::controls::{button, confirm, error_text, field, row, section, toggle};
+use super::controls::{button, confirm, error_text, field, hint_text, row, section, toggle};
 use crate::system::{autostart_enabled, set_autostart};
 use crate::theme::{hsla, ui};
 
@@ -65,7 +65,91 @@ impl General {
     }
 }
 
+/// Port of the phone page unless the settings file names another.
+const PHONE_PORT: u16 = 47810;
+
+/// The link as a QR code: dark modules on white, with the quiet zone scanners need.
+fn qr(text: &str) -> AnyElement {
+    let Ok(code) = qrcode::QrCode::new(text.as_bytes()) else {
+        return div().into_any_element();
+    };
+    let width = code.width();
+    let dark: Vec<bool> = code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect();
+    div()
+        .flex_shrink_0()
+        .size(ui(176.0))
+        .p(ui(10.0))
+        .rounded(ui(8.0))
+        .bg(white())
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, (), window, _| {
+                    let cell = bounds.size.width / width as f32;
+                    for (i, _) in dark.iter().enumerate().filter(|(_, dark)| **dark) {
+                        let (x, y) = ((i % width) as f32, (i / width) as f32);
+                        // Half a pixel wider: neighbours overlap instead of leaving hairlines.
+                        let module = Bounds::new(bounds.origin + point(cell * x, cell * y), size(cell + px(0.5), cell + px(0.5)));
+                        window.paint_quad(fill(module, black()));
+                    }
+                },
+            )
+            .size_full(),
+        )
+        .into_any_element()
+}
+
 impl SettingsDialog {
+    /// Turns the phone page on or off; the first time, makes its secret link.
+    fn toggle_phone(&mut self, cx: &mut Context<Self>) {
+        self.set(cx, |s| {
+            s.remote.enabled = !s.remote.enabled;
+            if s.remote.token.is_empty() {
+                s.remote.token = agentdeck_core::logic::deck::new_id();
+            }
+            if s.remote.port == 0 {
+                s.remote.port = PHONE_PORT;
+            }
+        });
+        let applied = self.deck.update(cx, |deck, _| crate::system::apply_phone(deck));
+        if applied.is_err() {
+            // The port is taken: off again, with the reason shown.
+            self.set(cx, |s| s.remote.enabled = false);
+            self.report(applied, cx);
+        }
+    }
+
+    /// The link to open on the phone: QR code, copy button and what it gives access to.
+    fn phone_link(&self, remote: &RemoteSettings, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let host = agentdeck_core::remote::lan_ip().map_or_else(|| "this-computer".to_owned(), |ip| ip.to_string());
+        let url = format!("http://{host}:{}/#{}", remote.port, remote.token);
+        let copy = url.clone();
+        div()
+            .flex()
+            .gap_4()
+            .py_2()
+            .child(qr(&url))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap_2()
+                    .min_w_0()
+                    .child(div().font_family(FONT_MONO).text_xs().text_color(hsla(p.muted)).child(url))
+                    .child(button("set-phone-copy", Some(IconName::Copy), "Copy link", false, p).on_click(cx.listener(
+                        move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())),
+                    )))
+                    .child(hint_text(
+                        "Scan it with a phone on the same Wi-Fi. The page is plain HTTP: anyone on that network who gets \
+                         this link can prompt your agents and answer their permissions, so keep it for a network you \
+                         trust. Windows may ask to let AgentDeck through the firewall.",
+                        p,
+                    )),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
         let p = crate::theme::palette(cx);
         let s = self.settings(cx).clone();
@@ -166,6 +250,15 @@ impl SettingsDialog {
             flag("set-close-tray", s.close_to_tray, |s, v| s.close_to_tray = v, cx),
             &p,
         ));
+        rows.push(row(
+            "Phone access",
+            Some("A page on your local network: agent status, prompts, allow or deny permissions"),
+            toggle("set-phone", s.remote.enabled, &p).on_click(cx.listener(|this, _, _, cx| this.toggle_phone(cx))),
+            &p,
+        ));
+        if s.remote.enabled {
+            rows.push(self.phone_link(&s.remote, &p, cx));
+        }
         section("General", rows, &p)
     }
 }

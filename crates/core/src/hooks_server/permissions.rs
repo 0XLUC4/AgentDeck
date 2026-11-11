@@ -66,6 +66,8 @@ struct Pending {
     tool_input: Value,
     /// `addRules`/allow entries from `permission_suggestions`, echoed back as `updatedPermissions`.
     always: Vec<Value>,
+    /// "Bash: rm -rf build": shown on the phone page.
+    summary: String,
     tx: Sender<Option<Value>>,
 }
 
@@ -139,10 +141,21 @@ impl Permissions {
                 tool_name: body["tool_name"].clone(),
                 tool_input: input.clone(),
                 always,
+                summary: request.summary.clone(),
                 tx,
             },
         );
         (request, rx)
+    }
+
+    /// Pending requests (phone page): id, pane, what is asked. A question is answered on the desktop.
+    pub fn list(&self) -> Vec<Value> {
+        self.lock()
+            .iter()
+            .map(|(id, p)| {
+                json!({ "requestId": id, "paneId": p.pane_id, "summary": p.summary, "question": p.tool_name == "AskUserQuestion" })
+            })
+            .collect()
     }
 
     /// Unblocks the held hook. `decision`: "allow" | "allow_always" | "deny" | "ask" (back to the terminal).

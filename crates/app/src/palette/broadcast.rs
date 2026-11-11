@@ -76,7 +76,7 @@ const RACE_START_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Starts one race agent and submits the prompt once its start screen stopped drawing.
 /// False when it failed to start, was closed, or never got ready.
-async fn race_one(deck: Entity<Deck>, spec: PaneSpec, tab_id: String, text: String, cx: &mut AsyncApp) -> bool {
+pub(crate) async fn race_one(deck: Entity<Deck>, spec: PaneSpec, tab_id: String, text: String, cx: &mut AsyncApp) -> bool {
     use crate::orchestrator::runtime;
     let id = spec.id.clone();
     // False = still queued or setting up its worktree: the loop below keeps waiting.
@@ -95,6 +95,41 @@ async fn race_one(deck: Entity<Deck>, spec: PaneSpec, tab_id: String, text: Stri
         waited += RACE_POLL;
     }
     false
+}
+
+/// Starts the last used agent on the GitHub issue or pull request whose link is in the clipboard.
+pub fn agent_from_issue(deck: &Entity<Deck>, cx: &mut App) {
+    let url = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
+    let agent = crate::panes::last_agent(cx);
+    let d = deck.read(cx);
+    let path = d.state.active_workspace().path.clone();
+    let cwd = if path.is_empty() { d.state.last_cwd.clone() } else { path };
+    let defaults = d.settings.agent(agent);
+    let font_size = d.settings.font_size;
+    let Some(tab_id) = d.state.active_tab().map(|t| t.id.clone()).filter(|_| !cwd.is_empty()) else {
+        deck.update(cx, |d, cx| d.toast("Link a workspace first: the agent works in its folder.", cx));
+        return;
+    };
+    let deck = deck.clone();
+    cx.spawn(async move |cx| {
+        let dir = cwd.clone();
+        let fetched = cx.background_executor().spawn(async move { agentdeck_core::git::gh_issue_prompt(dir, url) }).await;
+        let failure = match fetched {
+            Err(e) => Some(format!("GitHub issue: {e}. Copy the issue's link first.")),
+            Ok((title, prompt)) => {
+                let mut spec = PaneSpec::new(agent, title, cwd);
+                spec.font_size = font_size;
+                spec.args = split_args(&defaults.args);
+                spec.worktree = defaults.worktree;
+                let started = race_one(deck.clone(), spec, tab_id, prompt, cx).await;
+                (!started).then(|| "The agent did not start: the issue was not sent.".to_owned())
+            }
+        };
+        if let Some(message) = failure {
+            cx.update(|cx| deck.update(cx, |d, cx| d.toast(message, cx)));
+        }
+    })
+    .detach();
 }
 
 /// Opens the broadcast composer (TitleBar button, Ctrl+Shift+B, command palette).

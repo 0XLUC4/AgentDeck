@@ -161,14 +161,19 @@ pub fn spawn_pane(
     {
         return Err("pane id already in use".into());
     }
-    let cwd = if worktree {
+    let mut env = env;
+    let ssh = env.remove(SSH_ENV);
+    let cwd = if worktree && ssh.is_none() {
         agents::create_worktree(&cwd, &pane_id)?
     } else {
         cwd
     };
-    agents::prepare_hooks(agent, &cwd, &state.hooks)?;
-    if trust {
-        crate::trust::trust_folder(agent, &cwd);
+    // A remote agent cannot reach the hook server: nothing to install here.
+    if ssh.is_none() {
+        agents::prepare_hooks(agent, &cwd, &state.hooks)?;
+        if trust {
+            crate::trust::trust_folder(agent, &cwd);
+        }
     }
 
     let pair = native_pty_system()
@@ -180,13 +185,23 @@ pub fn spawn_pane(
         })
         .map_err(|e| e.to_string())?;
 
-    let args = [
-        agents::hook_args(agent, &pane_id, &state.hooks),
-        crate::mcp::hub::agent_args(agent),
-        args,
-    ]
-    .concat();
-    let mut cmd: CommandBuilder = agents::command_for(agent, &args);
+    let mut cmd: CommandBuilder = match ssh.as_deref().map(ssh_target) {
+        Some(Some((host, dir))) => {
+            let mut cmd = CommandBuilder::new("ssh");
+            cmd.args(["-t", host, &ssh_command(agent, dir, &args)]);
+            cmd
+        }
+        Some(None) => return Err("SSH target: user@host:/folder".into()),
+        None => {
+            let args = [
+                agents::hook_args(agent, &pane_id, &state.hooks),
+                crate::mcp::hub::agent_args(agent),
+                args,
+            ]
+            .concat();
+            agents::command_for(agent, &args)
+        }
+    };
     cmd.cwd(&cwd);
     // When AgentDeck itself is started from a Claude Code session, don't leak that session's
     // identity (messaging token/socket, child-session markers) into the agents we spawn.
@@ -416,6 +431,32 @@ fn is_parent_claude_var(key: &str) -> bool {
 
 /// Pane ids end up in hook URLs and args, and agents run through `cmd.exe /c`
 /// on Windows, which re-parses shell metacharacters: reject both up front.
+/// Env key carrying a pane's SSH target to `spawn_pane` (never given to the process).
+pub const SSH_ENV: &str = "AGENTDECK_SSH";
+
+/// Host and folder of "user@host:/dir" ("" = the remote home). Both go on a remote shell's
+/// command line: plain characters only.
+pub fn ssh_target(target: &str) -> Option<(&str, &str)> {
+    let (host, dir) = target.split_once(':').unwrap_or((target, ""));
+    let plain = |s: &str, extra: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c));
+    let host_ok = !host.is_empty() && !host.starts_with('-') && plain(host, "@._-");
+    (host_ok && plain(dir, "/._-~")).then_some((host, dir))
+}
+
+/// The remote command: the agent in `dir`, through a login shell so its PATH is the user's.
+fn ssh_command(agent: AgentKind, dir: &str, args: &[String]) -> String {
+    const QUOTE: char = '\x27';
+    // 'it'\''s': the only way to put a quote inside single quotes.
+    let quote = |s: &str| format!("{QUOTE}{}{QUOTE}", s.replace(QUOTE, "\x27\\\x27\x27"));
+    let mut run = format!("exec {}", agent.binary().unwrap_or("\"$SHELL\" -l"));
+    for arg in args {
+        run.push(' ');
+        run.push_str(&quote(arg));
+    }
+    let cd = if dir.is_empty() { String::new() } else { format!("cd {dir} && ") };
+    format!("{cd}exec \"$SHELL\" -lc {}", quote(&run))
+}
+
 fn validate_spawn_input(pane_id: &str, args: &[String]) -> Result<(), String> {
     let id_ok = (1..=64).contains(&pane_id.len())
         && pane_id
@@ -441,6 +482,7 @@ fn validate_extra_env(env: &HashMap<String, String>) -> Result<(), String> {
         }
         // Per-agent dev server port (settings.basePort), so parallel agents don't collide.
         "PORT" => v.parse::<u16>().is_ok_and(|port| port >= 1024),
+        SSH_ENV => ssh_target(v).is_some(),
         _ => false,
     });
     ok.then_some(())
@@ -697,5 +739,22 @@ mod job {
             // SAFETY: we own this handle and close it once.
             unsafe { CloseHandle(self.0) };
         }
+    }
+}
+
+#[cfg(test)]
+mod ssh_tests {
+    use super::{AgentKind, ssh_command, ssh_target};
+
+    #[test]
+    fn ssh_target_and_command() {
+        assert_eq!(ssh_target("luca@box:/srv/app"), Some(("luca@box", "/srv/app")));
+        assert_eq!(ssh_target("box"), Some(("box", "")));
+        for bad in ["", "-oProxyCommand=x", "box:/a b", "box:$(id)", "a;b", "box:/a\x27b"] {
+            assert_eq!(ssh_target(bad), None, "{bad}");
+        }
+        let run = ssh_command(AgentKind::Claude, "/srv/app", &["--model".into(), "opus".into()]);
+        assert_eq!(run, "cd /srv/app && exec \"$SHELL\" -lc \x27exec claude \x27\\\x27\x27--model\x27\\\x27\x27 \x27\\\x27\x27opus\x27\\\x27\x27\x27");
+        assert_eq!(ssh_command(AgentKind::Shell, "", &[]), "exec \"$SHELL\" -lc \x27exec \"$SHELL\" -l\x27");
     }
 }

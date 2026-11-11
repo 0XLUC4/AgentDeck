@@ -4,7 +4,8 @@
 
 use std::time::Duration;
 
-use agentdeck_core::git::{git_pane_dir, git_status};
+use agentdeck_core::git::{PrStatus, git_pane_dir, git_pr_status, git_status};
+use agentdeck_core::logic::theme::Palette;
 use agentdeck_core::hooks_server::PaneStatus;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::*;
@@ -15,6 +16,24 @@ use crate::theme::{hsla, palette, ui};
 
 /// One git status costs about ten git processes: refresh once things settle, not on every tool call.
 const REFRESH_DELAY: Duration = Duration::from_millis(2500);
+/// While a pull request's checks run, its state is read again this often.
+const PR_POLL: Duration = Duration::from_secs(60);
+
+/// "2 checks failed" and its color: red when one failed, blue while some run, green when all passed.
+pub(super) fn checks_label(pr: &PrStatus, p: &Palette) -> (String, u32) {
+    let count = |n: u32, what: &str| format!("{n} check{} {what}", if n == 1 { "" } else { "s" });
+    if pr.state != "OPEN" {
+        (pr.state.to_lowercase(), p.subtle)
+    } else if pr.failed > 0 {
+        (count(pr.failed, "failed"), p.bad)
+    } else if pr.pending > 0 {
+        (count(pr.pending, "running"), p.busy)
+    } else if pr.passed > 0 {
+        (count(pr.passed, "passed"), p.ok)
+    } else {
+        ("no checks".to_owned(), p.subtle)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct DiffCount {
@@ -30,6 +49,8 @@ pub struct DiffChip {
     deck: Entity<Deck>,
     pane_id: String,
     diff: Option<DiffCount>,
+    /// Pull request of the agent's worktree branch, if it has one.
+    pr: Option<PrStatus>,
     key: Option<Key>,
     panel: Option<Entity<GitPanel>>,
     _refresh: Option<Task<()>>,
@@ -44,6 +65,7 @@ impl DiffChip {
             deck,
             pane_id: pane_id.into(),
             diff: None,
+            pr: None,
             key: None,
             panel: None,
             _refresh: None,
@@ -84,13 +106,15 @@ impl DiffChip {
             self._refresh = None;
             return;
         }
-        let (cwd, id, worktree) = (pane.cwd.clone(), pane.id.clone(), pane.worktree);
+        let worktree = pane.worktree;
+        let dir = git_pane_dir(pane.cwd.clone(), pane.id.clone(), worktree);
         self._refresh = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(REFRESH_DELAY).await;
+            let status_dir = dir.clone();
             let diff = cx
                 .background_spawn(async move {
                     // Err: not a git repo.
-                    git_status(git_pane_dir(cwd, id, worktree)).ok().map(|s| DiffCount {
+                    git_status(status_dir).ok().map(|s| DiffCount {
                         files: s.files.len(),
                         additions: s.files.iter().filter_map(|f| f.additions).sum(),
                         deletions: s.files.iter().filter_map(|f| f.deletions).sum(),
@@ -102,6 +126,20 @@ impl DiffChip {
                 cx.notify();
             })
             .ok();
+            // Pull requests are opened from agent worktrees: the others are not asked about.
+            while worktree {
+                let pr_dir = dir.clone();
+                let pr = cx.background_spawn(async move { git_pr_status(pr_dir) }).await;
+                let running = pr.as_ref().is_some_and(|pr| pr.state == "OPEN" && pr.pending > 0);
+                let alive = this.update(cx, |this, cx| {
+                    this.pr = pr;
+                    cx.notify();
+                });
+                if alive.is_err() || !running {
+                    break;
+                }
+                cx.background_executor().timer(PR_POLL).await;
+            }
         }));
     }
 }
@@ -139,6 +177,30 @@ impl Render for DiffChip {
                 .child(div().text_color(hsla(p.bad)).child(format!("-{}", d.deletions)))
                 .child(format!("· {}", d.files))
         });
-        div().flex().children(chip).children(self.panel.clone())
+        let pr_chip = self.pr.clone().map(|pr| {
+            let (label, color) = checks_label(&pr, &p);
+            let tip = SharedString::from(format!("Pull request #{}: {label}. Open it in the browser", pr.number));
+            div()
+                .id("pr-chip")
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1()
+                .rounded(ui(4.0))
+                .px_1()
+                .text_size(ui(11.0))
+                .text_color(hsla(p.subtle))
+                .cursor_pointer()
+                .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().size(ui(6.0)).rounded_full().bg(hsla(color)))
+                .child(format!("PR #{}", pr.number))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(&pr.url);
+                })
+        });
+        div().flex().children(chip).children(pr_chip).children(self.panel.clone())
     }
 }

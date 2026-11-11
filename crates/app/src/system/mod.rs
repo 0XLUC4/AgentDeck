@@ -6,6 +6,7 @@
 //! (permission notification), src/components/Update/UpdateButton.tsx, src/components/Settings/AppControls.tsx.
 
 mod autostart;
+mod cli;
 mod controls;
 mod hotkey;
 mod instance;
@@ -25,6 +26,7 @@ pub use {
     updater::{Update, UpdateButton, UpdatePhase, Updater, updater},
     window::{hide_main, main_deck, main_window},
 };
+pub use cli::run as run_cli;
 pub use instance::single_instance;
 pub use window::{is_main_focused, quit, show_main};
 
@@ -33,6 +35,12 @@ use gpui_kit::*;
 use crate::layout::DeckView;
 
 /// Wires everything to the first `DeckView` (the main window) once it exists.
+/// Starts or stops the phone page according to the settings (startup, Settings > General).
+pub fn apply_phone(deck: &crate::state::Deck) -> Result<(), String> {
+    let remote = &deck.settings.remote;
+    agentdeck_core::remote::set_phone(&deck.backend, remote.enabled.then(|| (remote.port, remote.token.clone())))
+}
+
 pub fn init(cx: &mut App) {
     updater::init(cx); // before any view so UpdateButton / AppControls can observe it
     cx.observe_new::<DeckView>(|view, window, cx| {
@@ -45,6 +53,9 @@ pub fn init(cx: &mut App) {
         let deck = view.deck().clone();
         window::wire(window, deck.clone(), cx);
         instance::listen(cx);
+        if let Err(e) = apply_phone(deck.read(cx)) {
+            eprintln!("{e}");
+        }
         tray::init(cx);
         hotkey::init(&deck, cx);
         watch::init(deck, cx);
