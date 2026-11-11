@@ -93,7 +93,7 @@ pub(super) struct Item {
 }
 
 /// (id, label, icon, shortcut hint). Same order and labels as the original.
-const ACTIONS: [(&str, &str, IconName, Option<&str>); 24] = [
+const ACTIONS: [(&str, &str, IconName, Option<&str>); 25] = [
     ("add-agent", "Add agent", IconName::Plus, None),
     ("new-session", "New session", IconName::SquarePlus, None),
     ("link-workspace", "Link workspace", IconName::FolderPlus, None),
@@ -110,6 +110,7 @@ const ACTIONS: [(&str, &str, IconName, Option<&str>); 24] = [
     ("zoom-out", "Zoom -", IconName::ZoomOut, Some("Ctrl+-")),
     ("broadcast", "Broadcast prompt", IconName::Megaphone, Some("Ctrl+Shift+B")),
     ("race", "Race a prompt (N agents, one worktree each)", IconName::Flag, None),
+    ("issue", "New agent from a GitHub issue (link in the clipboard)", IconName::GitPullRequest, None),
     ("templates", "New session from template", IconName::LayoutTemplate, None),
     ("checkpoint", "Create restore point (active pane)", IconName::RotateCcwClock, None),
     ("detach", "Detach active pane", IconName::ExternalLink, None),
@@ -512,6 +513,7 @@ fn run_action(deck: &Entity<Deck>, id: &str, label: &str, window: &mut Window, c
         }
         "broadcast" => super::open_broadcast(deck.clone(), window, cx),
         "race" => super::open_race(deck.clone(), window, cx),
+        "issue" => super::agent_from_issue(deck, cx),
         "templates" => super::open_template_picker(deck.clone(), window, cx),
         "checkpoint" => on_current_pane(deck, cx, |_, pane, cx| {
             let job = crate::git::checkpoint_pane(deck, pane, cx);

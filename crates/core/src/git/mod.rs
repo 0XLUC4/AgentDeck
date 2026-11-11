@@ -890,6 +890,70 @@ pub fn git_push(cwd: String) -> Result<String, String> {
     res
 }
 
+/// Pull request of a branch and the state of its checks (GitHub CLI).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatus {
+    pub number: u64,
+    pub url: String,
+    /// "OPEN", "MERGED" or "CLOSED".
+    pub state: String,
+    pub passed: u32,
+    pub failed: u32,
+    pub pending: u32,
+}
+
+/// Parses `gh pr view --json number,url,state,statusCheckRollup`.
+fn parse_pr(json: &str) -> Option<PrStatus> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut pr = PrStatus {
+        number: v["number"].as_u64()?,
+        url: v["url"].as_str()?.to_owned(),
+        state: v["state"].as_str().unwrap_or("OPEN").to_owned(),
+        passed: 0,
+        failed: 0,
+        pending: 0,
+    };
+    for check in v["statusCheckRollup"].as_array().into_iter().flatten() {
+        // Check runs carry `conclusion` once completed; commit statuses carry `state`.
+        let result = check["conclusion"].as_str().filter(|c| !c.is_empty()).or_else(|| check["state"].as_str());
+        match result.unwrap_or("") {
+            "SUCCESS" | "NEUTRAL" | "SKIPPED" => pr.passed += 1,
+            "" | "PENDING" | "EXPECTED" | "QUEUED" | "IN_PROGRESS" => pr.pending += 1,
+            _ => pr.failed += 1,
+        }
+    }
+    Some(pr)
+}
+
+/// The pull request of the folder's branch, if any. None too without the GitHub CLI or a repo.
+pub fn git_pr_status(cwd: String) -> Option<PrStatus> {
+    let root = repo_root(&cwd).ok()?;
+    parse_pr(&gh(&root, &["pr", "view", "--json", "number,url,state,statusCheckRollup"]).ok()?)
+}
+
+/// Pane title and prompt for an agent, from a GitHub issue or pull request link (GitHub CLI).
+pub fn gh_issue_prompt(cwd: String, url: String) -> Result<(String, String), String> {
+    let url = url.trim();
+    // Goes on gh's command line: a plain GitHub link only.
+    let known = url.starts_with("https://github.com/") && (url.contains("/issues/") || url.contains("/pull/"));
+    if !known || url.contains(char::is_whitespace) {
+        return Err("not a GitHub issue or pull request link".into());
+    }
+    let kind = if url.contains("/pull/") { "pr" } else { "issue" };
+    let out = gh(Path::new(&cwd), &[kind, "view", url, "--json", "number,title,body"])?;
+    issue_prompt(url, &out).ok_or_else(|| "unexpected answer from gh".into())
+}
+
+fn issue_prompt(url: &str, json: &str) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let title = v["title"].as_str()?.trim();
+    let body: String = v["body"].as_str().unwrap_or("").chars().take(16_000).collect();
+    let short: String = title.chars().take(40).collect();
+    let prompt = format!("Work on this GitHub issue: {url}\n\n# {title}\n\n{}", body.trim());
+    Some((format!("#{} {short}", v["number"].as_u64()?), prompt))
+}
+
 pub fn gh_list_repos() -> Result<serde_json::Value, String> {
     gh_repo_list()
 }
@@ -1257,5 +1321,34 @@ mod tests {
                 .is_empty()
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod github_tests {
+    use super::{issue_prompt, parse_pr};
+
+    #[test]
+    fn counts_pull_request_checks() {
+        let json = r#"{"number": 12, "url": "https://github.com/o/r/pull/12", "state": "OPEN", "statusCheckRollup": [
+            {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": ""},
+            {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"},
+            {"__typename": "StatusContext", "state": "PENDING"},
+            {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SKIPPED"}]}"#;
+        let pr = parse_pr(json).unwrap();
+        assert_eq!((pr.number, pr.passed, pr.failed, pr.pending), (12, 2, 1, 2));
+        assert_eq!(parse_pr(r#"{"number": 3, "url": "u", "state": "MERGED"}"#).unwrap().state, "MERGED");
+        assert!(parse_pr("no pull requests found").is_none());
+    }
+
+    #[test]
+    fn issue_becomes_a_prompt() {
+        let json = r#"{"number": 7, "title": " Crash on start ", "body": "Steps"}"#;
+        let (title, prompt) = issue_prompt("https://github.com/o/r/issues/7", json).unwrap();
+        assert_eq!(title, "#7 Crash on start");
+        assert!(prompt.starts_with("Work on this GitHub issue: https://github.com/o/r/issues/7"));
+        assert!(prompt.ends_with("# Crash on start\n\nSteps"));
+        assert!(issue_prompt("u", "{}").is_none());
     }
 }

@@ -239,7 +239,7 @@ impl PaneHeader {
         let Some(pane) = self.deck.read(cx).state.panes.get(&id).cloned() else { return };
         match action {
             MenuAction::Rename => self.start_rename(window, cx),
-            MenuAction::Duplicate => spawn_agent(pane.agent, &pane.cwd, pane.spec.args.clone(), pane.worktree, cx),
+            MenuAction::Duplicate => spawn_agent(pane.agent, &pane.cwd, pane.spec.args.clone(), pane.worktree, pane.ssh.clone(), cx),
             MenuAction::Restart => confirm_restart(&id, window, cx),
             MenuAction::ZoomIn | MenuAction::ZoomOut => {
                 let delta = if matches!(action, MenuAction::ZoomIn) { 1.0 } else { -1.0 };

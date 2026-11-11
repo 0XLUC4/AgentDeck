@@ -91,6 +91,9 @@ pub fn start(app: AppHandle) -> HookServer {
                 if path == "/mcp" {
                     return crate::mcp::serve(&app, req, &expected);
                 }
+                if path == "/api" {
+                    return crate::remote::serve(&app, req);
+                }
                 if let Some(name) = path.strip_prefix("/hub/") {
                     return crate::mcp::hub::serve(&app, req, &expected, name);
                 }

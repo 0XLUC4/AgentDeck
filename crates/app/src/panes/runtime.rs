@@ -22,6 +22,8 @@ use crate::state::{Deck, DeckEvent};
 
 /// Output within this window counts as "working" for panes without hooks.
 pub const ACTIVITY_WINDOW_MS: i64 = 3000;
+/// Output this soon after the process starts is its banner, not work.
+const STARTUP_MS: i64 = 5000;
 /// A TUI repaints right after a click, a resize or a keystroke: that output must not light the pane up as busy.
 const REPAINT_MS: i64 = 600;
 /// Claude exits within this window when the conversation to resume no longer exists.
@@ -450,8 +452,13 @@ fn run_spawn(job: SpawnJob) -> Result<(), String> {
         args.push(resume);
     }
     args.extend(pane.spec.args.iter().cloned());
+    // Over ssh the agent sees nothing of this machine: only its own arguments go.
+    if let Some(target) = &pane.ssh {
+        args = pane.spec.args.clone();
+        env = HashMap::from([(pty::SSH_ENV.to_owned(), target.clone())]);
+    }
     // Creates the worktree and sets it up; spawn_pane then reuses it.
-    if pane.worktree && !job.setup.is_empty() {
+    if pane.worktree && pane.ssh.is_none() && !job.setup.is_empty() {
         agentdeck_core::agents::create_worktree_with(&pane.cwd, &pane.id, &job.setup)?;
     }
     pty::spawn_pane(
@@ -975,7 +982,24 @@ fn forward_terminal_notices(now: i64, cx: &mut App) {
     }
 }
 
-/// Panes without hooks: working if output arrived recently, idle otherwise.
+/// A stretch of output this long was a task: its end shows as "done". Shorter ones (a redraw, a
+/// menu) just go back to idle, without a notification.
+const TASK_MIN_MS: i64 = 5000;
+
+/// Status of a pane read from its output. `busy`: output arrived within the activity window;
+/// `last`: time of the latest output; `since`: when the pane got its current status.
+fn derived_status(agent: AgentKind, status: PaneStatus, busy: bool, last: i64, since: i64, now: i64) -> PaneStatus {
+    match status {
+        // The tail of a finished turn is still inside the window: only later output is a new turn.
+        PaneStatus::Done if busy && last > since + ACTIVITY_WINDOW_MS => PaneStatus::Working,
+        PaneStatus::Idle if busy => PaneStatus::Working,
+        PaneStatus::Working if !busy && agent != AgentKind::Shell && now - since >= TASK_MIN_MS => PaneStatus::Done,
+        PaneStatus::Working if !busy => PaneStatus::Idle,
+        other => other,
+    }
+}
+
+/// Panes without hooks: working while output arrives, done (or idle) once it stops.
 fn derive_statuses(now: i64, cx: &mut App) {
     let Some(deck) = deck(cx) else { return };
     let Some(r) = cx.try_global::<Runtimes>() else { return };
@@ -984,11 +1008,18 @@ fn derive_statuses(now: i64, cx: &mut App) {
         .state
         .panes
         .values()
-        .filter(|p| !p.hooked && !p.exited && matches!(p.status, PaneStatus::Working | PaneStatus::Idle))
+        // Codex only reports the end of a turn (notify): its "working" comes from its output too.
+        .filter(|p| !p.exited && (!p.hooked || p.agent == AgentKind::Codex))
+        .filter(|p| matches!(p.status, PaneStatus::Working | PaneStatus::Idle | PaneStatus::Done))
+        // Claude and Gemini say when they work through their hooks: their welcome screen, a resumed
+        // conversation or a menu is output, not work. Over ssh no hook comes back: output it is.
+        .filter(|p| p.ssh.is_some() || !matches!(p.agent, AgentKind::Claude | AgentKind::Gemini))
         .filter_map(|p| {
             let rt = r.map.get(&p.id)?;
-            let busy = now - lock(&rt.output).last_output_at < ACTIVITY_WINDOW_MS;
-            let status = if busy { PaneStatus::Working } else { PaneStatus::Idle };
+            let last = lock(&rt.output).last_output_at;
+            // The other agents print a banner when they start: not work either.
+            let busy = now - last < ACTIVITY_WINDOW_MS && rt.started_at.is_some_and(|start| last > start + STARTUP_MS);
+            let status = derived_status(p.agent, p.status, busy, last, p.status_since, now);
             (status != p.status).then(|| (p.id.clone(), status))
         })
         .collect();
@@ -998,7 +1029,7 @@ fn derive_statuses(now: i64, cx: &mut App) {
     deck.update(cx, |d, cx| {
         for (id, status) in changes {
             // No hook will ever report these panes: the orchestrator's wait_for reads this instead.
-            let done = if status == PaneStatus::Idle { PaneStatus::Done } else { PaneStatus::Working };
+            let done = if status == PaneStatus::Working { PaneStatus::Working } else { PaneStatus::Done };
             agentdeck_core::mcp::STATUS.set(&id, done);
             d.state.set_status(&id, status, None, now);
         }
@@ -1125,6 +1156,20 @@ pub fn reopen_session(session_id: &str, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_from_output() {
+        use PaneStatus::{Done, Idle, Working};
+        let codex = |status, busy, last, since, now| derived_status(AgentKind::Codex, status, busy, last, since, now);
+        assert_eq!(codex(Idle, true, 100, 0, 100), Working);
+        // A short burst goes back to idle; a real stretch of work ends as done.
+        assert_eq!(codex(Working, false, 2_000, 0, 4_000), Idle);
+        assert_eq!(codex(Working, false, 20_000, 0, 24_000), Done);
+        // The tail of the finished turn does not restart it; later output does.
+        assert_eq!(codex(Done, true, 1_000, 0, 1_500), Done);
+        assert_eq!(codex(Done, true, 9_000, 0, 9_500), Working);
+        assert_eq!(derived_status(AgentKind::Shell, Working, false, 20_000, 0, 24_000), Idle);
+    }
     use core::prelude::v1::test;
 
     #[test]

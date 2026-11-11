@@ -55,6 +55,9 @@ pub struct PaneSpec {
     /// PORT given to the agent (settings.basePort + n).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// "user@host:/dir": the agent runs on that machine through ssh (no hooks, no worktree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<String>,
 }
 
 fn default_font() -> f32 {
@@ -81,6 +84,7 @@ impl PaneSpec {
             resume_id: None,
             color: None,
             port: None,
+            ssh: None,
         }
     }
 }

@@ -42,6 +42,14 @@ fn tokens(n: u64) -> String {
     format_tokens(n as f64)
 }
 
+/// How full the conversation is: (percent, window size).
+// shortcut: the transcript does not name the window, so it is 200k, or 1M once past that;
+// read it from the model id if a third size appears.
+pub fn context_fill(context: u64) -> Option<(u64, u64)> {
+    let window = if context > 200_000 { 1_000_000 } else { 200_000 };
+    (context > 0).then(|| (context * 100 / window, window))
+}
+
 /// Chip text: tokens, plus cost when some of it is priced.
 pub fn usage_label(u: &Totals) -> String {
     if u.cost > 0.0 {
@@ -433,21 +441,32 @@ impl Render for UsageChip {
             return div().id("usage-chip");
         };
         let models = if usage.models.is_empty() { String::new() } else { format!("\nModels: {}", usage.models.join(", ")) };
-        let tip = format!("Since the agent started\n{}{models}", usage_details(&usage.totals));
+        let p = palette(cx);
+        let fill = context_fill(usage.context);
+        let room = fill.map_or_else(String::new, |(percent, window)| {
+            format!("\nConversation: {} of {} tokens ({percent}%)", tokens(usage.context), tokens(window))
+        });
+        let tip = format!("Since the agent started\n{}{models}{room}", usage_details(&usage.totals));
+        let label = match fill {
+            Some((percent, _)) => format!("{} · ctx {percent}%", usage_label(&usage.totals)),
+            None => usage_label(&usage.totals),
+        };
+        // Nearly full: the conversation is about to be compacted.
+        let color = if fill.is_some_and(|(percent, _)| percent >= 80) { p.wait } else { p.subtle };
         div()
             .id("usage-chip")
             .flex_shrink_0()
             .font_family(agentdeck_core::logic::theme::FONT_MONO)
             .text_xs()
-            .text_color(hsla(palette(cx).subtle))
+            .text_color(hsla(color))
             .tooltip(text_tooltip(tip))
-            .child(usage_label(&usage.totals))
+            .child(label)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_id, by_workspace, day_label, usage_details, usage_label};
+    use super::{agent_id, by_workspace, context_fill, day_label, usage_details, usage_label};
     use agentdeck_core::agents::AgentKind;
     use agentdeck_core::logic::deck::Workspace;
     use agentdeck_core::usage::{Keyed, Totals};
@@ -478,5 +497,8 @@ mod tests {
         assert!(details.ends_with("2k tokens from a model with no known price"));
         assert_eq!(agent_id(AgentKind::OpenCode), "opencode");
         assert_eq!(day_label("2026-10-26"), "10/26");
+        assert_eq!(context_fill(100_000), Some((50, 200_000)));
+        assert_eq!(context_fill(500_000), Some((50, 1_000_000)));
+        assert_eq!(context_fill(0), None);
     }
 }

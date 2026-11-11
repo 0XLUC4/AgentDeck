@@ -25,6 +25,9 @@ use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 fn main() {
+    if let Some(code) = system::run_cli() {
+        std::process::exit(code);
+    }
     let Some(_instance) = system::single_instance() else {
         eprintln!("AgentDeck is already running");
         return;

@@ -2,13 +2,13 @@
 //! Original: src/components/Git/GitPanel.tsx. Emits `DismissEvent` when closed.
 
 use agentdeck_core::git::{
-    Checkpoint, Comparison, GitStatus, Upstream, git_checkpoint, git_commit, git_compare, git_create_pr, git_diff,
+    Checkpoint, Comparison, GitStatus, PrStatus, Upstream, git_checkpoint, git_commit, git_compare, git_create_pr, git_diff,
     git_diff_trees, git_list_checkpoints, git_merge_worktree, git_pane_dir, git_pull, git_push, git_remove_worktree,
-    git_restore_checkpoint, git_status, git_upstream, merge_conflict_prompt,
+    git_pr_status, git_restore_checkpoint, git_status, git_upstream, merge_conflict_prompt,
 };
 use agentdeck_core::logic::deck::Pane;
 use agentdeck_core::logic::text::agent_name;
-use agentdeck_core::logic::theme::FONT_MONO;
+use agentdeck_core::logic::theme::{FONT_MONO, FONT_SANS};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
@@ -18,7 +18,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::checkpoints::{pane_git_dir, set_reviewer};
-use super::diff::{DiffLineKind, classify_diff, diff_lines};
+use super::chip::checks_label;
+use super::diff::{Comment, DiffLineKind, classify_diff, diff_lines, line_numbers, review_prompt};
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
 
@@ -82,8 +83,16 @@ pub struct GitPanel {
     selected: Option<String>,
     /// Changed files list collapsed (long lists push the commit section out of view).
     files_collapsed: bool,
-    diff: Option<Vec<(DiffLineKind, SharedString)>>,
+    /// Kind, text and file line number of each diff line.
+    diff: Option<Vec<(DiffLineKind, SharedString, Option<u32>)>>,
     shown: usize,
+    /// Review remarks on diff lines, sent to the agent in one prompt.
+    comments: Vec<Comment>,
+    /// Diff line being remarked on (index in `diff`).
+    commenting: Option<usize>,
+    comment: Entity<InputState>,
+    /// Pull request of the branch and its checks; None: none, or no GitHub CLI.
+    pr: Option<PrStatus>,
     notice: Option<(bool, String)>,
     busy: bool,
     syncing: Option<SyncKind>,
@@ -111,11 +120,17 @@ impl GitPanel {
                 .rows(4)
         });
         let pr_title = cx.new(|cx| InputState::new(window, cx));
+        let comment = cx.new(|cx| InputState::new(window, cx).placeholder("Remark for the agent (Enter to add)"));
         let subscriptions = vec![
             cx.subscribe(&message, |_, _, _: &InputEvent, cx| cx.notify()),
             cx.subscribe_in(&pr_title, window, |this, _, event: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
                     this.confirm(window, cx);
+                }
+            }),
+            cx.subscribe_in(&comment, window, |this, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.add_comment(window, cx);
                 }
             }),
             cx.observe(&deck, |_, _, cx| cx.notify()),
@@ -135,6 +150,10 @@ impl GitPanel {
             files_collapsed: false,
             diff: None,
             shown: DIFF_PAGE,
+            comments: Vec::new(),
+            commenting: None,
+            comment,
+            pr: None,
             notice: None,
             busy: false,
             syncing: None,
@@ -148,6 +167,7 @@ impl GitPanel {
             this.notice = Some((false, "This pane no longer exists.".into()));
         }
         this.refresh(cx);
+        this.load_pr(cx);
         this
     }
 
@@ -186,6 +206,7 @@ impl GitPanel {
     /// Shows a file's diff (against HEAD, or between the compared panes).
     fn open_file(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         self.selected = path.clone();
+        self.commenting = None;
         self.diff = None;
         self.shown = DIFF_PAGE;
         cx.notify();
@@ -202,11 +223,13 @@ impl GitPanel {
                     // Split and classify here: a 100k-line lockfile diff would freeze the window.
                     let lines = diff_lines(&text);
                     let kinds = classify_diff(&lines);
+                    let numbers = line_numbers(&lines, &kinds);
                     Ok::<Vec<_>, String>(
                         kinds
                             .into_iter()
                             .zip(lines)
-                            .map(|(k, l)| (k, SharedString::from(l.to_owned())))
+                            .zip(numbers)
+                            .map(|((k, l), n)| (k, SharedString::from(l.to_owned()), n))
                             .collect(),
                     )
                 })
@@ -276,6 +299,7 @@ impl GitPanel {
     }
 
     fn refresh_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.load_pr(cx);
         self.comparison = None;
         self.act(
             |_| Ok(()),
@@ -381,7 +405,10 @@ impl GitPanel {
                 }
                 self.act(
                     move |dir| git_create_pr(dir, title, body),
-                    |_, url, _, _| Some(format!("Pull request opened: {url}")),
+                    |this, url, _, cx| {
+                        this.load_pr(cx);
+                        Some(format!("Pull request opened: {url}"))
+                    },
                     window,
                     cx,
                 );
@@ -421,6 +448,51 @@ impl GitPanel {
             .ok();
         })
         .detach();
+    }
+
+    /// Loads the branch's pull request and the state of its checks.
+    fn load_pr(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = self.dir.clone() else { return };
+        cx.spawn(async move |this, cx| {
+            let pr = cx.background_spawn(async move { git_pr_status(dir) }).await;
+            this.update(cx, |this, cx| {
+                this.pr = pr;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the remark field under a diff line.
+    fn start_comment(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.commenting = Some(index);
+        self.comment.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn add_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.comment.read(cx).value().trim().to_owned();
+        let (Some(index), Some(path)) = (self.commenting.take(), self.selected.clone()) else { return };
+        let line = self.diff.as_ref().and_then(|diff| diff.get(index)).filter(|_| !text.is_empty());
+        if let Some((_, code, number)) = line {
+            self.comments.push(Comment { path, index, line: *number, code: code.to_string(), text });
+        }
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Sends every remark to the agent as one prompt.
+    fn send_comments(&mut self, cx: &mut Context<Self>) {
+        let count = self.comments.len();
+        crate::panes::runtime::send_prompt(&self.pane_id, &review_prompt(&self.comments), cx);
+        self.comments.clear();
+        let plural = if count == 1 { "" } else { "s" };
+        self.notice = Some((true, format!("Sent {count} remark{plural} to the agent.")));
+        cx.notify();
     }
 
     fn pr_body(&self, cx: &App) -> String {
@@ -797,9 +869,30 @@ impl Render for GitPanel {
             },
         };
         let has_upstream = self.upstream.as_ref().is_some_and(|u| u.name.is_some());
+        let pr_row = self.pr.clone().map(|pr| {
+            let (label, color) = checks_label(&pr, &p);
+            let url = pr.url.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .child(
+                    Button::new("git-pr-open")
+                        .ghost()
+                        .small()
+                        .icon(IconName::GitPullRequest)
+                        .label(format!("PR #{}", pr.number))
+                        .tooltip("Open the pull request in the browser")
+                        .on_click(move |_, _, cx| cx.open_url(&url)),
+                )
+                .child(div().size(ui(6.0)).flex_shrink_0().rounded_full().bg(hsla(color)))
+                .child(div().text_color(hsla(color)).child(label))
+        });
         let remote_section = self.comparison.is_none().then(|| {
             section("Remote", line, subtle)
                 .child(div().text_xs().text_color(subtle).child(upstream_text))
+                .children(pr_row)
                 .child(
                     div()
                         .flex()
@@ -941,9 +1034,39 @@ impl Render for GitPanel {
 
         // Diff view.
         let placeholder = |text: &'static str| div().p_4().text_xs().text_color(subtle).child(text);
+        let remarks = self.comments.len();
+        let remarks_bar = (remarks > 0).then(|| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_2()
+                .border_b_1()
+                .border_color(line)
+                .bg(hsla(p.raised))
+                .px_3()
+                .py_2()
+                .text_xs()
+                .child(div().flex_1().child(format!("{remarks} remark{} on the diff", if remarks == 1 { "" } else { "s" })))
+                .child(Button::new("git-remarks-clear").ghost().small().label("Clear").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.comments.clear();
+                        cx.notify();
+                    },
+                )))
+                .child(
+                    Button::new("git-remarks-send")
+                        .primary()
+                        .small()
+                        .label("Send to the agent")
+                        .disabled(exited)
+                        .on_click(cx.listener(|this, _, _, cx| this.send_comments(cx))),
+                )
+        });
         let right = div()
             .id("git-diff")
             .min_w_0()
+            .min_h_0()
             .flex_1()
             .overflow_scroll()
             .bg(hsla(p.base))
@@ -958,19 +1081,65 @@ impl Render for GitPanel {
                         .font_family(FONT_MONO)
                         .text_xs()
                         .line_height(ui(20.0))
-                        .children(lines.iter().take(self.shown).map(|(kind, text)| {
+                        .children(lines.iter().take(self.shown).enumerate().flat_map(|(i, (kind, text, _))| {
                             let (bg, color) = match kind {
                                 DiffLineKind::Add => (Some(hsla_a(p.ok, 0.1)), hsla(p.ok)),
                                 DiffLineKind::Del => (Some(hsla_a(p.bad, 0.1)), hsla(p.bad)),
                                 DiffLineKind::Hunk | DiffLineKind::Meta => (None, subtle),
                                 DiffLineKind::Context => (None, muted),
                             };
-                            div()
+                            // A click on a line of code opens a remark for the agent under it.
+                            let code = matches!(kind, DiffLineKind::Add | DiffLineKind::Del | DiffLineKind::Context);
+                            let row = div()
+                                .id(("diff-line", i))
                                 .px_3()
                                 .whitespace_nowrap()
                                 .text_color(color)
                                 .when_some(bg, |d, bg| d.bg(bg))
+                                .when(code, |d| {
+                                    d.cursor_pointer()
+                                        .hover(|s| s.bg(hsla(p.hover)))
+                                        .on_click(cx.listener(move |this, _, window, cx| this.start_comment(i, window, cx)))
+                                })
                                 .child(if text.is_empty() { SharedString::from(" ") } else { text.clone() })
+                                .into_any_element();
+                            let here = |c: &&Comment| c.index == i && Some(&c.path) == self.selected.as_ref();
+                            let remarks = self.comments.iter().enumerate().filter(|(_, c)| here(c)).map(|(n, c)| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .mx_3()
+                                    .my_1()
+                                    .rounded(ui(6.0))
+                                    .border_l_2()
+                                    .border_color(hsla(p.accent))
+                                    .bg(hsla(p.raised))
+                                    .px_2()
+                                    .py_1()
+                                    .font_family(FONT_SANS)
+                                    .text_color(fg)
+                                    .whitespace_normal()
+                                    .child(div().min_w_0().flex_1().child(c.text.clone()))
+                                    .child(
+                                        Button::new(("git-remark-remove", n))
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::X)
+                                            .tooltip("Remove this remark")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if n < this.comments.len() {
+                                                    this.comments.remove(n);
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .into_any_element()
+                            });
+                            let field = (self.commenting == Some(i)).then(|| {
+                                div().mx_3().my_1().font_family(FONT_SANS).child(Input::new(&self.comment)).into_any_element()
+                            });
+                            std::iter::once(row).chain(remarks).chain(field).collect::<Vec<_>>()
                         }))
                         .when(left_over > 0, |d| {
                             d.child(
@@ -1006,7 +1175,14 @@ impl Render for GitPanel {
             .child(branch_row)
             .children(notice)
             .children(pending)
-            .child(div().flex().min_h_0().flex_1().child(left).child(right));
+            .child(
+                div()
+                    .flex()
+                    .min_h_0()
+                    .flex_1()
+                    .child(left)
+                    .child(div().flex().flex_col().min_w_0().flex_1().children(remarks_bar).child(right)),
+            );
 
         deferred(
             anchored().position(point(px(0.0), px(0.0))).child(
@@ -1020,7 +1196,8 @@ impl Render for GitPanel {
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                         if event.keystroke.key == "escape" {
                             cx.stop_propagation();
-                            if this.pending.take().is_none() {
+                            // Esc backs out of the innermost thing: a remark, a confirmation, the panel.
+                            if this.commenting.take().is_none() && this.pending.take().is_none() {
                                 this.close(cx);
                             }
                             cx.notify();

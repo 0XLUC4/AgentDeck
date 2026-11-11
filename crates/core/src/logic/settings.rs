@@ -92,6 +92,16 @@ pub struct Appearance {
     pub background: String,
 }
 
+/// Phone page on the local network (`core::remote`): off until the user turns it on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RemoteSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// Secret of the page's link; made when the access is first turned on.
+    pub token: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -120,6 +130,8 @@ pub struct Settings {
     pub budget: BudgetSettings,
     /// Webhook (ntfy topic URL or similar) also receiving the notifications; "" = off.
     pub phone_url: String,
+    #[serde(default)]
+    pub remote: RemoteSettings,
     pub appearance: Appearance,
     /// Interface zoom in percent (whole UI scale, not the terminals).
     #[serde(default = "default_ui_zoom")]
@@ -176,6 +188,7 @@ impl Default for Settings {
                 interrupt: false,
             },
             phone_url: String::new(),
+            remote: RemoteSettings::default(),
             appearance: Appearance {
                 theme: ThemeMode::Dark,
                 accent: String::new(),
@@ -300,6 +313,7 @@ pub fn merge_settings(raw: &Value) -> Settings {
             interrupt: boolean(&b["interrupt"], d.budget.interrupt),
         },
         phone_url: raw["phoneUrl"].as_str().unwrap_or("").trim().to_owned(),
+        remote: serde_json::from_value(raw["remote"].clone()).unwrap_or_default(),
         appearance: Appearance {
             theme: serde_json::from_value(ap["theme"].clone()).unwrap_or(d.appearance.theme),
             accent: hex_color(&ap["accent"]),
