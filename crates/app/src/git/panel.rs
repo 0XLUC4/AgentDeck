@@ -1081,7 +1081,7 @@ impl Render for GitPanel {
                         .font_family(FONT_MONO)
                         .text_xs()
                         .line_height(ui(20.0))
-                        .children(lines.iter().take(self.shown).enumerate().flat_map(|(i, (kind, text, _))| {
+                        .children(lines.iter().take(self.shown).enumerate().flat_map(|(i, (kind, text, number))| {
                             let (bg, color) = match kind {
                                 DiffLineKind::Add => (Some(hsla_a(p.ok, 0.1)), hsla(p.ok)),
                                 DiffLineKind::Del => (Some(hsla_a(p.bad, 0.1)), hsla(p.bad)),
@@ -1092,7 +1092,8 @@ impl Render for GitPanel {
                             let code = matches!(kind, DiffLineKind::Add | DiffLineKind::Del | DiffLineKind::Context);
                             let row = div()
                                 .id(("diff-line", i))
-                                .px_3()
+                                .flex()
+                                .pr_3()
                                 .whitespace_nowrap()
                                 .text_color(color)
                                 .when_some(bg, |d, bg| d.bg(bg))
@@ -1101,6 +1102,16 @@ impl Render for GitPanel {
                                         .hover(|s| s.bg(hsla(p.hover)))
                                         .on_click(cx.listener(move |this, _, window, cx| this.start_comment(i, window, cx)))
                                 })
+                                // File line number (the old file's for a deleted line).
+                                .child(
+                                    div()
+                                        .w(ui(48.0))
+                                        .flex_shrink_0()
+                                        .pr_2()
+                                        .text_right()
+                                        .text_color(subtle)
+                                        .child(number.map_or_else(String::new, |n| n.to_string())),
+                                )
                                 .child(if text.is_empty() { SharedString::from(" ") } else { text.clone() })
                                 .into_any_element();
                             let here = |c: &&Comment| c.index == i && Some(&c.path) == self.selected.as_ref();

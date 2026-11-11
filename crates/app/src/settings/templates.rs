@@ -115,7 +115,7 @@ impl SettingsDialog {
         let list: Vec<SessionTemplate> = builtin_templates().into_iter().chain(self.deck.read(cx).templates.clone()).collect();
         let mut rows = vec![
             hint_text(
-                "Save a session from \"New session from template\" (sidebar). Folders are stored relative to the workspace.",
+                "Save a session from \"New session from template\" (sidebar). Folders are stored relative to the project.",
                 &p,
             )
             .pb_2()

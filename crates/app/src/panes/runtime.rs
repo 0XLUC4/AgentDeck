@@ -71,6 +71,8 @@ struct Runtime {
     on_exit: Option<smol::channel::Sender<()>>,
     /// Killed on purpose: its exit event must not close the pane.
     stopped: bool,
+    /// Put to sleep to free memory: the next start picks its conversation up again.
+    asleep: bool,
     restarting: bool,
 }
 
@@ -89,6 +91,8 @@ struct Runtimes {
     /// Last pane that edited each file (normalized path), to spot two agents editing the same file.
     editors: HashMap<String, Editor>,
     rate_limit_retries: HashSet<String>,
+    /// Panes whose plan is unfolded under the header.
+    steps_open: HashSet<String>,
     /// Claude subagents running inside each pane (`agent-subagents`); panes without any have no entry.
     subagents: HashMap<String, Vec<Subagent>>,
     /// Plan of each Claude pane (`agent-steps`); panes without any have no entry.
@@ -99,6 +103,8 @@ struct Runtimes {
     /// The pending deck notify is the 1 s clock repaint: nothing to save.
     clock_repaint: bool,
     last_saved: String,
+    /// Queues as last written to local.json.
+    saved_queues: agentdeck_core::logic::queue::Queues,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -218,6 +224,14 @@ fn schedule_save(cx: &mut App) {
         cx.update(|cx| {
             rts(cx).save_pending = false;
             let Some(deck) = deck(cx) else { return };
+            // Waiting prompts survive a restart; nothing is sent by itself when the app comes back.
+            let queues = deck.read(cx).queues.clone();
+            if queues != rts(cx).saved_queues {
+                if let Err(e) = persist::save_queues(&deck.read(cx).data_dir, &queues) {
+                    eprintln!("queues not saved: {e}");
+                }
+                rts(cx).saved_queues = queues;
+            }
             let snapshot = serde_json::to_string(&persist::snapshot(&deck.read(cx).state, 0)).unwrap_or_default();
             if snapshot == rts(cx).last_saved {
                 return;
@@ -232,6 +246,7 @@ fn schedule_save(cx: &mut App) {
 /// Every second: status from output for panes without hooks.
 fn tick(cx: &mut App) {
     let now = now_ms();
+    auto_sleep(now, cx);
     derive_statuses(now, cx);
     forward_terminal_notices(now, cx);
 }
@@ -349,6 +364,7 @@ pub fn create_pane(spec: PaneSpec, tab_id: &str, adopt: bool, cx: &mut App) {
             last_hook_at: None,
             on_exit: None,
             stopped: false,
+            asleep: false,
             restarting: false,
         },
     );
@@ -432,6 +448,33 @@ struct SpawnJob {
     setup: String,
 }
 
+const PROMPT_FLAG: &str = "--append-system-prompt-file";
+
+/// Claude takes one appended prompt file: when several features bring theirs (the browser, the
+/// orchestrator role), they are joined into one file so none is dropped.
+fn merge_prompt_files(args: &mut Vec<String>, dir: &std::path::Path, pane_id: &str) -> Result<(), String> {
+    let files: Vec<String> = args.windows(2).filter(|pair| pair[0] == PROMPT_FLAG).map(|pair| pair[1].clone()).collect();
+    if files.len() < 2 {
+        return Ok(());
+    }
+    let text: Vec<String> = files.iter().filter_map(|file| std::fs::read_to_string(file).ok()).collect();
+    let merged = dir.join(format!("{pane_id}.md"));
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::write(&merged, text.join("\n\n")).map_err(|e| format!("{}: {e}", merged.display()))?;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut rest = std::mem::take(args).into_iter();
+    while let Some(arg) = rest.next() {
+        if arg == PROMPT_FLAG {
+            rest.next(); // its file
+        } else {
+            kept.push(arg);
+        }
+    }
+    kept.extend([PROMPT_FLAG.to_owned(), merged.to_string_lossy().into_owned()]);
+    *args = kept;
+    Ok(())
+}
+
 /// Blocking: MCP registration (orchestrator) and the PTY spawn.
 fn run_spawn(job: SpawnJob) -> Result<(), String> {
     let state = job.backend.try_state::<AppState>().ok_or("backend not started")?;
@@ -452,6 +495,9 @@ fn run_spawn(job: SpawnJob) -> Result<(), String> {
         args.push(resume);
     }
     args.extend(pane.spec.args.iter().cloned());
+    if let Ok(dir) = job.backend.app_data_dir() {
+        merge_prompt_files(&mut args, &dir.join("prompts"), &pane.id)?;
+    }
     // Over ssh the agent sees nothing of this machine: only its own arguments go.
     if let Some(target) = &pane.ssh {
         args = pane.spec.args.clone();
@@ -477,6 +523,8 @@ fn run_spawn(job: SpawnJob) -> Result<(), String> {
 }
 
 fn spawn(id: &str, cx: &mut App) {
+    // Waking resumes the conversation even when "resume sessions" is off: that is what sleep keeps.
+    let waking = is_asleep(id, cx);
     let Some(deck) = deck(cx) else { return };
     let d = deck.read(cx);
     let Some(pane) = d.state.panes.get(id).cloned() else { return };
@@ -484,7 +532,7 @@ fn spawn(id: &str, cx: &mut App) {
     let base_port = d.settings.base_port;
     let trust = d.settings.trust_agent_folders;
     let setup = d.settings.worktree_setup.clone();
-    let resume = (pane.agent == agentdeck_core::agents::AgentKind::Claude && d.settings.resume_sessions)
+    let resume = (pane.agent == agentdeck_core::agents::AgentKind::Claude && (d.settings.resume_sessions || waking))
         .then(|| pane.resume_id.clone())
         .flatten()
         .filter(|r| valid_resume_id(r));
@@ -500,6 +548,7 @@ fn spawn(id: &str, cx: &mut App) {
     rt.started_at = Some(now_ms());
     rt.resumed_at = None;
     rt.stopped = false;
+    rt.asleep = false;
     rt.port = port;
     let (token, cols, rows) = (rt.token, rt.cols, rt.rows);
     if port != pane.port {
@@ -859,7 +908,9 @@ pub fn send_prompt(id: &str, text: &str, cx: &mut App) {
 pub fn send_input(id: &str, data: &str, cx: &mut App) {
     let Some(p) = pane(id, cx) else { return };
     if p.exited {
-        if data == "r" || data == "R" {
+        if is_asleep(id, cx) {
+            wake_pane(id, cx); // any key wakes a sleeping agent
+        } else if data == "r" || data == "R" {
             restart_pane(id, cx);
         }
         return;
@@ -925,6 +976,76 @@ pub fn focus_pane(id: &str, cx: &mut App) {
         && let Err(e) = pty::set_active_pane(&state, Some(id.to_owned()))
     {
         eprintln!("set_active_pane failed: {e}");
+    }
+}
+
+/// Stops an idle Claude's process to free its memory (the agent and the tool servers it started).
+/// The pane stays, asleep, and wakes on the same conversation. Only Claude can pick a conversation
+/// up again, and only once it has one.
+pub fn sleep_pane(id: &str, cx: &mut App) {
+    let Some(p) = pane(id, cx).filter(|p| !p.exited) else { return };
+    if p.agent != AgentKind::Claude || p.resume_id.is_none() {
+        toast("Only a Claude agent that already has a conversation can sleep.".into(), cx);
+        return;
+    }
+    if let Some(rt) = rt_mut(id, cx) {
+        rt.asleep = true;
+    }
+    stop_pane(id, cx).detach();
+    let now = now_ms();
+    update_pane(id, cx, |p| {
+        p.status = PaneStatus::Idle;
+        p.last_action = Some("Asleep".into());
+        p.task_started_at = None;
+        p.status_since = now;
+    });
+}
+
+pub fn is_asleep(id: &str, cx: &App) -> bool {
+    cx.try_global::<Runtimes>().is_some_and(|r| r.map.get(id).is_some_and(|rt| rt.asleep))
+}
+
+/// Starts a sleeping agent again, on its conversation.
+pub fn wake_pane(id: &str, cx: &mut App) {
+    // Not before its process is gone: the stop is still under way.
+    if !is_asleep(id, cx) || pane(id, cx).is_none_or(|p| !p.exited) {
+        return;
+    }
+    if let Some(rt) = rt_mut(id, cx) {
+        lock(&rt.output).buffer.clear();
+    }
+    update_pane(id, cx, |p| {
+        p.exited = false;
+        p.hooked = false;
+        p.last_action = None;
+        p.generation += 1;
+    });
+    spawn(id, cx);
+}
+
+/// Puts Claude agents to sleep once they sat idle for `settings.sleep_minutes`. Never the pane
+/// being looked at, one with an unread result, queued prompts or running subagents.
+fn auto_sleep(now: i64, cx: &mut App) {
+    let Some(deck) = deck(cx) else { return };
+    let d = deck.read(cx);
+    let limit = i64::from(d.settings.sleep_minutes) * 60_000;
+    if limit == 0 {
+        return;
+    }
+    let idle: Vec<String> = d
+        .state
+        .panes
+        .values()
+        .filter(|p| p.agent == AgentKind::Claude && !p.exited && p.resume_id.is_some())
+        .filter(|p| p.status == PaneStatus::Idle && now - p.status_since >= limit)
+        .filter(|p| d.state.active_pane_id.as_deref() != Some(p.id.as_str()))
+        .filter(|p| d.queues.get(&p.id).is_none_or(|q| q.items.is_empty()))
+        .map(|p| p.id.clone())
+        .collect();
+    for id in idle {
+        if pane_subagents(&id, cx).is_empty() && now - pane_last_output_at(&id, cx) >= limit {
+            sleep_pane(&id, cx);
+        }
     }
 }
 
@@ -1049,6 +1170,19 @@ pub fn pane_subagents(id: &str, cx: &App) -> Vec<Subagent> {
         .unwrap_or_default()
 }
 
+/// The pane's plan is unfolded under its header.
+pub fn steps_open(id: &str, cx: &App) -> bool {
+    cx.try_global::<Runtimes>().is_some_and(|r| r.steps_open.contains(id))
+}
+
+pub fn toggle_steps(id: &str, cx: &mut App) {
+    let r = rts(cx);
+    if !r.steps_open.remove(id) {
+        r.steps_open.insert(id.to_owned());
+    }
+    cx.refresh_windows();
+}
+
 /// Plan of the pane: its task list, else the subagents it launched.
 pub fn pane_steps(id: &str, cx: &App) -> Vec<Step> {
     cx.try_global::<Runtimes>()
@@ -1156,6 +1290,28 @@ pub fn reopen_session(session_id: &str, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn several_prompt_files_become_one() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-prompts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let (a, b) = (file("a.md", "browser"), file("b.md", "role"));
+        let mut args: Vec<String> = vec![PROMPT_FLAG.into(), a, "--model".into(), "x".into(), PROMPT_FLAG.into(), b];
+        merge_prompt_files(&mut args, &dir, "pane").unwrap();
+        assert_eq!(args[..2], ["--model".to_owned(), "x".to_owned()]);
+        assert_eq!(args[2], PROMPT_FLAG);
+        assert_eq!(std::fs::read_to_string(&args[3]).unwrap(), "browser\n\nrole");
+        // One file: left alone.
+        let mut single: Vec<String> = vec![PROMPT_FLAG.into(), args[3].clone()];
+        merge_prompt_files(&mut single, &dir, "pane").unwrap();
+        assert_eq!(single.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn status_from_output() {

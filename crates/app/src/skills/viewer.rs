@@ -46,7 +46,7 @@ pub fn render_image(width: u32, height: u32, bgra: Vec<u8>) -> Option<Arc<Render
 
 impl ModelViewer {
     pub fn new(cwd: String, path: String, ext: String, cx: &mut Context<Self>) -> Self {
-        let loading = if ext == "blend" { "Converting with Blender…" } else { "Loading…" };
+        let loading = if ext == "blend" || ext == "fbx" { "Converting with Blender…" } else { "Loading…" };
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()

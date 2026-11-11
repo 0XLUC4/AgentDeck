@@ -1,5 +1,6 @@
 //! Per-pane prompt queue (`src/store/queue.ts`), code-then-review pairs (`src/store/review.ts`)
-//! and how a prompt is typed into a terminal (`components/Broadcast/send.ts`). In memory only.
+//! and how a prompt is typed into a terminal (`components/Broadcast/send.ts`). The queues are saved
+//! in local.json (`persist::save_queues`); the review pairs live in memory only.
 
 use std::collections::HashMap;
 
@@ -14,13 +15,13 @@ pub const SUBMIT_DELAY_MS: u64 = 120;
 /// Only agents with hooks report "done"; the others never advance a queue.
 pub const QUEUE_AGENTS: [AgentKind; 2] = [AgentKind::Claude, AgentKind::Codex];
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct QueueItem {
     pub id: String,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PaneQueue {
     pub items: Vec<QueueItem>,
     pub paused: bool,
@@ -72,7 +73,7 @@ pub fn move_item<T>(items: &mut Vec<T>, index: usize, delta: isize) {
 }
 
 /// All queues, by pane id.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Queues(pub HashMap<String, PaneQueue>);
 
 impl Queues {

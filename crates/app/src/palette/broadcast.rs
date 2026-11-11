@@ -107,7 +107,7 @@ pub fn agent_from_issue(deck: &Entity<Deck>, cx: &mut App) {
     let defaults = d.settings.agent(agent);
     let font_size = d.settings.font_size;
     let Some(tab_id) = d.state.active_tab().map(|t| t.id.clone()).filter(|_| !cwd.is_empty()) else {
-        deck.update(cx, |d, cx| d.toast("Link a workspace first: the agent works in its folder.", cx));
+        deck.update(cx, |d, cx| d.toast("Link a project first: the agent works in its folder.", cx));
         return;
     };
     let deck = deck.clone();
@@ -250,7 +250,7 @@ impl Broadcast {
         let args = split_args(&d.settings.agent(self.race_agent).args);
         let font_size = d.settings.font_size;
         if cwd.is_empty() {
-            deck.update(cx, |d, cx| d.toast("Race needs a workspace folder: link one first.", cx));
+            deck.update(cx, |d, cx| d.toast("Race needs a project folder: link one first.", cx));
             return;
         }
         let (agent, count) = (self.race_agent, self.race_count);
@@ -602,7 +602,7 @@ impl Render for Broadcast {
                 .py_4()
                 .text_center()
                 .text_color(hsla(p.muted))
-                .child("No running agents in this workspace.")
+                .child("No running agents in this project.")
                 .into_any_element()
         } else {
             div()

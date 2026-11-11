@@ -38,7 +38,7 @@ pub fn create_orchestrator(deck: &Entity<Deck>, cx: &mut App) {
     let path = &d.state.active_workspace().path;
     let cwd = if path.is_empty() { d.state.last_cwd.clone() } else { path.clone() };
     let Some(tab_id) = d.state.active_tab().map(|t| t.id.clone()).filter(|_| !cwd.is_empty()) else {
-        deck.update(cx, |d, cx| d.toast("Link a workspace first: the orchestrator works in its folder.", cx));
+        deck.update(cx, |d, cx| d.toast("Link a project first: the orchestrator works in its folder.", cx));
         return;
     };
     let mut spec = PaneSpec::new(AgentKind::Claude, ORCHESTRATOR_TITLE, cwd);

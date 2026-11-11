@@ -1,4 +1,4 @@
-//! "Link workspace": pick a project from an open app, a Git repository or any folder, or clone one
+//! "Link project": pick a project from an open app, a Git repository or any folder, or clone one
 //! from GitHub, then name it. Original: src/components/LinkWorkspace/LinkWorkspaceDialog.tsx.
 
 use agentdeck_core::git;
@@ -825,7 +825,7 @@ impl Render for LinkWorkspace {
                         div()
                             .text_size(ui(15.0))
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Link workspace"),
+                            .child("Link project"),
                     )
                     .child(
                         Button::new("link-close")
@@ -869,7 +869,7 @@ impl Render for LinkWorkspace {
                     .child(
                         Button::new("link-submit")
                             .primary()
-                            .label("Link workspace")
+                            .label("Link project")
                             .disabled(!has_choice)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if this.choice.is_some() {

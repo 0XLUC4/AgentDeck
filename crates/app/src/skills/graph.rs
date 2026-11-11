@@ -207,7 +207,7 @@ impl GraphDialog {
             sim: None,
             selected: None,
             text: String::new(),
-            list: false,
+            list: true,
             bounds: Rc::new(Cell::new(Bounds::default())),
             ticking: None,
         }
@@ -395,7 +395,8 @@ impl GraphDialog {
 
     fn render_side(&self, cx: &mut Context<Self>) -> Div {
         let p = palette(cx);
-        let side = div().w(relative(0.42)).flex_shrink_0().flex().flex_col().gap_2().min_h_0();
+        let side = div().flex().flex_col().gap_2().min_h_0().min_w_0();
+        let side = if self.list { side.flex_1() } else { side.w(relative(0.42)).flex_shrink_0() };
         let Some(selected) = self.selected.clone() else {
             return side.child(div().text_color(hsla(p.subtle)).child(
                 "Click a note to read it. Drag the background to pan, scroll to zoom, drag a note to move it.",
@@ -475,6 +476,75 @@ impl GraphDialog {
     }
 }
 
+impl GraphDialog {
+    /// The graph is asked for, or a note is picked: the page takes the pane area.
+    pub(super) fn has_main(&self) -> bool {
+        !self.list || self.selected.is_some()
+    }
+
+    /// The side column: every note of the project, and the switch to the graph.
+    pub(super) fn side(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = palette(cx);
+        let this = cx.entity().downgrade();
+        let views = segmented(
+            "notes-view-side",
+            &[(true, "List"), (false, "Graph")],
+            self.list,
+            move |list, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.list = list;
+                    cx.notify();
+                });
+            },
+            cx,
+        );
+        let notes = match (&self.error, &self.graph) {
+            (Some(e), _) => div().p_2().text_xs().text_color(hsla(p.bad)).child(e.clone()).into_any_element(),
+            (None, None) => div().p_2().text_xs().text_color(hsla(p.subtle)).child("Reading notes\u{2026}").into_any_element(),
+            (None, Some(graph)) if graph.nodes.is_empty() => {
+                div().p_2().text_xs().text_color(hsla(p.subtle)).child("No Markdown note in this folder.").into_any_element()
+            }
+            _ => self.render_list(cx),
+        };
+        let hover = hsla(p.hover);
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .gap_2()
+            .w(ui(280.0))
+            .min_h_0()
+            .p_2()
+            .border_r_1()
+            .border_color(hsla(p.line))
+            .bg(hsla(p.panel))
+            .text_size(ui(13.0))
+            .text_color(hsla(p.fg))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pl_1()
+                    .child(div().text_size(ui(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(hsla(p.muted)).child("Notes"))
+                    .child(
+                        div()
+                            .id("notes-side-close")
+                            .p_1()
+                            .rounded(ui(6.0))
+                            .text_color(hsla(p.muted))
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover))
+                            .child(gpui_kit::assets::IconName::X)
+                            .on_click(|_, window, cx| super::close(window, cx)),
+                    ),
+            )
+            .child(views)
+            .child(div().flex_1().min_h_0().child(notes))
+            .into_any_element()
+    }
+}
+
 impl Render for GraphDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
@@ -498,7 +568,7 @@ impl Render for GraphDialog {
         let this = cx.entity().downgrade();
         let views = segmented(
             "notes-view",
-            &[(false, "Graph"), (true, "List")],
+            &[(true, "List"), (false, "Graph")],
             self.list,
             move |list, _, cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -510,7 +580,7 @@ impl Render for GraphDialog {
         )
         .into_any_element();
         let body = if workspace.path.is_empty() {
-            div().text_color(hsla(p.muted)).child("Link a folder to this workspace to map its notes.")
+            div().text_color(hsla(p.muted)).child("Link a folder to this project to map its notes.")
         } else {
             let empty = self.graph.as_ref().is_some_and(|g| g.nodes.is_empty());
             let message = match (&self.error, &self.graph) {
@@ -526,6 +596,8 @@ impl Render for GraphDialog {
                 .child(
                     div()
                         .relative()
+                        // The list is a side column; the graph takes the room it needs.
+                        .when(self.list, |d| d.hidden())
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
@@ -533,7 +605,7 @@ impl Render for GraphDialog {
                         .border_1()
                         .border_color(hsla(p.line))
                         .bg(hsla(p.base))
-                        .when(!empty, |d| d.child(if self.list { self.render_list(cx) } else { self.render_canvas(cx) }))
+                        .when(!empty && !self.list, |d| d.child(self.render_canvas(cx)))
                         .when(!message.is_empty(), |d| {
                             d.child(
                                 div()

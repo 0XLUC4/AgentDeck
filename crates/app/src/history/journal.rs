@@ -113,7 +113,7 @@ pub fn group_journal(mut entries: Vec<JournalEntry>, commits: Vec<WorkspaceCommi
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut group = |groups: &mut Vec<JournalGroup>, path: &str, name: &str| -> usize {
         *index.entry(norm(path)).or_insert_with(|| {
-            let name = [name, last_segment(path)].into_iter().find(|n| !n.is_empty()).unwrap_or("No workspace");
+            let name = [name, last_segment(path)].into_iter().find(|n| !n.is_empty()).unwrap_or("No project");
             groups.push(JournalGroup { key: path.to_owned(), name: name.to_owned(), agents: Vec::new(), commits: Vec::new() });
             groups.len() - 1
         })

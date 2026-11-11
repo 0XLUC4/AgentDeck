@@ -133,6 +133,16 @@ async fn run(deck: &Entity<Deck>, op: &str, args: &Value, cx: &mut AsyncApp) -> 
             }
             Ok(json!({ "paneId": id }))
         }
+        "toggle" => {
+            let view = args["view"].as_str().unwrap_or("");
+            cx.update(|cx| match view {
+                "wall" => Ok(super::toggle_wall(cx)),
+                "activity" => Ok(cx.dispatch_action(&crate::layout::ToggleActivity)),
+                "projects" => Ok(cx.dispatch_action(&crate::layout::ToggleSidebar)),
+                other => Err(format!("unknown view \"{other}\": wall, activity or projects")),
+            })?;
+            Ok(json!({ "ok": true }))
+        }
         other => Err(format!("unknown command: {other}")),
     }
 }

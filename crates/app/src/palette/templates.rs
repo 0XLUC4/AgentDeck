@@ -94,7 +94,7 @@ pub fn new_session_from_template(deck: &Entity<Deck>, template_id: &str, cx: &mu
         let template = all_templates(&d.templates).into_iter().find(|t| t.id == template_id)?;
         let workspace = d.state.active_workspace().clone();
         if workspace.path.is_empty() && d.state.last_cwd.is_empty() {
-            d.toast("No working folder: link a workspace or add an agent first.", cx);
+            d.toast("No working folder: link a project or add an agent first.", cx);
             return None;
         }
         let (layout, specs) = instantiate(&template, &workspace.path, &d.state.last_cwd, &d.settings);

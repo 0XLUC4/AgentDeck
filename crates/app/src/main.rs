@@ -6,6 +6,7 @@
 // The shell is being filled in module by module; stubs are not all wired yet.
 #![allow(dead_code)]
 
+mod automations;
 mod browser;
 mod git;
 mod history;
@@ -54,6 +55,7 @@ fn main() {
             theme::set_zoom(deck.read(cx).settings.ui_zoom, cx);
             layout::init(cx);
             for init in [
+                automations::init,
                 browser::init,
                 git::init,
                 history::init,

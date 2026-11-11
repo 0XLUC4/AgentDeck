@@ -21,7 +21,7 @@ use gpui_kit::*;
 use super::DeckView;
 use super::chrome::icon_button;
 use crate::panes::{PermissionCard, agent_logo, runtime, status_color};
-use crate::theme::{hsla, palette, ui};
+use crate::theme::{hsla, hsla_a, palette, ui};
 
 const LONG_PROMPT: usize = 400;
 const COPIED_MS: i64 = 1500;
@@ -45,6 +45,11 @@ fn activity_label(key: ActivityKey) -> &'static str {
         ActivityKey::Status(PaneStatus::Idle) => "Idle",
         ActivityKey::Exited => "Stopped",
     }
+}
+
+/// Agents that wait on the user: a question, an error, or a pending permission card.
+fn needs_user(key: ActivityKey, has_request: bool) -> bool {
+    has_request || matches!(key, ActivityKey::Status(PaneStatus::Waiting | PaneStatus::Error))
 }
 
 fn pane_name(pane: &Pane) -> String {
@@ -118,8 +123,18 @@ impl DeckView {
                 note("No agents running. Add one with the + in the session bar, or Ctrl+K.", &p).px_3().py_4(),
             );
         }
+        // The to-do list first, then the other states in ACTIVITY_ORDER. An agent is listed once.
+        let waits = |pane: &Pane| needs_user(activity_key(pane), pending.iter().any(|r| r.pane_id == pane.id));
+        let mut sections = vec![(
+            "Needs you",
+            true,
+            groups.iter().flat_map(|(_, items)| items.iter().copied()).filter(|(pane, ..)| waits(pane)).collect::<Vec<_>>(),
+        )];
         for key in ACTIVITY_ORDER {
             let Some((_, items)) = groups.iter().find(|(k, _)| *k == key) else { continue };
+            sections.push((activity_label(key), false, items.iter().copied().filter(|(pane, ..)| !waits(pane)).collect()));
+        }
+        for (title, urgent, items) in sections {
             if items.is_empty() {
                 continue;
             }
@@ -133,15 +148,48 @@ impl DeckView {
                     .pt_3()
                     .pb_1()
                     .text_size(ui(12.0))
-                    .text_color(hsla(p.subtle))
-                    .child(activity_label(key))
-                    .child(div().ml_auto().child(items.len().to_string())),
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(hsla(if urgent { p.fg } else { p.muted }))
+                    .child(title)
+                    .child(
+                        div()
+                            .ml_auto()
+                            .text_color(hsla(if urgent { p.wait } else { p.subtle }))
+                            .child(items.len().to_string()),
+                    ),
             );
             for (pane, tab, workspace) in items {
                 let active = deck.state.active_pane_id.as_deref() == Some(pane.id.as_str());
                 let key = activity_key(pane);
                 let name = pane_name(pane);
+                let task = pane.topic.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| name.clone());
+                let (status_word, status_tint) = match key {
+                    ActivityKey::Exited => (activity_label(key), p.subtle),
+                    ActivityKey::Status(status) => (activity_label(key), status_color(status, &p)),
+                };
+                // Time in the current state; a working agent shows how long its task has run.
+                let since = match key {
+                    ActivityKey::Status(PaneStatus::Working) => pane.task_started_at.unwrap_or(pane.status_since),
+                    _ => pane.status_since,
+                };
+                let mut meta = format!("{} · {} › {}", format_since(now - since), workspace.name, tab.name);
+                if task != name {
+                    meta = format!("{name} · {meta}");
+                }
                 let requests: Vec<&PermissionRequest> = pending.iter().filter(|r| r.pane_id == pane.id).collect();
+                // What the user is expected to do, in words and in the color of the state.
+                let expected: Option<(String, u32)> = match key {
+                    _ if !requests.is_empty() => Some(("Permission requested".to_owned(), p.wait)),
+                    ActivityKey::Status(PaneStatus::Waiting) => Some(("Waiting for your reply".to_owned(), p.wait)),
+                    ActivityKey::Status(PaneStatus::Error) => {
+                        let log = deck.tasks.get(&pane.id);
+                        let last = log.and_then(|l| l.current.as_ref().or(l.history.first()));
+                        let text = last.filter(|t| t.status == PaneStatus::Error).and_then(|t| t.summary.clone());
+                        Some((text.filter(|t| !t.is_empty()).unwrap_or_else(|| "Stopped on an error".to_owned()), p.bad))
+                    }
+                    ActivityKey::Status(PaneStatus::Done) => Some(("Finished: review the result".to_owned(), p.ok)),
+                    _ => None,
+                };
                 let id = pane.id.clone();
                 let dot = match key {
                     ActivityKey::Exited => div()
@@ -162,7 +210,7 @@ impl DeckView {
                     .min_w_0()
                     .gap(ui(2.0))
                     .py_2()
-                    .pl_3()
+                    .pl(ui(10.0))
                     .pr_2()
                     .cursor_pointer()
                     .child(
@@ -179,24 +227,16 @@ impl DeckView {
                                     .truncate()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(hsla(if active { p.fg } else { p.muted }))
-                                    .child(name.clone()),
+                                    .child(task),
                             )
                             .child(
                                 div()
                                     .flex_shrink_0()
                                     .text_size(ui(12.0))
-                                    .text_color(hsla(p.subtle))
-                                    .child(format_since(now - pane.status_since)),
+                                    .text_color(hsla(status_tint))
+                                    .child(status_word),
                             )
                             .child(dot),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .pl(ui(22.0))
-                            .text_size(ui(12.0))
-                            .text_color(hsla(p.subtle))
-                            .child(format!("{} › {}", workspace.name, tab.name)),
                     )
                     .when_some(pane.last_action.clone(), |el, action| {
                         let hint: SharedString = action.clone().into();
@@ -208,6 +248,21 @@ impl DeckView {
                                 .text_size(ui(12.0))
                                 .text_color(hsla(p.muted))
                                 .child(action)
+                                .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx)),
+                        )
+                    })
+                    .child(div().truncate().pl(ui(22.0)).text_size(ui(11.0)).text_color(hsla(p.subtle)).child(meta))
+                    .when_some(expected, |el, (text, tint)| {
+                        let hint: SharedString = text.clone().into();
+                        el.child(
+                            div()
+                                .id(ElementId::Name(format!("activity-expected-{}", pane.id).into()))
+                                .truncate()
+                                .pl(ui(22.0))
+                                .text_size(ui(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(hsla(tint))
+                                .child(text)
                                 .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx)),
                         )
                     })
@@ -294,7 +349,16 @@ impl DeckView {
                         .border_color(hsla(p.line))
                         .when(active, |el| el.bg(hsla(p.raised)))
                         .when(!active, |el| el.hover(move |s| s.bg(hover)))
-                        .child(div().flex().items_start().child(main).children(side))
+                        // Selection: accent bar, always reserved so cards do not shift.
+                        .child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .border_l_2()
+                                .border_color(hsla_a(p.accent, if active { 1.0 } else { 0.0 }))
+                                .child(main)
+                                .children(side),
+                        )
                         .when(!requests.is_empty(), |el| {
                             el.child(
                                 div()
@@ -314,7 +378,7 @@ impl DeckView {
             .flex_col()
             .flex_shrink_0()
             .w(ui(260.0))
-            .border_l_1()
+            .border_r_1()
             .border_color(hsla(p.line))
             .bg(hsla(p.panel))
             .child(
@@ -636,5 +700,14 @@ mod tests {
         assert_eq!(action_icon("Edit src/a.rs"), IconName::FilePen);
         assert_eq!(action_icon("Grep foo"), IconName::Search);
         assert_eq!(action_icon("Editor"), IconName::Dot);
+    }
+
+    #[test]
+    fn needs_user_groups() {
+        assert!(needs_user(ActivityKey::Status(PaneStatus::Waiting), false));
+        assert!(needs_user(ActivityKey::Status(PaneStatus::Error), false));
+        assert!(needs_user(ActivityKey::Status(PaneStatus::Working), true));
+        assert!(!needs_user(ActivityKey::Status(PaneStatus::Done), false));
+        assert!(!needs_user(ActivityKey::Exited, false));
     }
 }

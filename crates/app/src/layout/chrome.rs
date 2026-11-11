@@ -5,7 +5,9 @@
 use agentdeck_core::agents::AgentKind;
 use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::{ActivityKey, activity_key, can_archive, session_status};
-use agentdeck_core::logic::text::{AGENT_KINDS, agent_name, now_ms, split_args};
+use agentdeck_core::logic::text::{
+    AGENT_KINDS, agent_name, format_cost, format_since, format_tokens, now_ms, split_args,
+};
 use agentdeck_core::logic::theme::Palette;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::TitleBar;
@@ -16,7 +18,7 @@ use gpui_kit::*;
 
 use super::DeckView;
 use crate::panes::{agent_logo, last_agent, runtime, spawn_agent, status_color, status_label};
-use crate::theme::{hsla, palette, ui};
+use crate::theme::{hsla, hsla_a, palette, ui};
 
 /// Amber count of agents waiting: a true circle for one digit, a pill for more, number centered.
 fn waiting_badge(count: usize, p: &Palette) -> Div {
@@ -118,6 +120,11 @@ fn activity_label(key: ActivityKey) -> &'static str {
     }
 }
 
+/// Agents still running: every pane whose process has not exited.
+fn count_live(keys: impl Iterator<Item = ActivityKey>) -> usize {
+    keys.filter(|key| *key != ActivityKey::Exited).count()
+}
+
 impl DeckView {
     pub(super) fn title_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
@@ -130,11 +137,6 @@ impl DeckView {
             .values()
             .filter(|pane| activity_key(pane) == ActivityKey::Status(PaneStatus::Waiting))
             .count();
-        let failed = deck
-            .state
-            .panes
-            .values()
-            .any(|pane| activity_key(pane) == ActivityKey::Status(PaneStatus::Error));
         // Taskbar hint: "AgentDeck (2)" while agents wait for an answer.
         let title = if waiting > 0 { format!("AgentDeck ({waiting})") } else { "AgentDeck".into() };
         if title != self.window_title {
@@ -142,55 +144,16 @@ impl DeckView {
             self.window_title = title;
         }
 
-        let sidebar_hint = if self.sidebar_open { "Hide workspaces" } else { "Show workspaces" };
-        let activity_hint = format!(
-            "{} activity of all agents (Ctrl+Shift+A). Next waiting agent: Ctrl+Shift+J",
-            if self.activity_open { "Hide" } else { "Show" }
-        );
         let chevron = || div().text_size(ui(14.0)).text_color(hsla(p.subtle)).child(IconName::ChevronRight);
         let separator = || div().w(px(1.0)).h(ui(20.0)).bg(hsla(p.line));
-        let activity = div()
-            .relative()
-            .child(
-                icon_button("tb-activity", IconName::Activity, activity_hint, &p)
-                    .when(self.activity_open, |el| el.bg(hsla(p.raised)).text_color(hsla(p.fg)))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.activity_open = !this.activity_open;
-                        cx.notify();
-                    })),
-            )
-            .when(waiting > 0, |el| {
-                el.child(waiting_badge(waiting, &p).absolute().top(ui(-2.0)).right(ui(-2.0)))
-            })
-            .when(failed, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .bottom(ui(-2.0))
-                        .right(ui(-2.0))
-                        .size(ui(8.0))
-                        .rounded_full()
-                        .bg(hsla(p.bad)),
-                )
-            });
-
         let content = div()
             .flex()
             .items_center()
             .size_full()
             .text_size(ui(13.0))
             .child(
-                icon_button("tb-sidebar", IconName::PanelLeft, sidebar_hint, &p)
-                    .occlude()
-                    .when(self.sidebar_open, |el| el.text_color(hsla(p.fg)))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.sidebar_open = !this.sidebar_open;
-                        cx.notify();
-                    })),
-            )
-            .child(
                 div()
-                    .ml_2()
+                    .ml_3()
                     .flex()
                     .min_w_0()
                     .items_center()
@@ -258,28 +221,6 @@ impl DeckView {
                     .gap(ui(2.0))
                     .px_2()
                     .occlude()
-                    .child(crate::orchestrator::wall_toggle_button(cx))
-                    .child(
-                        icon_button("tb-usage", IconName::Gauge, "Usage and cost of the agents", &p).on_click(
-                            |_, window, cx| window.dispatch_action(Box::new(crate::history::OpenUsage), cx),
-                        ),
-                    )
-                    .child(
-                        icon_button("tb-history", IconName::Clock, "Search history (Ctrl+Shift+F)", &p).on_click(
-                            |_, window, cx| window.dispatch_action(Box::new(crate::history::SearchHistory), cx),
-                        ),
-                    )
-                    .child(
-                        icon_button("tb-journal", IconName::BookOpenText, "Journal of the day", &p).on_click(
-                            |_, window, cx| window.dispatch_action(Box::new(crate::history::OpenJournal), cx),
-                        ),
-                    )
-                    .child(activity)
-                    .child(
-                        icon_button("tb-settings", IconName::Settings, "Settings (Ctrl+,)", &p).on_click(
-                            |_, window, cx| window.dispatch_action(Box::new(crate::settings::OpenSettings), cx),
-                        ),
-                    )
                     .child(self.update_button.clone()),
             );
         TitleBar::new()
@@ -287,6 +228,119 @@ impl DeckView {
             .border_b_1()
             .border_color(hsla(p.line))
             .child(content)
+            .into_any_element()
+    }
+
+    /// Navigation rail: one narrow column of tools. Projects and Activity open in the panel next
+    /// to it, one at a time; the others open their view, page or dialog.
+    pub(super) fn rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = palette(cx);
+        let deck = self.deck.read(cx);
+        let waiting = deck
+            .state
+            .panes
+            .values()
+            .filter(|pane| activity_key(pane) == ActivityKey::Status(PaneStatus::Waiting))
+            .count();
+        let failed = deck
+            .state
+            .panes
+            .values()
+            .any(|pane| activity_key(pane) == ActivityKey::Status(PaneStatus::Error));
+        let linked = !deck.state.active_workspace().path.is_empty();
+        let has_pane = deck.state.active_pane_id.is_some();
+        let wall = crate::orchestrator::wall_open(cx);
+        // The open page (notes, assets, files), which hides the side panel.
+        let kind = crate::skills::page_kind(cx);
+        // The tool whose panel or view is showing.
+        let on = |el: Stateful<Div>, pressed: bool| el.when(pressed, |el| el.bg(hsla(p.raised)).text_color(hsla(p.fg)));
+        // A tool that has nothing to open right now.
+        let off = |el: Stateful<Div>, unavailable: bool| el.when(unavailable, |el| el.opacity(0.4));
+        let separator = || div().my_1().w(ui(20.0)).h(px(1.0)).flex_shrink_0().bg(hsla(p.line));
+
+        let projects = on(icon_button("rail-projects", IconName::PanelLeft, "Projects and sessions", &p), self.sidebar_open && kind.is_none())
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_sidebar(cx)));
+        let activity_hint = "Activity of all agents (Ctrl+Shift+A). Next waiting agent: Ctrl+Shift+J";
+        let activity = div()
+            .relative()
+            .child(
+                on(icon_button("rail-activity", IconName::Activity, activity_hint, &p), self.activity_open && kind.is_none())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_activity(cx))),
+            )
+            .when(waiting > 0, |el| el.child(waiting_badge(waiting, &p).absolute().top(ui(-2.0)).right(ui(-2.0))))
+            .when(failed, |el| {
+                el.child(div().absolute().bottom(ui(-2.0)).right(ui(-2.0)).size(ui(8.0)).rounded_full().bg(hsla(p.bad)))
+            });
+        let wall_hint = if wall { "Exit wall (Ctrl+Shift+W)" } else { "Wall: every agent at a glance (Ctrl+Shift+W)" };
+        let wall = on(icon_button("rail-wall", IconName::LayoutGrid, wall_hint, &p), wall)
+            .on_click(|_, _, cx| crate::orchestrator::toggle_wall(cx));
+
+        let git = off(icon_button("rail-git", IconName::GitBranch, "Git of the active agent: changes, commit, pull request", &p), !has_pane)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                if let Some(pane_id) = this.deck.read(cx).state.active_pane_id.clone() {
+                    this.open_git(&pane_id, window, cx);
+                }
+            }));
+        // Notes and assets belong to the project's folder.
+        let project_tool = |open: fn(Entity<crate::state::Deck>, &str, &mut Window, &mut App)| {
+            move |this: &mut Self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>| {
+                let workspace = this.deck.read(cx).state.active_workspace();
+                if workspace.path.is_empty() {
+                    this.deck.update(cx, |d, cx| d.toast("Link a folder to this project first.", cx));
+                    return;
+                }
+                let id = workspace.id.clone();
+                open(this.deck.clone(), &id, window, cx);
+            }
+        };
+        let notes = on(off(icon_button("rail-notes", IconName::Network, "Notes of this project: list, graph and reader", &p), !linked), kind == Some("notes"))
+            .on_click(cx.listener(project_tool(crate::skills::open_graph)));
+        let assets = on(off(icon_button("rail-assets", IconName::Box, "Assets of this project: images and 3D models", &p), !linked), kind == Some("assets"))
+            .on_click(cx.listener(project_tool(crate::skills::open_assets)));
+        let files = on(off(icon_button("rail-files", IconName::Folder, "Files of this project: browse, preview, hand one to an agent", &p), !linked), kind == Some("files"))
+            .on_click(cx.listener(project_tool(crate::skills::open_files)));
+        let orchestrator_hint = "Orchestrator: an agent that starts workers, sends them tasks and gathers their results";
+        let orchestrator = icon_button("rail-orchestrator", IconName::Crown, orchestrator_hint, &p)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| crate::orchestrator::create_orchestrator(&this.deck, cx)));
+
+        let usage = icon_button("rail-usage", IconName::Gauge, "Usage and cost of the agents", &p)
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::history::OpenUsage), cx));
+        let history = icon_button("rail-history", IconName::Clock, "Search history (Ctrl+Shift+F)", &p)
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::history::SearchHistory), cx));
+        let journal = icon_button("rail-journal", IconName::BookOpenText, "Journal of the day", &p)
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::history::OpenJournal), cx));
+        let automations = on(icon_button("rail-automations", IconName::RotateCcwClock, "Automations: prompts that run on a schedule", &p), kind == Some("automations"))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| crate::automations::open(this.deck.clone(), window, cx)));
+        let settings = icon_button("rail-settings", IconName::Settings, "Settings (Ctrl+,)", &p)
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::settings::OpenSettings), cx));
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .items_center()
+            .gap(ui(2.0))
+            .w(ui(44.0))
+            .py_2()
+            .border_r_1()
+            .border_color(hsla(p.line))
+            .bg(hsla(p.base))
+            .child(projects)
+            .child(activity)
+            .child(wall)
+            .child(orchestrator)
+            .child(separator())
+            .child(git)
+            .child(files)
+            .child(notes)
+            .child(assets)
+            .child(separator())
+            .child(usage)
+            .child(history)
+            .child(journal)
+            .child(automations)
+            .child(div().flex_1())
+            .child(settings)
             .into_any_element()
     }
 
@@ -417,15 +471,28 @@ impl DeckView {
             .bg(hsla(p.panel))
             .child(list)
             .child(
-                icon_button("new-session", IconName::Plus, "New session", &p).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
+                div()
+                    .id("new-session")
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(ui(6.0))
+                    .h(ui(28.0))
+                    .px_2()
+                    .rounded(ui(6.0))
+                    .text_color(hsla(p.muted))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
+                    .child(div().text_size(ui(15.0)).child(IconName::Plus))
+                    .child(div().whitespace_nowrap().child("New session"))
+                    .tooltip(|window, cx| Tooltip::new("New session in this project").build(window, cx))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.deck.update(cx, |deck, cx| {
                             deck.state.add_tab(None);
                             deck.save(cx);
                             cx.notify();
                         });
-                    },
-                )),
+                    })),
             )
             .child(div().ml_auto().child(self.add_agent_button("tabbar", cx)))
             .into_any_element()
@@ -693,7 +760,7 @@ impl DeckView {
         let folder = if path.is_empty() { String::new() } else { format!(" in {path}") };
         let sentence = format!("{lead}{folder}. Each agent opens in its own terminal; drag the headers to rearrange.");
         let folder_style = HighlightStyle { color: Some(hsla(p.fg)), ..Default::default() };
-        let text = div().text_color(hsla(p.muted)).child(
+        let text = div().text_size(ui(12.0)).text_color(hsla(p.subtle)).child(
             StyledText::new(SharedString::from(sentence))
                 .with_highlights([(lead.len()..lead.len() + folder.len(), folder_style)]),
         );
@@ -736,21 +803,28 @@ impl DeckView {
                     .child(logos)
                     .child(
                         div()
+                            .text_size(ui(18.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hsla(p.fg))
+                            .child("Start an agent"),
+                    )
+                    .child(self.add_agent_button("empty", cx))
+                    .child(text)
+                    .child(div().w_full().h(px(1.0)).bg(hsla(p.line)))
+                    .child(
+                        div()
                             .flex()
                             .flex_col()
                             .items_center()
-                            .gap(ui(6.0))
                             .child(
                                 div()
-                                    .text_size(ui(15.0))
+                                    .text_size(ui(12.0))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(hsla(p.fg))
-                                    .child("Empty session"),
+                                    .text_color(hsla(p.muted))
+                                    .child("Shortcuts"),
                             )
-                            .child(text),
-                    )
-                    .child(self.add_agent_button("empty", cx))
-                    .child(tips),
+                            .child(tips),
+                    ),
             )
             .into_any_element()
     }
@@ -761,13 +835,30 @@ impl DeckView {
         let deck = self.deck.read(cx);
         let active_ws = deck.state.active_workspace().id.clone();
         let active_tab = deck.state.active_tab_id.clone();
+        let now = now_ms();
+        // Shortcut rows above the projects: icon, then label.
+        let quick_entry = |id: &'static str, icon: IconName, label: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_2()
+                .h(ui(30.0))
+                .px_2()
+                .rounded(ui(6.0))
+                .text_color(hsla(p.muted))
+                .cursor_pointer()
+                .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
+                .child(div().text_size(ui(15.0)).child(icon))
+                .child(label)
+        };
         let mut list = div()
             .id("workspaces")
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
-            .gap_2()
+            .gap_4()
             .px_2()
             .pb_3()
             .overflow_y_scroll();
@@ -969,7 +1060,7 @@ impl DeckView {
                         icon_button(
                             ElementId::Name(format!("ws-unlink-{}", ws.id).into()),
                             IconName::Unlink,
-                            "Unlink this workspace (no files deleted)",
+                            "Unlink this project (no files deleted)",
                             &p,
                         )
                         .size(ui(22.0)).text_size(ui(13.0)).text_color(hsla(p.subtle))
@@ -985,24 +1076,47 @@ impl DeckView {
                     let archivable = can_archive(&deck.state.tabs, &tab.id);
                     let (open_id, close_id) = (tab.id.clone(), tab.id.clone());
                     let group: SharedString = format!("side-tab-{}", tab.id).into();
-                    item = item.child(
+                    let status = session_status(&tab.pane_ids, &deck.state.panes).filter(|s| *s != PaneStatus::Idle);
+                    // One block per session: its line, then its agents. The current one is a card.
+                    // Same box for every session, so selecting one only colors it: the text stays put.
+                    let boxed = div().flex().flex_col().ml(ui(16.0)).my_1().p(ui(3.0)).rounded(ui(8.0)).border_1();
+                    let boxed = boxed.border_color(hsla_a(p.line_strong, 0.0));
+                    let mut block = boxed.when(current, |el| {
+                        el.border_color(hsla(p.line_strong)).bg(hsla(p.raised))
+                    });
+                    block = block.child(
                         div()
                             .id(ElementId::Name(group.clone()))
                             .group(group.clone())
                             .flex()
                             .items_center()
                             .gap_2()
-                            .h(ui(32.0))
-                            .pl(ui(28.0))
+                            .h(ui(30.0))
+                            .pl_2()
                             .pr_1()
                             .rounded(ui(6.0))
-                            .when(current, |el| el.bg(hsla(p.raised)).text_color(hsla(p.fg)))
-                            .when(!current, |el| {
-                                el.text_color(hsla(p.muted)).hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
-                            })
-                            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(tab.name.clone()))
+                            .text_color(hsla(p.muted))
+                            .when(!current, |el| el.hover(|s| s.bg(hsla(p.hover))))
+                            // The dot's place is kept when idle, so the names stay aligned.
+                            .child(
+                                div()
+                                    .size(ui(6.0))
+                                    .flex_shrink_0()
+                                    .rounded_full()
+                                    .when_some(status, |el, status| el.bg(hsla(status_color(status, &p)))),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(hsla(p.fg))
+                                    .child(tab.name.clone()),
+                            )
                             .when_some(
-                                session_status(&tab.pane_ids, &deck.state.panes).filter(|s| *s != PaneStatus::Idle),
+                                status,
                                 |el, status| {
                                     // "Working", "Waiting"...: the first word of the status label.
                                     let label = status_label(status).split(' ').next().unwrap_or_default();
@@ -1048,6 +1162,54 @@ impl DeckView {
                                 });
                             })),
                     );
+                    // The session's agents, one compact row each.
+                    for pane in tab.pane_ids.iter().filter_map(|id| deck.state.panes.get(id)) {
+                        let key = activity_key(pane);
+                        let focused = deck.state.active_pane_id.as_deref() == Some(pane.id.as_str());
+                        let subject = pane
+                            .topic
+                            .clone()
+                            .filter(|topic| !topic.is_empty())
+                            .or_else(|| Some(pane.title.clone()).filter(|title| !title.is_empty()))
+                            .unwrap_or_else(|| agent_name(pane.agent).to_owned());
+                        let status_tone = match key {
+                            ActivityKey::Status(PaneStatus::Idle) => None,
+                            ActivityKey::Status(status) => Some(status_color(status, &p)),
+                            ActivityKey::Exited => Some(p.subtle),
+                        };
+                        let jump_id = pane.id.clone();
+                        block = block.child(
+                            div()
+                                .id(ElementId::Name(format!("side-agent-{}", pane.id).into()))
+                                .flex()
+                                .items_center()
+                                .gap(ui(6.0))
+                                .h(ui(24.0))
+                                .pl(ui(22.0))
+                                .pr_2()
+                                .rounded(ui(6.0))
+                                .text_size(ui(12.0))
+                                .text_color(hsla(if focused { p.fg } else { p.muted }))
+                                .when(!focused, |el| el.hover(|s| s.bg(hsla(p.hover))))
+                                .child(agent_logo(pane.agent, 12.0, None, &p))
+                                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(subject))
+                                .when_some(status_tone, |el, tone| {
+                                    el.child(div().flex_shrink_0().text_color(hsla(tone)).child(activity_label(key)))
+                                })
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_color(hsla(p.subtle))
+                                        .child(format_since(now - pane.status_since)),
+                                )
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    // Same as `layout::jump_to_pane`, which cannot re-enter the shell from its own listener.
+                                    this.jump(&jump_id, cx);
+                                })),
+                        );
+                    }
+                    item = item.child(block);
                 }
                 for session in deck.state.archived.iter().filter(|s| s.workspace_id == ws.id) {
                     let (reopen_id, restore_id, delete_id) = (session.id.clone(), session.id.clone(), session.id.clone());
@@ -1094,7 +1256,6 @@ impl DeckView {
                                             &p,
                                         )
                                         .size(ui(22.0)).text_size(ui(13.0)).text_color(hsla(p.subtle))
-                                        .hover(|s| s.text_color(hsla(p.bad)))
                                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                             cx.stop_propagation();
                                             this.confirm_delete_archived(&delete_id, &delete_name, window, cx);
@@ -1126,15 +1287,29 @@ impl DeckView {
             .child(
                 div()
                     .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .px_2()
+                    .pt_2()
+                    .child(quick_entry("side-search", IconName::Search, "Search").on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(crate::palette::OpenPalette), cx)
+                    }))
+                    .child(quick_entry("side-automations", IconName::RotateCcwClock, "Automations").on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| crate::automations::open(this.deck.clone(), window, cx),
+                    ))),
+            )
+            .child(
+                div()
+                    .flex()
                     .flex_shrink_0()
                     .items_center()
                     .justify_between()
                     .h(ui(40.0))
                     .pl_3()
                     .pr_2()
-                    .child(div().text_size(ui(12.0)).font_weight(FontWeight::MEDIUM).text_color(hsla(p.subtle)).child("Workspaces"))
+                    .child(div().text_size(ui(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(hsla(p.muted)).child("Projects"))
                     .child(
-                        icon_button("link-workspace", IconName::FolderPlus, "Link workspace", &p)
+                        icon_button("link-workspace", IconName::FolderPlus, "Link project", &p)
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.link_workspace(window, cx))),
                     ),
             )
@@ -1152,9 +1327,104 @@ impl DeckView {
                     .text_color(hsla(p.subtle))
                     .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
                     .child(div().text_size(ui(16.0)).child(IconName::Plus))
-                    .child("Link workspace")
+                    .child("Link project")
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.link_workspace(window, cx))),
             )
+            .into_any_element()
+    }
+
+    /// Bottom strip: today's usage per agent on the left; agents waiting, working or ready for
+    /// review, live terminals, phone access and the version on the right.
+    pub(super) fn status_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let p = palette(cx);
+        let count = |wanted: ActivityKey| {
+            self.deck.read(cx).state.panes.values().filter(|pane| activity_key(pane) == wanted).count()
+        };
+        let live = count_live(self.deck.read(cx).state.panes.values().map(activity_key));
+        let working = count(ActivityKey::Status(PaneStatus::Working));
+        let waiting = count(ActivityKey::Status(PaneStatus::Waiting));
+        let review = count(ActivityKey::Status(PaneStatus::Done));
+        let phone = self.deck.read(cx).settings.remote.enabled;
+        let separator = || div().w(px(1.0)).h(ui(12.0)).flex_shrink_0().bg(hsla(p.line));
+        let item = || div().flex().flex_shrink_0().items_center().gap(ui(6.0)).whitespace_nowrap();
+
+        // Today's usage, one group per agent that spent something: logo, share of the day, tokens and cost.
+        let mut left = div().flex().min_w_0().items_center().gap_4().overflow_hidden();
+        if let Some(usage) = &self.usage_today {
+            let day_tokens = usage.total.tokens.max(1) as f32;
+            for agent in usage.by_agent.iter().filter(|agent| agent.totals.tokens > 0) {
+                // The usage key is a short id ("claude", "codex"): the start of the agent's display name.
+                let kind = AGENT_KINDS.into_iter().find(|kind| agent_name(*kind).to_lowercase().starts_with(&agent.key));
+                let share = (agent.totals.tokens as f32 / day_tokens).min(1.0);
+                left = left.child(
+                    item()
+                        .children(kind.map(|kind| agent_logo(kind, 12.0, None, &p)))
+                        .child(
+                            div()
+                                .w(ui(48.0))
+                                .h(ui(4.0))
+                                .rounded_full()
+                                .overflow_hidden()
+                                .bg(hsla(p.raised))
+                                .child(div().h_full().w(relative(share)).rounded_full().bg(hsla(p.muted))),
+                        )
+                        .child(format!("{} · {}", format_tokens(agent.totals.tokens as f64), format_cost(agent.totals.cost))),
+                );
+            }
+        }
+
+        let mut right: Vec<AnyElement> = Vec::new();
+        if waiting > 0 {
+            right.push(
+                item()
+                    .id("status-waiting")
+                    .text_color(hsla(p.wait))
+                    .cursor_pointer()
+                    .child(format!("{waiting} waiting"))
+                    .tooltip(|window, cx| Tooltip::new("Jump to the agent waiting for you (Ctrl+Shift+J)").build(window, cx))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.next_waiting(cx)))
+                    .into_any_element(),
+            );
+        }
+        if working > 0 {
+            right.push(
+                item()
+                    .child(div().size(ui(6.0)).rounded_full().bg(hsla(p.busy)))
+                    .child(format!("{working} working"))
+                    .into_any_element(),
+            );
+        }
+        if review > 0 {
+            right.push(item().text_color(hsla(p.ok)).child(format!("{review} to review")).into_any_element());
+        }
+        if live > 0 {
+            right.push(item().gap(ui(4.0)).child(IconName::SquareTerminal).child(live.to_string()).into_any_element());
+        }
+        if phone {
+            right.push(item().child("Phone on").into_any_element());
+        }
+        right.push(item().text_color(hsla(p.subtle)).child(concat!("v", env!("CARGO_PKG_VERSION"))).into_any_element());
+        let last = right.len() - 1;
+        let right = div().flex().flex_shrink_0().items_center().gap_2().children(
+            right.into_iter().enumerate().flat_map(|(index, element)| {
+                [Some(element), (index < last).then(|| separator().into_any_element())].into_iter().flatten()
+            }),
+        );
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .h(ui(24.0))
+            .px_3()
+            .border_t_1()
+            .border_color(hsla(p.line))
+            .bg(hsla(p.panel))
+            .text_size(ui(12.0))
+            .text_color(hsla(p.muted))
+            .child(left)
+            .child(right)
             .into_any_element()
     }
 
@@ -1182,8 +1452,9 @@ impl DeckView {
                     .bg(hsla(p.raised))
                     .text_size(ui(13.0))
                     .text_color(hsla(p.fg))
-                    .child(div().text_size(ui(16.0)).text_color(hsla(p.wait)).child(IconName::CircleAlert))
-                    .child(t.message.clone())
+                    .child(div().flex_shrink_0().text_size(ui(16.0)).text_color(hsla(p.wait)).child(IconName::CircleAlert))
+                    // The text takes the width left by the icon and wraps inside the toast.
+                    .child(div().min_w_0().flex_1().overflow_hidden().whitespace_normal().child(t.message.clone()))
             }))
             .into_any_element()
     }

@@ -191,7 +191,7 @@ impl Voice {
             (d.backend.clone(), routed, pane_id)
         };
         let Some(pane_id) = pane_id else {
-            self.deck.update(cx, |d, cx| d.toast("Dictation not sent: no running agent in this workspace", cx));
+            self.deck.update(cx, |d, cx| d.toast("Dictation not sent: no running agent in this project", cx));
             return;
         };
         self.touch(&pane_id, cx);

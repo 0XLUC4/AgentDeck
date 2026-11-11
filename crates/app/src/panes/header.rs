@@ -159,6 +159,7 @@ enum MenuAction {
     ZoomOut,
     Detach,
     OpenPort,
+    Sleep,
 }
 
 pub struct PaneHeader {
@@ -249,6 +250,7 @@ impl PaneHeader {
                 });
             }
             MenuAction::Detach => cx.emit(PaneHeaderEvent::ToggleDetach),
+            MenuAction::Sleep => runtime::sleep_pane(&id, cx),
             MenuAction::OpenPort => {
                 let Some(port) = pane.port else { return };
                 let url = format!("http://localhost:{port}");
@@ -333,6 +335,11 @@ impl PaneHeader {
         ]
         .map(|(icon, label, action, disabled)| (icon, label.into(), action, disabled))
         .into();
+        // Frees the agent's memory; it wakes on the same conversation. Needs a conversation to resume.
+        if pane.agent == AgentKind::Claude && !pane.exited {
+            let label = "Sleep: free its memory until you wake it";
+            items.push((IconName::Clock, label.into(), MenuAction::Sleep, pane.resume_id.is_none()));
+        }
         // The agent's own PORT (Settings > Agents > Port per agent): its dev server, one click away.
         if let Some(port) = pane.port.filter(|_| self.deck.read(cx).settings.base_port != 0) {
             items.push((IconName::Globe, format!("Open localhost:{port}").into(), MenuAction::OpenPort, false));
@@ -482,9 +489,17 @@ impl Render for PaneHeader {
             .child(agent_logo(pane.agent, 14.0, None, &p))
             .children(crate::orchestrator::orchestrator_badge(&self.deck, &pane, cx))
             .child(self.title(&pane, cx))
-            // Subject of the conversation, next to the agent's name.
-            .children(pane.topic.clone().map(|topic| div().min_w_0().truncate().text_color(hsla(p.fg)).child(topic)))
             .children(status_pill(&pane, &p))
+            // Subject of the conversation, after the agent's name and status.
+            // Capped at half the header (unless compact) so a long subject cannot push every chip out.
+            .children(pane.topic.clone().map(|topic| {
+                div()
+                    .min_w_0()
+                    .when(!self.compact, |d| d.max_w(relative(0.5)))
+                    .truncate()
+                    .text_color(hsla(p.fg))
+                    .child(topic)
+            }))
             .when(voice_target, |h| {
                 h.child(
                     div()
@@ -496,7 +511,15 @@ impl Render for PaneHeader {
 
         if !self.compact {
             let full_action: Option<SharedString> = pane.last_action.clone().map(Into::into);
-            header = header
+            // Secondary details: they take what the name, status and subject leave (zero basis) and
+            // clip from the right, so a narrow pane drops them first.
+            let details = div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .overflow_hidden()
                 .child(
                     div()
                         .id("last-action")
@@ -504,7 +527,7 @@ impl Render for PaneHeader {
                         .min_w_0()
                         .truncate()
                         .text_xs()
-                        .text_color(hsla(p.muted))
+                        .text_color(hsla(p.subtle))
                         .when_some(full_action, |el, full| {
                             el.tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
                         })
@@ -520,7 +543,7 @@ impl Render for PaneHeader {
                             .flex_shrink_0()
                             .font_family(FONT_MONO)
                             .text_xs()
-                            .text_color(hsla(p.muted))
+                            .text_color(hsla(p.subtle))
                             .tooltip(|window, cx| Tooltip::new("Time spent on the task").build(window, cx))
                             .child(format_elapsed(now - since)),
                     )
@@ -556,8 +579,8 @@ impl Render for PaneHeader {
                             .child(Icon::new(IconName::ScanEye).size(ui(12.0)))
                             .child(reviewer),
                     )
-                })
-                .child(self.toolbar(&pane, active, group, &emit, cx));
+                });
+            header = header.child(details).child(self.toolbar(&pane, active, group, &emit, cx));
         }
 
         let close_id = id.clone();

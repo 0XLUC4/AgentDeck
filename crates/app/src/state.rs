@@ -60,6 +60,7 @@ impl Deck {
             startup_errors.push(format!("Settings not loaded: {e}"));
             Settings::default()
         });
+        let queues = persist::load_queues(&data_dir);
         let templates = persist::load_templates(&data_dir).unwrap_or_else(|e| {
             startup_errors.push(format!("Templates not loaded: {e}"));
             Vec::new()
@@ -73,7 +74,7 @@ impl Deck {
             data_dir,
             state,
             settings,
-            queues: Queues::default(),
+            queues,
             tasks: HashMap::new(),
             reviews: HashMap::new(),
             orchestrator: OrchestratorState::default(),

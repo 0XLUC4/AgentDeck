@@ -38,6 +38,11 @@ pub fn single_instance() -> Option<TcpListener> {
     {
         std::process::exit(0); // frees the port for the relaunched exe
     }
+    // A run on its own data folder (AGENTDECK_DATA_DIR) is another app, not a second launch: it
+    // opens next to the installed one, to try a build without closing it.
+    if bound.is_err() && std::env::var_os("AGENTDECK_DATA_DIR").is_some() {
+        bound = TcpListener::bind(("127.0.0.1", 0));
+    }
     match bound {
         Ok(listener) => {
             if let Ok(clone) = listener.try_clone() {

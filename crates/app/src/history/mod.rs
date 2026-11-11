@@ -29,7 +29,7 @@ pub use search::HistoryDialog;
 #[allow(unused_imports)]
 pub use settings::{HistorySaved, HistorySettings};
 #[allow(unused_imports)]
-pub use usage::{UsageChip, UsageDialog, usage_details, usage_label};
+pub use usage::{UsageChip, UsageDialog, context_fill, usage_details, usage_label};
 
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};

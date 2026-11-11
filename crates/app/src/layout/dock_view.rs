@@ -10,7 +10,7 @@ use gpui_kit::*;
 use super::DeckView;
 use super::chrome::icon_button;
 use super::dock::{Axis, Branch, Dock, Edge, Group, Node};
-use crate::panes::{display_title, exit_bar, pane_border, pane_frame, pane_overlays, steps_bar};
+use crate::panes::{display_title, exit_bar, pane_frame, pane_frame_border, pane_overlays, steps_bar};
 use crate::theme::{hsla, hsla_a, palette, ui};
 
 /// Gap between panes (dockview theme `gap: 6`); the sash lives in it.
@@ -162,7 +162,7 @@ impl DeckView {
         } else {
             self.browser_header(tab_id, &group.id, &group.active, maximized, cx)
         };
-        let border = active_pane.as_ref().map_or(hsla_a(p.base, 0.0), |pane| pane_border(pane, &p));
+        let border = active_pane.as_ref().map_or(hsla_a(p.base, 0.0), |pane| pane_frame_border(pane, self.deck.read(cx), &p));
         let overlays = match &active_pane {
             Some(pane) => pane_overlays(pane, self.deck.read(cx), cx),
             None => Vec::new(),
@@ -189,7 +189,9 @@ impl DeckView {
             )
             .children(active_pane.as_ref().and_then(|pane| steps_bar(pane, cx)))
             .child(div().relative().flex_1().min_h_0().child(body))
-            .when_some(active_pane.filter(|pane| pane.exited), |el, pane| el.child(exit_bar(&pane.id, &p)))
+            .when_some(active_pane.filter(|pane| pane.exited), |el, pane| {
+                el.child(exit_bar(&pane.id, crate::panes::runtime::is_asleep(&pane.id, cx), &p))
+            })
             .children(overlays)
             .into_any_element()
     }
