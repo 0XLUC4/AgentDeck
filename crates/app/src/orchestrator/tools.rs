@@ -8,7 +8,7 @@ use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::{Pane, PaneSpec, activity_key, new_id};
 use agentdeck_core::logic::queue::{QUEUE_AGENTS, ready_for_next};
 use agentdeck_core::logic::orchestrator::{
-    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, OUTPUT_TAIL_CHARS, assert_can_type, named_files, resolve_inside, scope_of,
+    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, assert_can_type, named_files, resolve_inside, scope_of,
     target,
 };
 use agentdeck_core::mcp;
@@ -25,6 +25,8 @@ use crate::state::{Deck, DeckEvent};
 const READ_TOOLS: [&str; 3] = ["get_status", "get_result", "wait_for"];
 /// list_agents names at most this many changed files per agent (the count is always given).
 const LISTED_FILES: usize = 50;
+/// Raw terminal bytes read_output cleans and tails (the model asks for at most 200 lines).
+const OUTPUT_TAIL: usize = 24 * 1024;
 
 /// Pauses or resumes the orchestrator: launch, send and interrupt are refused while paused.
 pub fn set_paused(deck: &Entity<Deck>, paused: bool, cx: &mut App) {
@@ -210,7 +212,7 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
         }
         "read_output" => {
             let pane = target_pane(deck, orchestrator_id, args, cx)?;
-            let raw = cx.update(|cx| runtime::pane_output_tail(&pane.id, OUTPUT_TAIL_CHARS, cx));
+            let raw = cx.update(|cx| runtime::pane_output_tail(&pane.id, OUTPUT_TAIL, cx));
             Ok(json!({ "raw": raw }))
         }
         "interrupt" => {
@@ -264,7 +266,16 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
         "close_agent" => {
             let pane = target_pane(deck, orchestrator_id, args, cx)?;
             cx.update(|cx| runtime::close_pane(&pane.id, cx));
-            Ok(json!({ "ok": true }))
+            if !pane.worktree {
+                return Ok(json!({ "ok": true }));
+            }
+            // Off the UI thread: drops the worktree only when its branch is already merged.
+            let dir = pane_dir(&pane);
+            let removed = blocking(cx, move || git::git_remove_worktree_if_merged(dir)).await;
+            Ok(match removed {
+                Ok(removed) => json!({ "ok": true, "worktreeRemoved": removed }),
+                Err(e) => json!({ "ok": true, "worktreeRemoved": false, "worktreeError": e }),
+            })
         }
         _ => Err(format!("Unknown tool: {tool}")),
     }
@@ -297,19 +308,22 @@ fn folders(panes: &[Pane]) -> BTreeMap<String, (Vec<&Pane>, Vec<String>)> {
 }
 
 /// Blocking: one warning per file the prompt names that another working agent is changing.
-/// No git call when no other agent is working.
+/// No git call when no other agent is working or the prompt names no path; else one cheap
+/// `git_dirty_paths` per busy folder, on the named paths only.
 fn edit_warnings(target: &Pane, text: &str, panes: &[Pane]) -> Vec<String> {
-    let busy: Vec<Pane> = panes
-        .iter()
-        .filter(|p| p.id != target.id && p.status == PaneStatus::Working)
-        .cloned()
-        .collect();
-    if busy.is_empty() {
+    let mut by_dir: BTreeMap<String, Vec<&Pane>> = BTreeMap::new();
+    for pane in panes.iter().filter(|p| p.id != target.id && p.status == PaneStatus::Working && !p.exited) {
+        by_dir.entry(pane_dir(pane)).or_default().push(pane);
+    }
+    let paths = path_words(text);
+    if by_dir.is_empty() || paths.is_empty() {
         return Vec::new();
     }
     let mut warnings = Vec::new();
-    for (owners, files) in folders(&busy).values() {
-        for file in named_files(text, files) {
+    for (dir, owners) in &by_dir {
+        // Not a repository (or git failed): no changes to report.
+        let files = git::git_dirty_paths(dir.clone(), paths.clone()).unwrap_or_default();
+        for file in named_files(text, &files) {
             for owner in owners {
                 warnings.push(format!(
                     "file {file} is being edited by agent {} ({}): prefer queue_prompt to {}",
@@ -319,6 +333,21 @@ fn edit_warnings(target: &Pane, text: &str, panes: &[Pane]) -> Vec<String> {
         }
     }
     warnings
+}
+
+/// Words of `text` that look like file paths (a `/` or a `.` inside), `\` turned into `/`, deduped.
+fn path_words(text: &str) -> Vec<String> {
+    let part = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '/' | '\\' | '.');
+    let mut words: Vec<String> = text
+        .split(|c: char| !part(c))
+        // Repo-relative only: a pathspec outside the repo would fail the whole git call.
+        .map(|w| w.trim_matches('.').replace('\\', "/").trim_start_matches('/').to_owned())
+        .filter(|w| w.len() <= 512 && !w.contains("..") && w.trim_end_matches('/').contains(['/', '.']))
+        .collect();
+    words.sort();
+    words.dedup();
+    words.truncate(200);
+    words
 }
 
 /// Paths present in at least two folders, with the agents of those folders.
@@ -375,7 +404,8 @@ fn get_diff(pane: &Pane, path: &str) -> Result<Value, String> {
         "paneId": pane.id,
         "dir": dir,
         "branch": status.branch,
-        "files": status.files,
+        "files": &status.files[..status.files.len().min(LISTED_FILES)],
+        "filesCount": status.files.len(),
         "checkpoints": checkpoints,
         "diff": diff,
     }))
@@ -403,7 +433,15 @@ fn truncate_chars(text: &str, max: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{DIFF_CAP_CHARS, iso_date, overlaps, push_capped, truncate_chars};
+    use super::{DIFF_CAP_CHARS, iso_date, overlaps, path_words, push_capped, truncate_chars};
+
+    #[test]
+    fn path_words_keep_only_paths() {
+        let words = path_words("Edit src\\main.rs and crates/app/x.rs. Run it, then main.rs again.");
+        assert_eq!(words, ["crates/app/x.rs", "main.rs", "src/main.rs"]);
+        assert!(path_words("no paths here / at all ../up").is_empty());
+        assert_eq!(path_words("D:\\repo\\a.rs"), ["repo/a.rs"]);
+    }
     use agentdeck_core::agents::AgentKind;
     use agentdeck_core::logic::deck::{PaneSpec, new_pane};
 

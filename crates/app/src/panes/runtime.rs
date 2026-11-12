@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agentdeck_core::hooks_server::{AgentStatusEvent, PaneStatus, Step, Subagent};
 use agentdeck_core::logic::deck::{Pane, PaneSpec, new_pane};
@@ -40,6 +40,8 @@ const CONFLICT_WINDOW_MS: i64 = 15 * 60_000;
 const OWNER: &str = "panes-runtime";
 /// At most this many agents start at once: a restore with many panes would otherwise spawn them all together.
 static SPAWN_SLOTS: Semaphore = Semaphore::new(3);
+/// `git pack-refs` runs at most this often per repo, when the last agent goes idle.
+const PACK_REFS_EVERY: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Default)]
 struct Output {
@@ -79,6 +81,8 @@ struct Runtime {
     /// Put to sleep to free memory: the next start picks its conversation up again.
     asleep: bool,
     restarting: bool,
+    /// The running agent was given the browser MCP server (see `browser_args`).
+    browser_tools: bool,
 }
 
 struct Editor {
@@ -107,9 +111,16 @@ struct Runtimes {
     save_pending: bool,
     /// The pending deck notify is the 1 s clock repaint: nothing to save.
     clock_repaint: bool,
+    /// Minute (now / 60 s) of the last clock repaint.
+    clock_minute: i64,
     last_saved: String,
     /// Queues as last written to local.json.
     saved_queues: agentdeck_core::logic::queue::Queues,
+    /// At least one pane was Working at the last tick (PC kept awake).
+    working: bool,
+    /// Cwds of panes seen Working since the last idle: their refs get packed then.
+    busy_cwds: HashSet<String>,
+    packed_at: HashMap<String, Instant>,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -187,6 +198,73 @@ pub fn start(deck: &Entity<Deck>, cx: &mut App) {
     r._subscriptions = vec![events, autosave];
     r._tasks.push(clock);
     restore(cx);
+    cleanup_orphan_worktrees(cx);
+}
+
+/// `git -C dir args...` without a console window; stdout on success.
+fn git_out(dir: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// (path, branch) of each `agentdeck/*` worktree in `git worktree list --porcelain` output.
+fn agent_worktrees(porcelain: &str) -> Vec<(&str, &str)> {
+    porcelain
+        .split("\n\n")
+        .filter_map(|entry| {
+            let path = entry.lines().find_map(|l| l.strip_prefix("worktree "))?;
+            let branch = entry.lines().find_map(|l| l.strip_prefix("branch refs/heads/"))?;
+            branch.starts_with("agentdeck/").then_some((path, branch))
+        })
+        .collect()
+}
+
+/// Startup, in background: agent worktrees left by a crash or a failed close, that no pane uses,
+/// are removed when clean and merged (never otherwise), then `git worktree prune`.
+fn cleanup_orphan_worktrees(cx: &mut App) {
+    let Some(deck) = deck(cx) else { return };
+    let (roots, used) = {
+        let state = &deck.read(cx).state;
+        let mut roots: HashSet<String> =
+            state.workspaces.iter().map(|w| w.path.clone()).filter(|p| !p.is_empty()).collect();
+        roots.extend(state.panes.values().filter(|p| p.ssh.is_none()).map(|p| p.cwd.clone()));
+        let used: HashSet<String> = state
+            .panes
+            .values()
+            .filter(|p| p.worktree)
+            .map(|p| format!("agentdeck/{}", p.id.chars().take(8).collect::<String>()))
+            .collect();
+        (roots, used)
+    };
+    cx.background_spawn(async move {
+        let mut seen = HashSet::new();
+        for root in roots {
+            // Not a git folder (or gone): nothing to clean.
+            let Ok(list) = git_out(&root, &["worktree", "list", "--porcelain"]) else { continue };
+            for (path, branch) in agent_worktrees(&list) {
+                if used.contains(branch) || !seen.insert(path.to_owned()) {
+                    continue;
+                }
+                if let Err(e) = agentdeck_core::git::git_remove_worktree_if_merged(path.to_owned()) {
+                    eprintln!("orphan worktree {path} not removed: {e}");
+                }
+            }
+            if let Err(e) = git_out(&root, &["worktree", "prune"]) {
+                eprintln!("git worktree prune in {root}: {e}");
+            }
+        }
+    })
+    .detach();
 }
 
 /// Respawns the saved sessions (active session first: its agents get the first spawn slots).
@@ -254,16 +332,73 @@ fn tick(cx: &mut App) {
     auto_sleep(now, cx);
     derive_statuses(now, cx);
     forward_terminal_notices(now, cx);
+    watch_working(cx);
 }
 
-/// Every second while an agent is live: a repaint for timers and outlines.
+/// On the first Working pane keeps the PC awake; when the last one goes idle, lets it sleep again
+/// and packs the refs (checkpoints, agent branches) of the repos those agents worked in.
+fn watch_working(cx: &mut App) {
+    let Some(deck) = deck(cx) else { return };
+    let (working, cwds) = {
+        let panes = deck.read(cx).state.panes.values().filter(|p| p.status == PaneStatus::Working);
+        let panes: Vec<&Pane> = panes.collect();
+        let cwds: Vec<String> = panes.iter().filter(|p| p.ssh.is_none()).map(|p| p.cwd.clone()).collect();
+        (!panes.is_empty(), cwds)
+    };
+    let r = rts(cx);
+    r.busy_cwds.extend(cwds);
+    if working == r.working {
+        return;
+    }
+    r.working = working;
+    // Always from the main thread: the execution state belongs to the calling thread.
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
+        let flags = if working { ES_CONTINUOUS | ES_SYSTEM_REQUIRED } else { ES_CONTINUOUS };
+        // SAFETY: plain flag call, no pointers.
+        unsafe { SetThreadExecutionState(flags) };
+    }
+    if working {
+        return;
+    }
+    let now = Instant::now();
+    let due: Vec<String> = std::mem::take(&mut r.busy_cwds)
+        .into_iter()
+        .filter(|cwd| r.packed_at.get(cwd).is_none_or(|at| now.duration_since(*at) >= PACK_REFS_EVERY))
+        .collect();
+    for cwd in &due {
+        r.packed_at.insert(cwd.clone(), now);
+    }
+    if due.is_empty() {
+        return;
+    }
+    cx.background_spawn(async move {
+        for cwd in due {
+            // Non-git folders fail here: nothing to pack.
+            let _ = agentdeck_core::git::git_pack_refs(cwd);
+        }
+    })
+    .detach();
+}
+
+/// A repaint for timers while an agent is live: every second when seconds are on screen (headers of the
+/// active tab and detached windows, activity panel, wall), else once a minute (sidebar's "12 min").
 fn clock_repaint(cx: &mut App) {
     let now = now_ms();
     let Some(deck) = deck(cx) else { return };
-    let live = deck.read(cx).state.panes.values().any(|p| {
-        p.task_started_at.is_some() || matches!(p.status, PaneStatus::Working | PaneStatus::Waiting)
-    });
-    if live || super::frame::voice_flash_pending(now, cx) {
+    let (any_live, seconds) = {
+        let state = &deck.read(cx).state;
+        let live = |p: &&Pane| p.task_started_at.is_some() || matches!(p.status, PaneStatus::Working | PaneStatus::Waiting);
+        let active = state.tabs.iter().find(|t| t.id == state.active_tab_id);
+        let shown = |p: &&Pane| active.is_some_and(|t| t.pane_ids.contains(&p.id)) || crate::layout::is_detached(&p.id, cx);
+        let any_live = state.panes.values().any(|p| live(&p));
+        let panels = crate::layout::activity_open(cx) || crate::orchestrator::wall_open(cx);
+        (any_live, any_live && (panels || state.panes.values().filter(live).any(|p| shown(&p))))
+    };
+    let minute = now / 60_000;
+    let new_minute = std::mem::replace(&mut rts(cx).clock_minute, minute) != minute;
+    if seconds || (any_live && new_minute) || super::frame::voice_flash_pending(now, cx) {
         // Statuses and timers are not saved: the autosave skips this notify.
         rts(cx).clock_repaint = true;
         deck.update(cx, |_, cx| cx.notify());
@@ -396,6 +531,7 @@ pub fn create_pane(spec: PaneSpec, tab_id: &str, adopt: bool, cx: &mut App) {
             stopped: false,
             asleep: false,
             restarting: false,
+            browser_tools: true, // adopted process: assume it has them; a spawn sets the real value
         },
     );
     if adopt {
@@ -461,17 +597,30 @@ fn open_browser(id: &str, cx: &mut App) -> Result<(), String> {
 
 /// The args and env that connect the pane's agent to its browser, given at every spawn so that the panel
 /// opens and closes without a restart; the webview itself is only opened for a pane with its panel on.
+/// Workers in an orchestrator's tab skip it unless their panel is on: one chrome-devtools-mcp (node) less each.
 fn browser_args(id: &str, agent: AgentKind, cx: &mut App) -> Result<(Vec<String>, Vec<(String, String)>), String> {
-    let dir = deck(cx).ok_or("deck not ready")?.read(cx).data_dir.clone();
+    let (dir, on, worker) = {
+        let d = deck(cx).ok_or("deck not ready")?.read(cx);
+        let is_orchestrator = |p: &String| p != id && d.state.panes.get(p).is_some_and(|p| p.orchestrator);
+        let worker = d.state.tabs.iter().any(|t| t.pane_ids.iter().any(|p| p == id) && t.pane_ids.iter().any(is_orchestrator));
+        (d.data_dir.clone(), d.state.panes.get(id).is_some_and(|p| p.browser), worker)
+    };
+    let given = on || !worker;
+    if let Some(rt) = rt_mut(id, cx) {
+        rt.browser_tools = given;
+    }
+    if !given {
+        return Ok(Default::default());
+    }
     let args = crate::browser::args(id, &dir, agent, cx)?;
-    if pane(id, cx).is_some_and(|p| p.browser) {
+    if on {
         open_browser(id, cx)?;
     }
     Ok(args)
 }
 
-/// The browser panel was turned on: opens its webview. The running agent already has the browser
-/// tools (see `browser_args`), so it is not restarted.
+/// The browser panel was turned on: opens its webview. The running agent usually already has the browser
+/// tools (see `browser_args`), so it is not restarted; a worker started without them is told to restart.
 pub fn show_browser(id: &str, cx: &mut App) {
     let id = id.to_owned();
     // Deferred: the caller may be inside a window update.
@@ -479,6 +628,9 @@ pub fn show_browser(id: &str, cx: &mut App) {
         cx.update(|cx| {
             if let Err(e) = open_browser(&id, cx) {
                 toast(format!("Browser: {e}"), cx);
+            }
+            if rt_mut(&id, cx).is_some_and(|rt| !rt.browser_tools) {
+                toast("Restart this agent to give it the browser tools".into(), cx);
             }
             // Redraws the panel, which waits for the webview.
             update_pane(&id, cx, |_| {});
@@ -649,6 +801,17 @@ fn spawn(id: &str, cx: &mut App) {
                 }
             }
         }
+        // The repo's own setup (if any) replaces the global one; read off the main thread.
+        if job.pane.worktree && job.pane.ssh.is_none() {
+            let (cwd, global) = (job.pane.cwd.clone(), std::mem::take(&mut job.setup));
+            job.setup = cx
+                .background_spawn(async move {
+                    let dir = std::path::Path::new(&cwd);
+                    let root = dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(dir);
+                    agentdeck_core::agents::repo_setup_command(root, &global)
+                })
+                .await;
+        }
         if job.pane.worktree && !job.setup.is_empty() {
             let (cwd, pane_id) = (job.pane.cwd.clone(), job.pane.id.clone());
             // The pane stays blank during a long install: say why. No worktree yet = the cwd comes back.
@@ -706,12 +869,27 @@ fn fail_pane(id: &str, err: &str, cx: &mut App) {
 }
 
 fn kill_in_background(id: &str, cx: &mut App) {
+    kill_then_remove_worktree(id, None, cx);
+}
+
+/// Kills the pane's process, then drops the worktree of `worktree` (pane cwd, pane id) if it is clean and merged.
+fn kill_then_remove_worktree(id: &str, worktree: Option<(String, String)>, cx: &mut App) {
     crate::chat::kill(id);
     let Some(state) = app_state(cx) else { return };
     let id = id.to_owned();
+    let executor = cx.background_executor().clone();
     cx.background_spawn(async move {
         if let Err(e) = pty::kill_pane(&state, id) {
             eprintln!("kill_pane failed: {e}");
+        }
+        let Some((cwd, pane_id)) = worktree else { return };
+        let dir = agentdeck_core::git::git_pane_dir(cwd, pane_id, true);
+        // The killed tree may still hold files on Windows for a moment: one retry.
+        if agentdeck_core::git::git_remove_worktree_if_merged(dir.clone()).is_err() {
+            executor.timer(Duration::from_secs(2)).await;
+            if let Err(e) = agentdeck_core::git::git_remove_worktree_if_merged(dir) {
+                eprintln!("worktree not removed: {e}");
+            }
         }
     })
     .detach();
@@ -789,6 +967,18 @@ pub fn restart_pane(id: &str, cx: &mut App) {
 
 /// Removes the pane and kills its process (and its whole process tree).
 pub fn close_pane(id: &str, cx: &mut App) {
+    close_pane_with(id, None, cx);
+}
+
+/// [`close_pane`] by the user (pane header): its agent worktree also goes when clean and merged.
+pub fn close_pane_from_ui(id: &str, cx: &mut App) {
+    let worktree = pane(id, cx)
+        .filter(|p| p.worktree && p.ssh.is_none())
+        .map(|p| (p.cwd.clone(), p.id.clone()));
+    close_pane_with(id, worktree, cx);
+}
+
+fn close_pane_with(id: &str, worktree: Option<(String, String)>, cx: &mut App) {
     let r = rts(cx);
     let rt = r.map.remove(id);
     r.editors.retain(|_, e| e.pane_id != id);
@@ -816,7 +1006,7 @@ pub fn close_pane(id: &str, cx: &mut App) {
             cx.notify();
         });
     }
-    kill_in_background(id, cx);
+    kill_then_remove_worktree(id, worktree, cx);
 }
 
 /// The process ended: wakes `stop_pane`, retries a vanished `--resume` fresh, or closes the pane
@@ -1438,6 +1628,14 @@ mod tests {
         assert!(is_rate_limit(Some("ratelimit")));
         assert!(!is_rate_limit(Some("rate of the limit")));
         assert!(!is_rate_limit(None));
+    }
+
+    #[test]
+    fn porcelain_lists_agent_worktrees_only() {
+        let list = "worktree D:/repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                    worktree D:/repo-agentdeck-1a2b3c4d\nHEAD def\nbranch refs/heads/agentdeck/1a2b3c4d\n\n\
+                    worktree D:/detached\nHEAD 123\ndetached\n";
+        assert_eq!(agent_worktrees(list), vec![("D:/repo-agentdeck-1a2b3c4d", "agentdeck/1a2b3c4d")]);
     }
 
     #[test]

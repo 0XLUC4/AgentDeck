@@ -100,7 +100,23 @@ pub struct GitPanel {
     message: Entity<TextareaState>,
     pr_title: Entity<InputState>,
     focus: FocusHandle,
+    /// Last `deck_key`: the deck parts this panel renders.
+    deck_key: DeckKey,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Own pane exited, its reviewer, and every pane's id, name and agent (sorted).
+type DeckKey = (bool, Option<String>, Vec<String>);
+
+fn deck_key(deck: &Deck, pane_id: &str) -> DeckKey {
+    let panes = &deck.state.panes;
+    let mut names: Vec<String> = panes
+        .values()
+        .map(|p| format!("{}\0{}\0{}", p.id, pane_name(p), agent_name(p.agent)))
+        .collect();
+    names.sort();
+    let exited = panes.get(pane_id).is_none_or(|p| p.exited);
+    (exited, deck.reviews.get(pane_id).cloned(), names)
 }
 
 impl EventEmitter<DismissEvent> for GitPanel {}
@@ -133,8 +149,16 @@ impl GitPanel {
                     this.add_comment(window, cx);
                 }
             }),
-            cx.observe(&deck, |_, _, cx| cx.notify()),
+            // The deck changes every second while agents run: re-render only when what we show changed.
+            cx.observe(&deck, |this: &mut Self, deck, cx| {
+                let key = deck_key(deck.read(cx), &this.pane_id);
+                if key != this.deck_key {
+                    this.deck_key = key;
+                    cx.notify();
+                }
+            }),
         ];
+        let deck_key = deck_key(deck.read(cx), &pane_id);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         let dir = pane_git_dir(deck.read(cx), &pane_id);
@@ -161,6 +185,7 @@ impl GitPanel {
             message,
             pr_title,
             focus,
+            deck_key,
             _subscriptions: subscriptions,
         };
         if this.dir.is_none() {

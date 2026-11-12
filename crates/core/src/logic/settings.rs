@@ -394,6 +394,8 @@ mod tests {
         assert_eq!(s.budget, BudgetSettings { daily_usd: 5.0, pane_usd: 0.0, interrupt: false });
         assert_eq!(s.phone_url, "https://ntfy.sh/t");
         assert_eq!(s.worktree_setup, "pnpm install");
+        // Keys of the removed WSL feature are ignored.
+        assert_eq!(merge_settings(&json!({ "runInWsl": true, "wslMode": "on", "wslDistro": "U" })), merge_settings(&json!({})));
         assert_eq!(s.appearance.theme, ThemeMode::Light);
         assert_eq!(s.appearance.accent, "#4f8ff7");
         let bad = merge_settings(&json!({ "appearance": { "theme": "neon", "accent": "red", "background": 3 } }));

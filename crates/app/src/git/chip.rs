@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use agentdeck_core::git::{PrStatus, git_pane_dir, git_pr_status, git_status};
+use agentdeck_core::git::{PrStatus, git_pane_dir, git_pr_status, git_status, git_upstream};
 use agentdeck_core::logic::theme::Palette;
 use agentdeck_core::hooks_server::PaneStatus;
 use gpui_kit::component::tooltip::Tooltip;
@@ -49,6 +49,8 @@ pub struct DiffChip {
     deck: Entity<Deck>,
     pane_id: String,
     diff: Option<DiffCount>,
+    /// Big folders not in `.gitignore` (see `GitStatus::huge_untracked`).
+    huge_untracked: Vec<String>,
     /// Pull request of the agent's worktree branch, if it has one.
     pr: Option<PrStatus>,
     key: Option<Key>,
@@ -65,6 +67,7 @@ impl DiffChip {
             deck,
             pane_id: pane_id.into(),
             diff: None,
+            huge_untracked: Vec::new(),
             pr: None,
             key: None,
             panel: None,
@@ -111,23 +114,29 @@ impl DiffChip {
         self._refresh = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(REFRESH_DELAY).await;
             let status_dir = dir.clone();
-            let diff = cx
+            let (diff, huge, pushed) = cx
                 .background_spawn(async move {
                     // Err: not a git repo.
-                    git_status(status_dir).ok().map(|s| DiffCount {
+                    let status = git_status(status_dir.clone()).ok();
+                    let diff = status.as_ref().map(|s| DiffCount {
                         files: s.files.len(),
                         additions: s.files.iter().filter_map(|f| f.additions).sum(),
                         deletions: s.files.iter().filter_map(|f| f.deletions).sum(),
-                    })
+                    });
+                    let huge = status.map(|s| s.huge_untracked).unwrap_or_default();
+                    // A branch never pushed has no pull request: skip the gh call.
+                    let pushed = worktree && git_upstream(status_dir).is_ok_and(|u| u.name.is_some());
+                    (diff, huge, pushed)
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.diff = diff;
+                this.huge_untracked = huge;
                 cx.notify();
             })
             .ok();
             // Pull requests are opened from agent worktrees: the others are not asked about.
-            while worktree {
+            while pushed {
                 let pr_dir = dir.clone();
                 let pr = cx.background_spawn(async move { git_pr_status(pr_dir) }).await;
                 let running = pr.as_ref().is_some_and(|pr| pr.state == "OPEN" && pr.pending > 0);
@@ -201,6 +210,25 @@ impl Render for DiffChip {
                     cx.open_url(&pr.url);
                 })
         });
-        div().flex().children(chip).children(pr_chip).children(self.panel.clone())
+        let huge_chip = (!self.huge_untracked.is_empty()).then(|| {
+            let tip = SharedString::from(format!(
+                "{} is not in .gitignore (slow): left out of the changes",
+                self.huge_untracked.join(", ")
+            ));
+            div()
+                .id("huge-untracked-chip")
+                .flex_shrink_0()
+                .px_1()
+                .text_size(ui(11.0))
+                .text_color(hsla(p.wait))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .child("⚠")
+        });
+        div()
+            .flex()
+            .children(huge_chip)
+            .children(chip)
+            .children(pr_chip)
+            .children(self.panel.clone())
     }
 }

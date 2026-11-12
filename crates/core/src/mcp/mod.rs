@@ -29,6 +29,10 @@ pub use status::STATUS;
 
 /// How long a tool call waits for the UI (spawn included).
 const FRONTEND_HOLD: Duration = Duration::from_secs(30);
+/// Tools that run git in the UI: a big repo can take longer, and a timeout only makes the model retry
+/// while the first git run keeps going.
+const GIT_TOOLS: [&str; 6] = ["get_diff", "merge_worktree", "find_conflicts", "restore_checkpoint", "list_agents", "close_agent"];
+const GIT_HOLD: Duration = Duration::from_secs(180);
 const MAIN_WINDOW: &str = "main";
 const SECRET_HEADER: &str = "X-AgentDeck-Mcp";
 const VERSION_HEADER: &str = "MCP-Protocol-Version";
@@ -121,10 +125,12 @@ pub(crate) fn ask_ui(app: &AppHandle, event: &str, mut payload: Value) -> Result
     let request_id = uuid::Uuid::new_v4().to_string();
     lock(&WAITING).insert(request_id.clone(), tx);
     payload["requestId"] = json!(request_id);
+    let git = payload["tool"].as_str().is_some_and(|t| GIT_TOOLS.contains(&t));
+    let hold = if git { GIT_HOLD } else { FRONTEND_HOLD };
     let sent = app.emit_to(MAIN_WINDOW, event, payload);
     let answer = sent
         .ok()
-        .and_then(|()| wait_decision(&rx, FRONTEND_HOLD, || true));
+        .and_then(|()| wait_decision(&rx, hold, || true));
     lock(&WAITING).remove(&request_id);
     let answer = answer.ok_or("AgentDeck did not answer in time")?;
     match answer["error"].as_str() {

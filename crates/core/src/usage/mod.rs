@@ -122,15 +122,32 @@ fn walk(dir: &Path, since_ms: i64, out: &mut Vec<(PathBuf, u64, i64)>) {
         if !(name.ends_with(".jsonl") || name.ends_with(".jsonl.zst")) {
             continue;
         }
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_millis() as i64);
+        let mtime = mtime_ms(&meta);
         if mtime >= since_ms {
             out.push((path, meta.len(), mtime));
         }
     }
+}
+
+fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// Claude project folders touched (new transcript) in the week before `since_ms` or later.
+// shortcut: appending to an existing transcript leaves the folder mtime alone; the week of margin keeps
+// sessions that run across days, but resuming one idle longer is missed. Walk every folder if that matters.
+fn fresh_project_dirs(root: &Path, since_ms: i64) -> Vec<PathBuf> {
+    const MARGIN_MS: i64 = 7 * 24 * 3600 * 1000;
+    let Ok(read) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    read.flatten()
+        .filter(|e| e.metadata().is_ok_and(|m| m.is_dir() && mtime_ms(&m) >= since_ms - MARGIN_MS))
+        .map(|e| e.path())
+        .collect()
 }
 
 /// Refreshes `path` and hands its entries to `f`. The cache lock is not held while parsing,
@@ -181,7 +198,12 @@ fn for_each_source(since_ms: i64, mut f: impl FnMut(Source, &[Entry])) {
     ] {
         let Some(root) = root else { continue };
         let mut files = Vec::new();
-        walk(&root, since_ms, &mut files);
+        let dirs = match source {
+            Source::Claude => fresh_project_dirs(&root, since_ms),
+            // Day folders by session start: one older than a day of margin but still written to is missed.
+            Source::Codex => codex_day_dirs(&root, since_ms, Local::now().date_naive()).unwrap_or_else(|| vec![root]),
+        };
+        dirs.iter().for_each(|d| walk(d, since_ms, &mut files));
         for (path, len, mtime) in files {
             with_entries(&path, len, mtime, source, &mut |e| f(source, e));
         }
