@@ -586,6 +586,9 @@ impl DeckView {
                 .into_any_element();
         }
         let menu_open = self.add_menu_open == Some(key);
+        if menu_open {
+            crate::browser::popup_shown();
+        }
         let mut menu = div()
             .absolute()
             .top(ui(36.0))

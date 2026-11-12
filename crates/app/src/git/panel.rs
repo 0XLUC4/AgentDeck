@@ -1195,6 +1195,7 @@ impl Render for GitPanel {
                     .child(div().flex().flex_col().min_w_0().flex_1().children(remarks_bar).child(right)),
             );
 
+        crate::browser::popup_shown();
         deferred(
             anchored().position(point(px(0.0), px(0.0))).child(
                 div()
