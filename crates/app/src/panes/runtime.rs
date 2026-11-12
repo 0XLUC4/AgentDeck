@@ -24,6 +24,11 @@ use crate::state::{Deck, DeckEvent};
 pub const ACTIVITY_WINDOW_MS: i64 = 3000;
 /// Output this soon after the process starts is its banner, not work.
 const STARTUP_MS: i64 = 5000;
+/// A starting agent is ready once its banner has been quiet this long.
+const BOOT_QUIET_MS: i64 = 500;
+const BOOT_POLL: Duration = Duration::from_millis(100);
+/// Upper bound on waiting for a starting agent (spawn slot included); the prompt goes anyway after.
+const BOOT_POLLS: u32 = 300;
 /// A TUI repaints right after a click, a resize or a keystroke: that output must not light the pane up as busy.
 const REPAINT_MS: i64 = 600;
 /// Claude exits within this window when the conversation to resume no longer exists.
@@ -931,11 +936,32 @@ fn schedule_rate_limit_retry(id: &str, cx: &mut App) {
     .detach();
 }
 
-/// Types the prompt, then presses Enter in a separate write (a TUI reads text + Enter in one write as a paste).
+/// True while a fresh agent is still starting: queued for a spawn slot, or printing its banner.
+/// Input sent then sits in the console buffer and is read with the Enter as one paste.
+fn booting(started_at: Option<i64>, last_output_at: i64, now: i64) -> bool {
+    let Some(start) = started_at else { return true };
+    let quiet = last_output_at > start && now - last_output_at >= BOOT_QUIET_MS;
+    now - start < STARTUP_MS && !quiet
+}
+
+/// Types the prompt once the agent is up, then presses Enter in a separate write (a TUI reads
+/// text + Enter in one write as a paste). Works the same whether the pane is shown or not.
 pub fn send_prompt(id: &str, text: &str, cx: &mut App) {
-    send_input(id, &prompt_text(text), cx);
-    let id = id.to_owned();
+    let (id, text) = (id.to_owned(), prompt_text(text));
     cx.spawn(async move |cx| {
+        for _ in 0..BOOT_POLLS {
+            let wait = cx.update(|cx| {
+                let rt = rts(cx).map.get(&id)?;
+                let last_output_at = lock(&rt.output).last_output_at;
+                Some(booting(rt.started_at, last_output_at, now_ms()))
+            });
+            match wait {
+                None => return, // closed meanwhile
+                Some(false) => break,
+                Some(true) => cx.background_executor().timer(BOOT_POLL).await,
+            }
+        }
+        cx.update(|cx| send_input(&id, &text, cx));
         cx.background_executor()
             .timer(Duration::from_millis(SUBMIT_DELAY_MS))
             .await;
@@ -1330,6 +1356,15 @@ pub fn reopen_session(session_id: &str, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_waits_for_a_starting_agent() {
+        assert!(booting(None, 0, 10_000)); // queued for a spawn slot
+        assert!(booting(Some(1000), 0, 2000)); // no banner yet
+        assert!(booting(Some(1000), 1800, 2000)); // banner still printing
+        assert!(!booting(Some(1000), 1400, 2000)); // banner done, quiet
+        assert!(!booting(Some(1000), 0, 1000 + STARTUP_MS)); // silent agent: give up waiting
+    }
 
     #[test]
     fn several_prompt_files_become_one() {

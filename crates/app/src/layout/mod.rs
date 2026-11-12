@@ -249,9 +249,11 @@ impl DeckView {
         self.terminals
             .entry(pane_id.to_owned())
             .or_insert_with(|| {
-                cx.new(|_| {
+                cx.new(|cx| {
                     let mut view = TerminalView::new(pane_id);
                     view.deck = Some(deck);
+                    // Parse output now: a pane never shown must still answer its program's terminal queries.
+                    view.start_output(cx);
                     view
                 })
             })
