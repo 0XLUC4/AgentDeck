@@ -7,6 +7,7 @@
 pub mod agents;
 pub mod assets;
 pub mod bus;
+pub mod chat;
 pub mod git;
 pub mod history;
 pub mod hooks_server;
