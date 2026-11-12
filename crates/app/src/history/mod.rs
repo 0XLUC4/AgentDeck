@@ -136,6 +136,7 @@ fn modal(
     window: &Window,
     cx: &App,
 ) -> impl IntoElement {
+    crate::browser::popup_shown();
     let p = palette(cx);
     let viewport = window.viewport_size();
     let width = ui(width_rem * 16.0).to_pixels(window.rem_size()).min(viewport.width * 0.94);
