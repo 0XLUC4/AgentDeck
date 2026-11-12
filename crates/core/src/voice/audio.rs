@@ -1,10 +1,10 @@
-//! Mic capture (cpal) on a dedicated thread, plus the pure DSP helpers:
+//! Mic capture (cpal) on one long-lived thread, plus the pure DSP helpers:
 //! RMS, linear resampling and in-memory 16-bit PCM WAV encoding.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample};
@@ -13,72 +13,138 @@ use cpal::{FromSample, Sample, SampleFormat, SizedSample};
 pub const TARGET_RATE: u32 = 16_000;
 /// ~30 level updates per second.
 const LEVEL_INTERVAL: Duration = Duration::from_millis(33);
+/// The mic stays open this long after a dictation: under CPU load (busy agents) opening it takes
+/// 1-3 s instead of ~30 ms, so back-to-back dictations start at once. Samples are dropped meanwhile.
+const KEEP_OPEN: Duration = Duration::from_secs(120);
 
 type Shared = Arc<Mutex<Vec<f32>>>;
 /// Captured mono samples and their sample rate.
 pub type Recording = (Vec<f32>, u32);
+type Level = Box<dyn Fn(f32) + Send>;
 
-/// A running capture. cpal's `Stream` is `!Send`, so it lives on its own thread.
-pub struct Capture {
-    stop: Sender<()>,
-    thread: JoinHandle<Result<Recording, String>>,
+enum Command {
+    Start(Level, SyncSender<Result<u32, String>>),
+    Stop(SyncSender<Result<Recording, String>>),
 }
 
+/// Sender to the mic thread, spawned on first use. cpal's `Stream` is `!Send`, so it lives there.
+static MIC: Mutex<Option<Sender<Command>>> = Mutex::new(None);
+
+fn send(command: Command) -> Result<(), String> {
+    let mut mic = MIC.lock().map_err(|e| e.to_string())?;
+    let tx = mic.get_or_insert_with(|| {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || mic_thread(rx));
+        tx
+    });
+    if tx.send(command).is_err() {
+        *mic = None; // thread died (panic): the next call spawns a fresh one
+        return Err("microphone thread exited".into());
+    }
+    Ok(())
+}
+
+/// A running capture (at most one at a time).
+pub struct Capture(());
+
 impl Capture {
-    /// Opens the default input device and starts recording. `on_level` receives
-    /// the RMS of the latest samples ~30 times per second.
+    /// Starts recording from the default input device (opened unless still open from the last
+    /// dictation). `on_level` receives the RMS of the latest samples ~30 times per second.
     pub fn start(on_level: impl Fn(f32) + Send + 'static) -> Result<Self, String> {
-        let (stop, stop_rx) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let thread = std::thread::spawn(move || run(ready_tx, stop_rx, Shared::default(), on_level));
-        ready_rx
-            .recv()
-            .map_err(|_| "capture thread exited early".to_string())??;
-        Ok(Self { stop, thread })
+        let (reply, ready) = mpsc::sync_channel(1);
+        send(Command::Start(Box::new(on_level), reply))?;
+        ready.recv().map_err(|_| "microphone thread exited".to_string())??;
+        Ok(Self(()))
     }
 
     /// Stops recording and returns the mono samples with their sample rate.
     pub fn stop(self) -> Result<Recording, String> {
-        let _ = self.stop.send(()); // thread may already be gone; join reports why
-        self.thread
-            .join()
-            .map_err(|_| "capture thread panicked".to_string())?
+        let (reply, done) = mpsc::sync_channel(1);
+        send(Command::Stop(reply))?;
+        done.recv().map_err(|_| "microphone thread exited".to_string())?
     }
 }
 
-fn run(
-    ready: SyncSender<Result<u32, String>>,
-    stop: Receiver<()>,
-    buffer: Shared,
-    on_level: impl Fn(f32),
-) -> Result<Recording, String> {
-    // Windows often refuses the mic for a moment right after another app released it: retry once.
-    let opened = open_stream(buffer.clone()).or_else(|_| {
-        std::thread::sleep(Duration::from_millis(250));
-        open_stream(buffer.clone())
-    });
-    let (stream, rate) = match opened {
-        Ok(opened) => opened,
-        Err(e) => {
-            let _ = ready.send(Err(e.clone()));
-            return Err(e);
-        }
-    };
-    let _ = ready.send(Ok(rate));
-
+/// Owns the stream: opens it on start, keeps it [`KEEP_OPEN`] after stop, reopens it after an error.
+fn mic_thread(commands: Receiver<Command>) {
+    boost_priority();
+    let buffer = Shared::default();
+    let recording = Arc::new(AtomicBool::new(false));
+    let broken = Arc::new(AtomicBool::new(false));
+    let mut stream: Option<(cpal::Stream, u32)> = None;
+    let mut on_level: Option<Level> = None;
     let mut seen = 0;
-    // Stop message or disconnected sender both end the capture.
-    while let Err(RecvTimeoutError::Timeout) = stop.recv_timeout(LEVEL_INTERVAL) {
-        let samples = buffer.lock().map_err(|e| e.to_string())?;
-        on_level(rms(&samples[seen..]));
-        seen = samples.len();
+    let mut idle_since = Instant::now();
+    loop {
+        let command = match (&on_level, &stream) {
+            (Some(_), _) => commands.recv_timeout(LEVEL_INTERVAL),
+            (None, Some(_)) => commands.recv_timeout(KEEP_OPEN.saturating_sub(idle_since.elapsed())),
+            (None, None) => commands.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        };
+        match command {
+            Ok(Command::Start(level, reply)) => {
+                if broken.swap(false, Ordering::SeqCst) {
+                    stream = None; // device lost or reset: reopen the current default one
+                }
+                if stream.is_none() {
+                    // Windows often refuses the mic for a moment right after another app released it: retry once.
+                    let opened = open_stream(&buffer, &recording, &broken).or_else(|_| {
+                        std::thread::sleep(Duration::from_millis(250));
+                        open_stream(&buffer, &recording, &broken)
+                    });
+                    match opened {
+                        Ok(opened) => stream = Some(opened),
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                            continue;
+                        }
+                    }
+                }
+                if let Ok(mut samples) = buffer.lock() {
+                    samples.clear();
+                }
+                seen = 0;
+                recording.store(true, Ordering::SeqCst);
+                on_level = Some(level);
+                let _ = reply.send(Ok(stream.as_ref().map_or(0, |(_, rate)| *rate)));
+            }
+            Ok(Command::Stop(reply)) => {
+                recording.store(false, Ordering::SeqCst);
+                on_level = None;
+                idle_since = Instant::now();
+                let rate = stream.as_ref().map_or(0, |(_, rate)| *rate);
+                let samples = buffer.lock().map(|mut s| std::mem::take(&mut *s)).map_err(|e| e.to_string());
+                let _ = reply.send(samples.map(|s| (s, rate)));
+            }
+            Err(RecvTimeoutError::Timeout) => match &on_level {
+                Some(level) => {
+                    if let Ok(samples) = buffer.lock() {
+                        level(rms(&samples[seen.min(samples.len())..]));
+                        seen = samples.len();
+                    }
+                }
+                None => stream = None, // idle long enough: release the mic
+            },
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
     }
-    drop(stream);
-    let samples = std::mem::take(&mut *buffer.lock().map_err(|e| e.to_string())?);
-    Ok((samples, rate))
 }
 
-fn open_stream(buffer: Shared) -> Result<(cpal::Stream, u32), String> {
+/// Runs the mic thread above normal priority: with busy agents saturating the CPU, opening the mic
+/// at normal priority took ~2x longer (cpal boosts its own callback thread already).
+#[cfg(windows)]
+fn boost_priority() {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST};
+    // SAFETY: pseudo-handle of the calling thread, always valid.
+    if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) } == 0 {
+        eprintln!("voice: cannot raise capture priority: {}", std::io::Error::last_os_error());
+    }
+}
+
+#[cfg(not(windows))]
+fn boost_priority() {}
+
+fn open_stream(buffer: &Shared, recording: &Arc<AtomicBool>, broken: &Arc<AtomicBool>) -> Result<(cpal::Stream, u32), String> {
     let device = cpal::default_host()
         .default_input_device()
         .ok_or("no microphone found")?;
@@ -87,12 +153,12 @@ fn open_stream(buffer: Shared) -> Result<(cpal::Stream, u32), String> {
         .map_err(|e| format!("microphone config: {e}"))?;
     let config = supported.config();
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build::<f32>(&device, &config, buffer),
-        SampleFormat::I16 => build::<i16>(&device, &config, buffer),
-        SampleFormat::U16 => build::<u16>(&device, &config, buffer),
-        SampleFormat::I32 => build::<i32>(&device, &config, buffer),
-        SampleFormat::I8 => build::<i8>(&device, &config, buffer),
-        SampleFormat::U8 => build::<u8>(&device, &config, buffer),
+        SampleFormat::F32 => build::<f32>(&device, &config, buffer.clone(), recording.clone(), broken.clone()),
+        SampleFormat::I16 => build::<i16>(&device, &config, buffer.clone(), recording.clone(), broken.clone()),
+        SampleFormat::U16 => build::<u16>(&device, &config, buffer.clone(), recording.clone(), broken.clone()),
+        SampleFormat::I32 => build::<i32>(&device, &config, buffer.clone(), recording.clone(), broken.clone()),
+        SampleFormat::I8 => build::<i8>(&device, &config, buffer.clone(), recording.clone(), broken.clone()),
+        SampleFormat::U8 => build::<u8>(&device, &config, buffer.clone(), recording.clone(), broken.clone()),
         other => return Err(format!("unsupported sample format {other}")),
     }
     .map_err(|e| format!("microphone stream: {e}"))?;
@@ -102,11 +168,14 @@ fn open_stream(buffer: Shared) -> Result<(cpal::Stream, u32), String> {
     Ok((stream, config.sample_rate))
 }
 
-/// Builds an input stream that downmixes every frame to mono f32 into `buffer`.
+/// Builds an input stream that downmixes every frame to mono f32 into `buffer` while `recording`,
+/// and sets `broken` on a stream error (device unplugged or reset).
 fn build<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     buffer: Shared,
+    recording: Arc<AtomicBool>,
+    broken: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, cpal::Error>
 where
     T: SizedSample,
@@ -116,13 +185,19 @@ where
     device.build_input_stream(
         *config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
+            if !recording.load(Ordering::Relaxed) {
+                return;
+            }
             if let Ok(mut out) = buffer.lock() {
                 out.extend(data.chunks(channels).map(|frame| {
                     frame.iter().map(|&s| f32::from_sample(s)).sum::<f32>() / frame.len() as f32
                 }));
             }
         },
-        |e| eprintln!("voice: stream error: {e}"),
+        move |e| {
+            eprintln!("voice: stream error: {e}");
+            broken.store(true, Ordering::SeqCst);
+        },
         None,
     )
 }
