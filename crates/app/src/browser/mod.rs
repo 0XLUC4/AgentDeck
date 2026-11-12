@@ -185,6 +185,13 @@ fn notes_prompt(json: &str) -> Option<String> {
 thread_local! {
     /// Frames drawn by the main window (see `frame_drawn`).
     static FRAME: Cell<u64> = const { Cell::new(0) };
+    /// Last frame a GPUI popup was rendered in (see `popup_shown`).
+    static POPUP_FRAME: Cell<u64> = const { Cell::new(u64::MAX) };
+}
+
+/// Called while rendering an open popup menu of the main window: webviews hide this frame, as for a dialog.
+pub fn popup_shown() {
+    POPUP_FRAME.with(|p| p.set(FRAME.with(Cell::get)));
 }
 
 /// Called once per drawn frame of the main window (its root view's render). A panel that was not
@@ -705,7 +712,9 @@ impl Render for BrowserPanel {
                         seen_frame.set(FRAME.with(Cell::get));
                         hidden.set(false);
                         // A native webview sits above every GPUI layer: hide it while a dialog is open.
-                        let dialog = window.has_active_dialog(cx);
+                        // ...or while a popup (menu) was drawn this frame (`popup_shown`).
+                        let dialog = window.has_active_dialog(cx)
+                            || POPUP_FRAME.with(Cell::get) == FRAME.with(Cell::get);
                         webview.update(cx, |w, _| match (w.visible(), dialog) {
                             (true, true) => park(w),
                             (false, false) => {
