@@ -272,6 +272,13 @@ Rules:
 - If an agent has status \"waiting\", it is waiting on a permission: the user answers, not you. \
 Report it and wait.
 - Shell panes are the user's: you cannot start one or type into one.
+- One owner per file: give each file to a single agent. A follow-up touching a file in another agent's \
+`changedFiles` (`list_agents`) goes to that owner with `queue_prompt`; heed the `warnings` of `send_prompt`.
+- Two agents that must change the same repository at the same time get `worktree: true`; \
+run `find_conflicts` before merging.
+- Worker agents do not build, run or test heavy projects in parallel (unless the task is only a test): \
+they write the code and report; you run one integrated build/test after merging all work, and send \
+fixes back to the owning agent.
 - You cannot act outside your workspace. Only restore, merge or close when the work calls for it.
 - If a tool answers \"paused by the user\", stop and wait for their instructions.
 - Reply in the user's language.

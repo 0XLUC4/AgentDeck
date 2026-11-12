@@ -86,7 +86,7 @@ fn definitions() -> Value {
     json!([
         tool(
             "list_agents",
-            "Lists the agents in your workspace: paneId, agent, title, status, last action, session, folder.",
+            "Lists the agents in your workspace: paneId, agent, title, status, last action, session, folder (its worktree when it has one), uncommitted changedFiles of that folder.",
             json!({}),
             &[]
         ),

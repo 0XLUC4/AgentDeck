@@ -1,8 +1,9 @@
 //! Orchestrator logic (`src/lib/orchestrator.ts`): a Claude pane driving the other agents of its
 //! workspace through AgentDeck's MCP server ([`crate::mcp`]). The backend validates arguments and
 //! emits `mcp-request`; this side checks scope and answers the read-only tools. Tools that act on panes
-//! (spawn_agent, send_prompt, interrupt, get_diff, merge_worktree, restore_checkpoint, close_agent,
-//! read_output) are run by the app with [`Scope`] and [`target`], then answered via `mcp::mcp_respond`.
+//! or need git (list_agents, spawn_agent, send_prompt, interrupt, get_diff, merge_worktree,
+//! restore_checkpoint, close_agent, read_output) are run by the app with [`Scope`] and [`target`],
+//! then answered via `mcp::mcp_respond`.
 
 use std::collections::HashMap;
 
@@ -217,6 +218,28 @@ pub fn assert_can_type(pane: &Pane) -> Result<(), String> {
     Ok(())
 }
 
+/// The paths of `files` (repo-relative) that `text` names, case-insensitive, `\` or `/`, as a whole
+/// path: `src/a.rs` matches "fix src/a.rs." or "C:\repo\src\a.rs", not "src/a.rsx" or "xsrc/a.rs".
+pub fn named_files<'a>(text: &str, files: &'a [String]) -> Vec<&'a String> {
+    let text = normalize(text);
+    let part = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '/' | '.');
+    files
+        .iter()
+        .filter(|file| {
+            let file = normalize(file);
+            !file.is_empty()
+                && text.match_indices(&file).any(|(i, _)| {
+                    let before = text[..i].chars().next_back();
+                    let mut after = text[i + file.len()..].chars();
+                    let next = after.next();
+                    // A trailing '.' ends a sentence unless more of a name follows it.
+                    let next = if next == Some('.') { after.next().filter(|c| part(*c)) } else { next };
+                    before.is_none_or(|c| c == '/' || !part(c)) && next.is_none_or(|c| !part(c))
+                })
+        })
+        .collect()
+}
+
 /// Answers the tools that only read state. `None`: the tool acts on panes, the app runs it.
 pub fn handle_read_tool(
     deck: &DeckState,
@@ -232,19 +255,6 @@ pub fn handle_read_tool(
     };
     let pane_arg = || target(&scope, args["paneId"].as_str().unwrap_or(""));
     let result = match tool {
-        "list_agents" => Ok(Value::Array(
-            scope
-                .panes
-                .iter()
-                .map(|(p, t)| {
-                    json!({
-                        "paneId": p.id, "agent": p.agent, "title": p.title,
-                        "status": activity_key(p).as_str(), "lastAction": p.last_action,
-                        "session": t.name, "cwd": p.cwd,
-                    })
-                })
-                .collect(),
-        )),
         "get_status" => pane_arg().map(|p| {
             json!({
                 "paneId": p.id, "status": activity_key(p).as_str(), "lastAction": p.last_action,
@@ -309,6 +319,18 @@ mod tests {
     }
 
     #[test]
+    fn prompt_names_changed_files() {
+        let files = ["src/a.rs".to_owned(), "README.md".to_owned(), "lib.rs".to_owned()];
+        let named = |text: &str| named_files(text, &files).into_iter().cloned().collect::<Vec<_>>();
+        assert_eq!(named("Fix src/a.rs."), ["src/a.rs"]);
+        assert_eq!(named("edit D:\\repo\\SRC\\A.rs and readme.md"), ["src/a.rs", "README.md"]);
+        assert!(named("src/a.rsx, xsrc/a.rs, src/a.rs.bak").is_empty());
+        // shortcut: a path ending in a changed path counts (absolute paths need it), a false warning at worst.
+        assert_eq!(named("see crates/core/src/lib.rs"), ["lib.rs"]);
+        assert!(named("nothing here").is_empty());
+    }
+
+    #[test]
     fn summaries() {
         let d = deck();
         assert_eq!(
@@ -325,9 +347,8 @@ mod tests {
     fn scope_and_read_tools() {
         let d = deck();
         let tasks = HashMap::new();
-        let list = handle_read_tool(&d, &tasks, "o", "list_agents", &json!({}), 0).unwrap().unwrap();
-        assert_eq!(list.as_array().unwrap().len(), 2);
-        assert!(handle_read_tool(&d, &tasks, "a", "list_agents", &json!({}), 0).unwrap().is_err());
+        assert_eq!(scope_of(&d, "o").unwrap().panes.len(), 2);
+        assert!(handle_read_tool(&d, &tasks, "a", "get_status", &json!({ "paneId": "b" }), 0).unwrap().is_err());
         let me = handle_read_tool(&d, &tasks, "o", "get_status", &json!({ "paneId": "o" }), 0).unwrap();
         assert!(me.unwrap_err().contains("yourself"));
         assert!(handle_read_tool(&d, &tasks, "o", "spawn_agent", &json!({}), 0).is_none());
