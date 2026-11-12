@@ -58,6 +58,9 @@ pub struct PaneSpec {
     /// "user@host:/dir": the agent runs on that machine through ssh (no hooks, no worktree).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<String>,
+    /// Chat view instead of the terminal: the agent runs headless (JSONL) behind a message list.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub chat: bool,
 }
 
 fn default_font() -> f32 {
@@ -85,6 +88,7 @@ impl PaneSpec {
             color: None,
             port: None,
             ssh: None,
+            chat: false,
         }
     }
 }

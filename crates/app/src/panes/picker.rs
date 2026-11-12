@@ -56,6 +56,11 @@ fn remember_agent(agent: AgentKind, dir: &std::path::Path) {
 
 /// Starts an agent in the active session tab and remembers it as the quick "Add agent" choice.
 pub fn spawn_agent(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: bool, ssh: Option<String>, cx: &mut App) {
+    spawn_agent_with(agent, cwd, args, worktree, ssh, false, cx);
+}
+
+/// [`spawn_agent`], in chat mode when `chat` (Claude and Codex).
+pub fn spawn_agent_with(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: bool, ssh: Option<String>, chat: bool, cx: &mut App) {
     let Some(deck) = runtime::deck(cx) else { return };
     let (tab, font_size, dir) = deck.update(cx, |d, cx| {
         d.state.last_cwd = cwd.to_owned();
@@ -67,6 +72,7 @@ pub fn spawn_agent(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: boo
     spec.args = args;
     spec.worktree = worktree;
     spec.ssh = ssh;
+    spec.chat = chat;
     spec.font_size = font_size;
     runtime::create_pane(spec, &tab, false, cx);
 }
@@ -83,6 +89,8 @@ pub struct AgentPicker {
     /// "user@host:/folder": run the agent on that machine.
     ssh: Entity<InputState>,
     worktree: bool,
+    /// Chat view instead of the terminal (Claude and Codex).
+    chat: bool,
     error: Option<String>,
     focus: FocusHandle,
     _detect: Task<()>,
@@ -127,6 +135,7 @@ impl AgentPicker {
             args,
             ssh,
             worktree: defaults.worktree,
+            chat: false,
             error: None,
             focus,
             _detect: detect,
@@ -148,6 +157,52 @@ impl AgentPicker {
         self.worktree = defaults.worktree;
         self.args.update(cx, |s, cx| s.set_value(defaults.args, window, cx));
         cx.notify();
+    }
+
+    fn chat_mode(&self) -> bool {
+        self.chat && matches!(self.agent, AgentKind::Claude | AgentKind::Codex)
+    }
+
+    /// "Terminal | Chat" switch, for the agents that have a headless mode.
+    fn mode_switch(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if !matches!(self.agent, AgentKind::Claude | AgentKind::Codex) {
+            return None;
+        }
+        let p = palette(cx);
+        let option = |id: &'static str, text: &'static str, chat: bool, cx: &mut Context<Self>| {
+            let selected = self.chat == chat;
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .rounded(ui(RADIUS_MD))
+                .cursor_pointer()
+                .when(selected, |el| el.bg(hsla(p.accent)).text_color(hsla(p.on_accent)))
+                .when(!selected, |el| el.text_color(hsla(p.muted)).hover(|s| s.bg(hsla(p.hover))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.chat = chat;
+                    cx.notify();
+                }))
+                .child(text)
+        };
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(label("Mode", &p))
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .p(ui(2.0))
+                        .rounded(ui(RADIUS_MD))
+                        .border_1()
+                        .border_color(hsla(p.line))
+                        .child(option("mode-terminal", "Terminal", false, cx))
+                        .child(option("mode-chat", "Chat", true, cx)),
+                ),
+        )
     }
 
     fn pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -173,11 +228,14 @@ impl AgentPicker {
             self.error = Some("Choose a working folder.".into());
         } else if !ssh.is_empty() && agentdeck_core::pty::ssh_target(&ssh).is_none() {
             self.error = Some("SSH: user@host:/folder, without spaces or quotes.".into());
+        } else if self.chat_mode() && !ssh.is_empty() {
+            self.error = Some("Chat mode runs the agent on this machine: clear SSH or pick Terminal.".into());
         } else if ssh.is_empty() && !self.installed(self.agent) {
             self.error = Some(format!("{} is not installed.", agent_name(self.agent)));
         } else {
             let args = split_args(&self.args.read(cx).value());
-            spawn_agent(self.agent, &cwd, args, self.worktree, (!ssh.is_empty()).then_some(ssh), cx);
+            let chat = self.chat_mode();
+            spawn_agent_with(self.agent, &cwd, args, self.worktree, (!ssh.is_empty()).then_some(ssh), chat, cx);
             cx.emit(DismissEvent);
         }
         cx.notify();
@@ -345,6 +403,7 @@ impl Render for AgentPicker {
                             .p_5()
                             // Agent
                             .child(div().flex().flex_col().gap_2().child(label("Agent", &p)).children(rows))
+                            .children(self.mode_switch(cx))
                             // Working folder
                             .child(
                                 div()
