@@ -100,6 +100,11 @@ pub fn start(app: AppHandle) -> HookServer {
                 if let Some(name) = path.strip_prefix("/hub/") {
                     return crate::mcp::hub::serve(&app, req, &expected, name);
                 }
+                if path == OPEN_PATH {
+                    let code = open_url(&app, &mut req, &expected);
+                    let _ = req.respond(Response::empty(code));
+                    return;
+                }
                 let reply = match handle(&mut req, &expected) {
                     Ok(hook) => process(&app, &hook),
                     Err(code) => Response::empty(code).boxed(),
@@ -134,6 +139,15 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
     }
     if calls_browser(&hook.json) {
         open_browser(app, &hook.pane_id);
+    }
+    if let Some(reason) = launch_denied(&hook.json) {
+        let deny = json!({ "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }});
+        let ct = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("static header");
+        return Response::from_string(deny.to_string()).with_header(ct).boxed();
     }
     if hook.json["hook_event_name"] != "PermissionRequest" {
         return no_decision();
@@ -173,6 +187,89 @@ pub fn browser_config_port(text: &str) -> Option<u16> {
     let config: Value = serde_json::from_str(text).ok()?;
     let url = config["mcpServers"]["browser"]["args"].as_array()?.last()?.as_str()?;
     url.rsplit(':').next()?.parse().ok()
+}
+
+/// Path (under the hook URL) where a pane's `BROWSER` script sends a URL to open in its panel.
+pub const OPEN_PATH: &str = "/hook/open";
+
+const BROWSER_DENIED: &str = "AgentDeck: do not open a separate browser or window. Open this page in the \
+AgentDeck browser panel with the `browser` MCP tools (navigate_page / new_page): the user sees the panel.";
+const CONSOLE_DENIED: &str = "AgentDeck: do not open an external console window (start, Start-Process, wt, \
+CREATE_NEW_CONSOLE): the user cannot see or stop it. Run the command with your own shell tool, in the \
+background for a long-running one (dev server, watcher), and read its output there.";
+
+/// Why a Claude shell command must not run: it would open a page outside the browser panel (`start <url>`,
+/// `Start-Process <url>`, `explorer <url>`, `xdg-open`, `open <url>`, Python `webbrowser`, a browser
+/// executable given a URL) or a console window outside AgentDeck (`start ...`, `Start-Process` without
+/// `-NoNewWindow`, `wt`, `conhost`, `CREATE_NEW_CONSOLE`).
+fn launch_denied(body: &Value) -> Option<&'static str> {
+    static BROWSER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?i)(\b(start|start-process|saps|explorer(\.exe)?|xdg-open|open|rundll32\s+url\.dll,\S+)\s+(""\s+|-filepath\s+)?["']?https?://|\bwebbrowser\b|\b(msedge|chrome|firefox|brave)(\.exe)?["']?\s+[^|;&]*https?://)"#,
+        )
+        .expect("static regex")
+    });
+    // In command position only: `npm start` or `start-server.sh` are fine.
+    static CONSOLE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?i)((^|[;&|(\n]\s*|\bcmd(\.exe)?\s+/[ck]\s+["']?)(start|wt|conhost|mintty)(\.exe)?(\s|$)|\bcreate_new_console\b)"#,
+        )
+        .expect("static regex")
+    });
+    static PROCESS: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)\b(start-process|saps)\b").expect("static regex"));
+    if body["hook_event_name"] != "PreToolUse" || !matches!(body["tool_name"].as_str(), Some("Bash" | "PowerShell")) {
+        return None;
+    }
+    let command = body["tool_input"]["command"].as_str()?;
+    let lower = command.to_ascii_lowercase();
+    let hidden = lower.contains("-nonewwindow") || lower.contains("-windowstyle hidden");
+    if BROWSER.is_match(command) {
+        Some(BROWSER_DENIED)
+    } else if CONSOLE.is_match(command) || (PROCESS.is_match(command) && !hidden) {
+        Some(CONSOLE_DENIED)
+    } else {
+        None
+    }
+}
+
+/// `POST /hook/open` from a pane's `BROWSER` script, body = the URL: shows it in the pane's panel.
+fn open_url(app: &AppHandle, req: &mut Request, token: &str) -> u16 {
+    if *req.method() != tiny_http::Method::Post {
+        return 405;
+    }
+    if !token_ok(header(req, TOKEN_HEADER).unwrap_or(""), token) {
+        return 401;
+    }
+    let Some(pane_id) = header(req, PANE_HEADER).map(str::to_owned).filter(|p| pane_exists(app, p)) else {
+        return 404;
+    };
+    let mut body = String::new();
+    if req.as_reader().take(8192).read_to_string(&mut body).is_err() {
+        return 400;
+    }
+    let url = body.trim().trim_matches('"');
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return 400;
+    }
+    let _ = app.emit("agent-browser-open", json!({ "paneId": pane_id, "url": url }));
+    204
+}
+
+/// Env var holding a pane's browser DevTools port, for agents whose config expands env vars (Gemini).
+pub const BROWSER_PORT_ENV: &str = "AGENTDECK_BROWSER_PORT";
+
+/// The `browser` MCP server (chrome-devtools-mcp) attached to the DevTools endpoint at `url`.
+pub fn browser_server(url: &str) -> Value {
+    let mut args = vec!["-y".to_string(), "chrome-devtools-mcp@latest".into(), "--browserUrl".into(), url.to_owned()];
+    // npx is a .cmd script on Windows: agents can only start it through cmd.
+    let command = if cfg!(windows) {
+        args.splice(0..0, ["/c".to_string(), "npx".into()]);
+        "cmd"
+    } else {
+        "npx"
+    };
+    json!({ "command": command, "args": args })
 }
 
 /// Asks the UI to open the pane's browser panel (`agent-browser`) when its webview is not
@@ -746,6 +843,44 @@ fn describe_tool(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denies_shell_commands_that_open_a_browser_or_a_console() {
+        let deny = |tool: &str, cmd: &str| {
+            launch_denied(&json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": cmd}}))
+        };
+        for cmd in [
+            "start http://localhost:3000",
+            "start \"\" \"https://example.com\"",
+            "Start-Process 'http://localhost:5173'",
+            "explorer.exe https://example.com",
+            "python -m webbrowser http://x",
+            "\"C:/Program Files/Google/Chrome/Application/chrome.exe\" https://x",
+        ] {
+            assert_eq!(deny("Bash", cmd), Some(BROWSER_DENIED), "{cmd}");
+        }
+        for cmd in [
+            "start cmd /k npm run dev",
+            "cd app && start powershell",
+            "cmd /c start npm test",
+            "Start-Process powershell -ArgumentList '-NoExit'",
+            "wt -d . pwsh",
+            "python -c \"import subprocess; subprocess.Popen('x', creationflags=subprocess.CREATE_NEW_CONSOLE)\"",
+        ] {
+            assert_eq!(deny("PowerShell", cmd), Some(CONSOLE_DENIED), "{cmd}");
+        }
+        for cmd in [
+            "curl https://example.com",
+            "npm start",
+            "git log",
+            "echo open the page",
+            "./start-server.sh",
+            "Start-Process node -NoNewWindow -ArgumentList server.js",
+        ] {
+            assert_eq!(deny("Bash", cmd), None, "{cmd}");
+        }
+        assert_eq!(deny("Read", "start http://x"), None);
+    }
 
     #[test]
     fn spots_browser_tool_calls() {
