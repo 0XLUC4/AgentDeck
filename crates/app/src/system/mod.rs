@@ -10,6 +10,7 @@ mod cli;
 mod controls;
 mod hotkey;
 mod instance;
+mod memory;
 mod notify;
 mod tray;
 mod updater;
@@ -28,6 +29,7 @@ pub use {
 };
 pub use cli::run as run_cli;
 pub use instance::single_instance;
+pub use memory::working_set;
 pub use window::{is_main_focused, quit, show_main};
 
 use gpui_kit::*;

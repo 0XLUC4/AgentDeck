@@ -1328,8 +1328,8 @@ impl DeckView {
             .into_any_element()
     }
 
-    /// Bottom strip: today's usage per agent on the left; agents waiting, working or ready for
-    /// review, live terminals, phone access and the version on the right.
+    /// Bottom strip: today's usage per agent on the left; agents waiting, working / live, ready for
+    /// review, projects with live agents, AgentDeck's RAM, phone access and the version on the right.
     pub(super) fn status_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let count = |wanted: ActivityKey| {
@@ -1339,6 +1339,15 @@ impl DeckView {
         let working = count(ActivityKey::Status(PaneStatus::Working));
         let waiting = count(ActivityKey::Status(PaneStatus::Waiting));
         let review = count(ActivityKey::Status(PaneStatus::Done));
+        let projects = {
+            let state = &self.deck.read(cx).state;
+            let live_pane = |id: &String| state.panes.get(id).is_some_and(|pane| activity_key(pane) != ActivityKey::Exited);
+            let mut ids: Vec<&str> =
+                state.tabs.iter().filter(|tab| tab.pane_ids.iter().any(live_pane)).map(|tab| tab.workspace_id.as_str()).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids.len()
+        };
         let phone = self.deck.read(cx).settings.remote.enabled;
         let separator = || div().w(px(1.0)).h(ui(12.0)).flex_shrink_0().bg(hsla(p.line));
         let item = || div().flex().flex_shrink_0().items_center().gap(ui(6.0)).whitespace_nowrap();
@@ -1381,19 +1390,30 @@ impl DeckView {
                     .into_any_element(),
             );
         }
-        if working > 0 {
+        if live > 0 {
             right.push(
                 item()
-                    .child(div().size(ui(6.0)).rounded_full().bg(hsla(p.busy)))
-                    .child(format!("{working} working"))
+                    .id("status-working")
+                    .child(div().size(ui(6.0)).rounded_full().bg(hsla(if working > 0 { p.busy } else { p.subtle })))
+                    .child(format!("{working}/{live} working"))
+                    .tooltip(|window, cx| Tooltip::new("Agents working / live terminals").build(window, cx))
                     .into_any_element(),
             );
         }
         if review > 0 {
             right.push(item().text_color(hsla(p.ok)).child(format!("{review} to review")).into_any_element());
         }
-        if live > 0 {
-            right.push(item().gap(ui(4.0)).child(IconName::SquareTerminal).child(live.to_string()).into_any_element());
+        if projects > 1 {
+            right.push(item().child(format!("{projects} projects")).into_any_element());
+        }
+        if let Some(mb) = self.ram_mb {
+            right.push(
+                item()
+                    .id("status-ram")
+                    .child(format!("RAM {mb} MB"))
+                    .tooltip(|window, cx| Tooltip::new("Memory used by AgentDeck (agents not included)").build(window, cx))
+                    .into_any_element(),
+            );
         }
         if phone {
             right.push(item().child("Phone on").into_any_element());

@@ -185,6 +185,8 @@ pub struct DeckView {
     tabs_focus: FocusHandle,
     /// Today's usage, total and per agent (status bar), refreshed every minute. None until the first read.
     usage_today: Option<agentdeck_core::usage::UsageSummary>,
+    /// AgentDeck's own RAM in MB (status bar), read every `RAM_EVERY_S` seconds.
+    ram_mb: Option<u64>,
     _subs: Vec<Subscription>,
     _ticker: Task<()>,
     _usage: Task<()>,
@@ -230,6 +232,7 @@ impl DeckView {
             focus: cx.focus_handle(),
             tabs_focus: cx.focus_handle(),
             usage_today: None,
+            ram_mb: crate::system::working_set().map(|b| b / 1_048_576),
             _subs: vec![observe],
             _ticker: ticker(cx),
             _usage: usage_ticker(cx),
@@ -651,6 +654,9 @@ fn panel_title(deck: &Deck, id: &str) -> String {
         .unwrap_or_else(|| "Agent".into())
 }
 
+/// Status bar RAM refresh period (seconds).
+const RAM_EVERY_S: u32 = 5;
+
 /// Once a second: toast expiry. Running agents repaint through the deck (`panes::runtime` clock);
 /// an idle window only needs the minute-grained "x min ago" labels, so it redraws twice a minute.
 fn ticker(cx: &mut Context<DeckView>) -> Task<()> {
@@ -665,7 +671,11 @@ fn ticker(cx: &mut Context<DeckView>) -> Task<()> {
                         cx.notify();
                     }
                 });
-                if seconds % 30 == 0 {
+                let ram_mb = (seconds % RAM_EVERY_S == 0).then(crate::system::working_set).flatten().map(|b| b / 1_048_576);
+                if ram_mb.is_some() && ram_mb != this.ram_mb {
+                    this.ram_mb = ram_mb;
+                    cx.notify();
+                } else if seconds % 30 == 0 {
                     cx.notify();
                 }
             });
