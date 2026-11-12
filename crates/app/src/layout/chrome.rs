@@ -1394,7 +1394,6 @@ impl DeckView {
             right.push(
                 item()
                     .id("status-working")
-                    .child(div().size(ui(6.0)).rounded_full().bg(hsla(if working > 0 { p.busy } else { p.subtle })))
                     .child(format!("{working}/{live} working"))
                     .tooltip(|window, cx| Tooltip::new("Agents working / live terminals").build(window, cx))
                     .into_any_element(),
@@ -1410,7 +1409,8 @@ impl DeckView {
             right.push(
                 item()
                     .id("status-ram")
-                    .child(format!("RAM {mb} MB"))
+                    .child(div().text_size(ui(13.0)).child(IconName::MemoryStick))
+                    .child(format!("{mb} MB"))
                     .tooltip(|window, cx| Tooltip::new("Memory used by AgentDeck (agents not included)").build(window, cx))
                     .into_any_element(),
             );
