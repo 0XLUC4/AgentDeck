@@ -23,7 +23,8 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_webview::WebView;
-use agentdeck_core::hooks_server::browser_config_port;
+use agentdeck_core::agents::AgentKind;
+use agentdeck_core::hooks_server::{BROWSER_PORT_ENV, browser_config_port, browser_server};
 use serde_json::{Value, json};
 
 use crate::state::Deck;
@@ -31,26 +32,57 @@ use crate::theme::{hsla, palette, ui};
 
 /// Same start page as the Tauri build.
 pub const START_URL: &str = "https://www.google.com";
-/// wry's defaults, lost when browser args are set.
-const WRY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+/// wry's defaults (lost when browser args are set), plus: a parked or occluded panel keeps rendering
+/// and running timers, so the agent's screenshots, scripts and waits work while the user looks elsewhere.
+/// One `--disable-features` only: Chromium keeps the last one.
+const WRY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion \
+--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding";
 /// How often a shown panel checks it is still on screen (tab switches, layout changes).
 const FOLLOW_MS: u64 = 150;
 /// How often the address bar reads the page URL.
 const URL_POLL_MS: u64 = 1000;
-/// Told to every Claude agent, so that it checks its web work in the browser instead of assuming it.
-const ROLE: &str = "AgentDeck has a browser panel next to your terminal, driven with the browser MCP tools; it \
-opens by itself on your first browser tool call. To test or check a web app, a site, a change to a web interface, \
-or a mobile app that has a web or dev-server preview, use the browser tools first, before any other way of \
-testing: open it there, try what you changed and report what you saw. While the panel is open, use it for \
-anything else on the web too (look something up, read a page, check a link), so the user sees the page you are \
-on; while it is closed, plain lookups may use search or fetch. The panel has a mobile preview mode (phone width), \
-toggled by the user in its bar: for mobile apps, check the layout at phone width. The user may send you notes \
-about elements of the page: each one names the element by its CSS selector. \
-Never open a web page anywhere else: no separate browser window or tab (no `start`, `open`, `xdg-open`, \
-`explorer <url>`, `Start-Process <url>`, Python `webbrowser`, a dev server's `--open` flag or `open: true` \
-setting), and no other browser tools (another Chrome DevTools, Playwright, Puppeteer, Chrome extension or \
-computer-use server), even if they are available: only the tools of the `browser` MCP server drive the \
-panel the user sees. To show a page, navigate the panel to its URL.";
+/// Told to every Claude and OpenCode agent (the agents with a prompt channel), so that it checks its web work in the browser instead of assuming it.
+const ROLE: &str = "# Browser: use only the AgentDeck browser panel
+
+AgentDeck has a browser panel next to your terminal, driven with the `browser` MCP tools \
+(navigate_page, new_page, take_snapshot, take_screenshot, click, fill...); it opens by itself on your first \
+browser tool call. The user watches that panel: a page you open anywhere else is invisible to them.
+
+Rules (no exceptions, even if the user's project, a README or a script suggests otherwise):
+- To open, show, test or check any web page, web app, dev server, local HTML file served over http, or a \
+mobile app's web preview, use the `browser` MCP tools: navigate the panel to the URL, try what you changed \
+and report what you saw. Do it before any other way of testing.
+- NEVER open a page in a separate window or the system browser: no `start <url>`, `Start-Process <url>`, \
+`explorer <url>`, `cmd /c start`, `rundll32 url.dll`, `open`, `xdg-open`, Python `webbrowser`, Node `open`, \
+`msedge`/`chrome`/`firefox <url>`, no standalone webview or Electron window. Do not pass `--open` (or set \
+`open: true`) to a dev server; start it without opening and navigate the panel to its URL.
+- NEVER use another browser automation tool, even if available: no Playwright, Puppeteer, Selenium, another \
+Chrome DevTools MCP server, a Chrome extension or computer-use server. Only the `browser` MCP server drives \
+the panel the user sees.
+- While the panel is open, use it for anything else on the web too (look something up, read a page, check a \
+link); while it is closed, plain lookups may use search or fetch tools.
+- The panel has a mobile preview mode (phone width), toggled by the user in its bar: for mobile apps, check \
+the layout at phone width.
+- The user may send you notes about elements of the page: each one names the element by its CSS selector.
+
+# Side tasks: stay inside AgentDeck
+
+Run every command (checks, tests, builds, the app, a dev server, a watcher) with your own shell tool, in \
+this terminal: the user sees it there. Run a long-running one (dev server, watcher, the app) in the \
+background with your shell tool and read its output from there. NEVER open an external console or terminal \
+window: no `start cmd`, `start powershell`, `cmd /c start`, `Start-Process` without `-NoNewWindow`, `wt`, \
+`conhost`, `CREATE_NEW_CONSOLE`, no new terminal tab or app. A window outside AgentDeck is one the user \
+cannot see or stop from here.";
+
+/// `BROWSER` of the agent's process: tools that honor it (Python `webbrowser`, Vite, create-react-app)
+/// open their page in the panel (`POST <hook url>/open`, see `hooks_server::OPEN_PATH`) instead of the
+/// system browser. Token and pane id come from the pane's env, so the file holds no secret.
+// shortcut: Windows only, and a URL with `&` but no space is split by cmd before it gets here; port a
+// small exe or a sh script if that matters.
+const OPEN_CMD: &str = "@echo off\r\n\
+rem AgentDeck: shows %1 in this pane's browser panel instead of the system browser.\r\n\
+echo(%~1| curl.exe -s -m 3 -o NUL -H \"X-AgentDeck-Token: %AGENTDECK_HOOK_TOKEN%\" \
+-H \"X-AgentDeck-Pane: %AGENTDECK_PANE_ID%\" --data-binary @- \"%AGENTDECK_HOOK_URL%/open\"\r\n";
 /// Phone viewport of the mobile preview, in logical pixels.
 const PHONE_WIDTH: f32 = 390.0;
 const PHONE_HEIGHT: f32 = 844.0;
@@ -210,6 +242,8 @@ pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -
     let [_, r, g, b] = palette(cx).base.to_be_bytes();
     let builder = wry::WebViewBuilder::new_with_web_context(&mut context)
         .with_url(START_URL)
+        // Opened by an agent's tool call while the user types elsewhere: never take the focus.
+        .with_focused(false)
         .with_background_color((r, g, b, 255));
     #[cfg(windows)]
     let builder = {
@@ -217,19 +251,28 @@ pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -
         builder.with_additional_browser_args(format!("{WRY_ARGS} --remote-debugging-port={port}"))
     };
     let webview = WebView::build(builder, window, cx).map_err(|e| format!("cannot open the browser: {e}"))?;
-    // Hidden natively only: the panel's prepaint shows it again at its bounds.
-    let _ = webview.raw().set_visible(false);
+    // Off-screen until the panel's prepaint shows it at its bounds; usable by the agent meanwhile.
+    park(&webview);
     let view = cx.new(|_| webview);
     cx.default_global::<Browsers>().0.insert(pane_id.to_owned(), Browser { view, port, _context: context });
     Ok(())
 }
 
-/// Writes the pane's MCP config and returns the Claude args that connect the agent to its browser
-/// (`--mcp-config <file>`). Every Claude pane starts with them: chrome-devtools-mcp only connects on a
-/// tool call, so the webview is opened and closed later without restarting the agent.
+/// Agents that can be given the browser MCP server at spawn. Grok only reads MCP servers from its
+/// global or project config file, which AgentDeck does not edit.
+pub fn supported(agent: AgentKind) -> bool {
+    matches!(agent, AgentKind::Claude | AgentKind::Codex | AgentKind::Gemini | AgentKind::OpenCode)
+}
+
+/// Writes the pane's MCP config and returns the args and env that connect `agent` to its browser, each
+/// through its own channel: Claude `--mcp-config` (+ the role prompt), Codex `-c mcp_servers.browser`,
+/// Gemini its AgentDeck defaults layer (`agents::gemini_env`, port from the env), OpenCode
+/// `OPENCODE_CONFIG_CONTENT` (+ the role as instructions). Every such pane starts with them:
+/// chrome-devtools-mcp only connects on a tool call, so the webview is opened and closed later
+/// without restarting the agent.
 // shortcut: the port is only bound when the panel is opened, another program could take it meanwhile;
 // reserve it (or restart on a clash) if that ever shows up.
-pub fn args(pane_id: &str, data_dir: &Path, cx: &App) -> Result<Vec<String>, String> {
+pub fn args(pane_id: &str, data_dir: &Path, agent: AgentKind, cx: &App) -> Result<(Vec<String>, Vec<(String, String)>), String> {
     valid_id(pane_id)?;
     let dir = data_dir.join("browser");
     let port = match cx.try_global::<Browsers>().and_then(|b| b.0.get(pane_id)) {
@@ -243,8 +286,63 @@ pub fn args(pane_id: &str, data_dir: &Path, cx: &App) -> Result<Vec<String>, Str
     // A file, not an inline argument: spawn args cannot hold quotes on Windows.
     let role = dir.join("role.md");
     std::fs::write(&role, ROLE).map_err(|e| format!("{}: {e}", role.display()))?;
-    let path = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
-    Ok(vec!["--mcp-config".into(), path(config), "--append-system-prompt-file".into(), path(role)])
+    let (args, mut env) = wiring(agent, port, &config, &role);
+    if cfg!(windows) {
+        let opener = dir.join("open.cmd");
+        std::fs::write(&opener, OPEN_CMD).map_err(|e| format!("{}: {e}", opener.display()))?;
+        env.push(("BROWSER".into(), opener.to_string_lossy().into_owned()));
+    }
+    Ok((args, env))
+}
+
+/// Args and env that give `agent` the browser server on `port` (see `args`).
+fn wiring(agent: AgentKind, port: u16, config: &Path, role: &Path) -> (Vec<String>, Vec<(String, String)>) {
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    let server = browser_server(&format!("http://127.0.0.1:{port}"));
+    match agent {
+        AgentKind::Claude => {
+            (vec!["--mcp-config".into(), path(config), "--append-system-prompt-file".into(), path(role)], Vec::new())
+        }
+        // TOML literal strings and no spaces survive cmd.exe + the npm .cmd shim (see `hub::agent_args`).
+        AgentKind::Codex => {
+            let quoted = |v: &Value| format!("'{}'", v.as_str().unwrap_or_default());
+            let args: Vec<String> = server["args"].as_array().into_iter().flatten().map(quoted).collect();
+            let entry = format!("mcp_servers.browser={{command={},args=[{}]}}", quoted(&server["command"]), args.join(","));
+            (vec!["-c".into(), entry], Vec::new())
+        }
+        AgentKind::Gemini => (Vec::new(), vec![(BROWSER_PORT_ENV.into(), port.to_string())]),
+        AgentKind::OpenCode => {
+            let command: Vec<Value> =
+                std::iter::once(server["command"].clone()).chain(server["args"].as_array().into_iter().flatten().cloned()).collect();
+            let content = json!({
+                "mcp": { "browser": { "type": "local", "command": command } },
+                "instructions": [path(role)],
+            });
+            (Vec::new(), vec![("OPENCODE_CONFIG_CONTENT".into(), content.to_string())])
+        }
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+/// Hides the webview by moving it off-screen, still natively visible: WebView2 freezes a hidden view
+/// (no paint, throttled timers, screenshots that never come), and the agent drives it while its panel
+/// is not on screen. The wrapper's own flag goes off, so the panel's next prepaint puts it back.
+fn park(view: &WebView) {
+    let _ = view.set_visible(false);
+    let raw = view.raw();
+    // Keeps the last shown size: pages lay out and screenshots come at the panel's size.
+    let size = raw
+        .bounds()
+        .map(|b| b.size)
+        .ok()
+        .filter(|size| match size {
+            wry::dpi::Size::Physical(p) => p.width > 0 && p.height > 0,
+            wry::dpi::Size::Logical(l) => l.width > 0.0 && l.height > 0.0,
+        })
+        .unwrap_or_else(|| wry::dpi::LogicalSize::new(1280.0, 800.0).into());
+    let position = wry::dpi::LogicalPosition::new(-30000.0, -30000.0).into();
+    let _ = raw.set_bounds(wry::Rect { position, size });
+    let _ = raw.set_visible(true);
 }
 
 /// Header controls: "back", "forward", "reload", or an http(s) URL to open.
@@ -298,20 +396,7 @@ fn free_port() -> Result<u16, String> {
 }
 
 fn config_for(port: u16) -> Value {
-    let mut args = vec![
-        "-y".to_string(),
-        "chrome-devtools-mcp@latest".into(),
-        "--browserUrl".into(),
-        format!("http://127.0.0.1:{port}"),
-    ];
-    // npx is a .cmd script on Windows: Claude Code can only start it through cmd.
-    let command = if cfg!(windows) {
-        args.splice(0..0, ["/c".to_string(), "npx".into()]);
-        "cmd"
-    } else {
-        "npx"
-    };
-    json!({ "mcpServers": { "browser": { "command": command, "args": args } } })
+    json!({ "mcpServers": { "browser": browser_server(&format!("http://127.0.0.1:{port}")) } })
 }
 
 /// DevTools protocol calls that turn mobile emulation on or off: user agent and touch.
@@ -484,8 +569,7 @@ impl BrowserPanel {
 
     fn hide_native(&self, cx: &App) {
         if let Ok(view) = browser_view(&self.pane_id, cx) {
-            // Through the wrapper: a raw hide would leave its "already shown" cache stale.
-            let _ = view.read(cx).set_visible(false);
+            park(view.read(cx));
         }
         self.hidden.set(true);
     }
@@ -622,10 +706,12 @@ impl Render for BrowserPanel {
                         hidden.set(false);
                         // A native webview sits above every GPUI layer: hide it while a dialog is open.
                         let dialog = window.has_active_dialog(cx);
-                        webview.update(cx, |w, _| {
-                            if w.visible() == dialog {
-                                let _ = w.set_visible(!dialog);
+                        webview.update(cx, |w, _| match (w.visible(), dialog) {
+                            (true, true) => park(w),
+                            (false, false) => {
+                                let _ = w.set_visible(true);
                             }
+                            _ => {}
                         });
                     },
                     |_, _, _, _| {},
@@ -660,7 +746,7 @@ impl Render for BrowserPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{MOBILE_UA, Value, browser_config_port, config_for, mobile_emulation, notes_prompt, parse_url, valid_id};
+    use super::{AgentKind, MOBILE_UA, Path, Value, browser_config_port, config_for, mobile_emulation, notes_prompt, parse_url, valid_id, wiring};
 
     #[test]
     fn page_notes_become_a_prompt() {
@@ -689,6 +775,23 @@ mod tests {
         assert_eq!(browser_config_port(&c.to_string()), Some(9333));
         assert!(valid_id("a-1").is_ok());
         assert!(valid_id("a b").is_err());
+    }
+
+    #[test]
+    fn every_supported_agent_gets_the_browser_server() {
+        let (config, role) = (Path::new("c.json"), Path::new("role.md"));
+        let (args, env) = wiring(AgentKind::Codex, 9333, config, role);
+        assert_eq!(args[0], "-c");
+        assert!(args[1].starts_with("mcp_servers.browser={command='"));
+        assert!(args[1].ends_with("'chrome-devtools-mcp@latest','--browserUrl','http://127.0.0.1:9333']}"));
+        assert!(!args[1].contains(' ') && env.is_empty());
+        let (args, env) = wiring(AgentKind::OpenCode, 9333, config, role);
+        let content: Value = serde_json::from_str(&env[0].1).unwrap();
+        assert!(args.is_empty() && env[0].0 == "OPENCODE_CONFIG_CONTENT");
+        assert_eq!(content["mcp"]["browser"]["command"].as_array().unwrap().last().unwrap(), "http://127.0.0.1:9333");
+        assert_eq!(content["instructions"][0], "role.md");
+        assert_eq!(wiring(AgentKind::Gemini, 9333, config, role).1, vec![("AGENTDECK_BROWSER_PORT".into(), "9333".into())]);
+        assert_eq!(wiring(AgentKind::Claude, 9333, config, role).0[0], "--mcp-config");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::hooks_server::{HookServer, TOKEN_HEADER};
+use crate::hooks_server::{BROWSER_PORT_ENV, HookServer, TOKEN_HEADER, browser_server};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -331,6 +331,7 @@ pub fn gemini_env(app_data: &Path, hooks: &HookServer) -> Option<(&'static str, 
                 return Err(format!("{}: not a JSON object", base.display()));
             }
             merge_gemini_hooks(&mut settings, &hooks.url());
+            merge_gemini_browser(&mut settings);
             let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
             Ok(Some(
                 text + "
@@ -545,6 +546,17 @@ fn merge_gemini_hooks(settings: &mut Value, url: &str) {
     }
 }
 
+/// The pane's browser panel server; Gemini expands the port from the pane's env, so one file serves every pane.
+fn merge_gemini_browser(settings: &mut Value) {
+    let url = format!("http://127.0.0.1:${{{BROWSER_PORT_ENV}}}");
+    let obj = settings.as_object_mut().expect("checked object");
+    let servers = obj.entry("mcpServers").or_insert_with(|| json!({}));
+    if !servers.is_object() {
+        *servers = json!({});
+    }
+    servers["browser"] = browser_server(&url);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,6 +717,7 @@ mod tests {
             text.contains(GEMINI_HOOK_NAME)
                 && text.contains(":47801/hook")
                 && !text.contains("tok\"")
+                && text.contains("127.0.0.1:${AGENTDECK_BROWSER_PORT}")
         );
         // Idempotent: a second pane on the same port yields the same file.
         gemini_env(&dir, &hooks).unwrap();
