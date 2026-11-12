@@ -506,6 +506,8 @@ impl Render for PermissionBanner {
         let Some(pane) = self.deck.read(cx).state.panes.get(&request.pane_id).cloned() else {
             return div();
         };
+        // The floating banner (permission and question cards) must not sit under a native webview.
+        crate::browser::popup_shown();
         let more = requests.len() - 1;
         let card = self.card(&request, cx);
         div()

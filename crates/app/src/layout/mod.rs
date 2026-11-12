@@ -147,6 +147,13 @@ pub fn is_detached(pane_id: &str, cx: &App) -> bool {
         .is_some_and(|shell| shell.read(cx).detached.contains_key(pane_id))
 }
 
+/// The activity panel is showing (its timers count seconds).
+pub fn activity_open(cx: &App) -> bool {
+    cx.try_global::<Shell>()
+        .and_then(|s| s.0.upgrade())
+        .is_some_and(|shell| shell.read(cx).activity_open)
+}
+
 /// Root view of the main window.
 pub struct DeckView {
     deck: Entity<Deck>,
@@ -318,7 +325,6 @@ impl DeckView {
                 crate::browser::close(pane_id, cx);
             }
             PaneHeaderEvent::OpenSkills => crate::skills::open_skills(self.deck.clone(), pane_id, window, cx),
-            PaneHeaderEvent::OpenNotes => crate::skills::open_notes(self.deck.clone(), pane_id, window, cx),
             PaneHeaderEvent::OpenGit => self.open_git(pane_id, window, cx),
         }
     }

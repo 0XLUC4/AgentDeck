@@ -26,6 +26,10 @@ const MAX_WAIT_S: u64 = 600;
 const MAX_LINES: u64 = 200;
 /// Characters of each finished agent's summary returned by wait_for.
 const MAX_SUMMARY: usize = 1500;
+/// Appended to every prompt sent to a worker: the orchestrator builds once after all agents finish.
+pub const NO_BUILD_NOTE: &str = "\n\n[AgentDeck] Do not build, run or test the whole project (no cargo build, \
+cargo check, cargo test, npm run build, etc.): the orchestrator builds and verifies once after all agents \
+finish. Only run a test if this task is explicitly a test.";
 
 /// What the tools need from the app. The real host bridges to the frontend; tests fake it.
 pub trait Host {
@@ -174,7 +178,7 @@ fn definitions() -> Value {
         ),
         tool(
             "close_agent",
-            "Stops an agent and closes its pane. Its worktree and files stay on disk.",
+            "Stops an agent and closes its pane. Its worktree is removed only when already merged (see worktreeRemoved); files stay on disk otherwise.",
             json!({ "paneId": pane }),
             &["paneId"]
         ),
@@ -214,12 +218,12 @@ fn run(name: &str, args: &Value, host: &impl Host) -> Result<Value, String> {
         "list_agents" | "find_conflicts" => host.frontend(name, &json!({})),
         "queue_prompt" => host.frontend(
             name,
-            &json!({ "paneId": pane_arg(args)?, "text": prompt_arg(args)? }),
+            &json!({ "paneId": pane_arg(args)?, "text": worker_prompt(prompt_arg(args)?) }),
         ),
         "spawn_agent" => host.frontend(name, &spawn_args(args)?),
         "send_prompt" => {
             let pane_id = pane_arg(args)?;
-            let text = prompt_arg(args)?;
+            let text = worker_prompt(prompt_arg(args)?);
             let submit = bool_arg(args, "submit", true)?;
             let result = host.frontend(
                 name,
@@ -412,12 +416,39 @@ fn uint_arg(args: &Value, key: &str, default: u64, max: u64) -> Result<u64, Stri
     }
 }
 
-/// Last `n` non-blank-trailing lines of terminal output, ANSI stripped.
+/// `text` with the no-build note, once.
+fn worker_prompt(text: &str) -> String {
+    if text.contains(NO_BUILD_NOTE.trim_start()) {
+        text.to_owned()
+    } else {
+        format!("{text}{NO_BUILD_NOTE}")
+    }
+}
+
+/// Last `n` non-blank-trailing lines of terminal output, ANSI stripped and TUI redraw noise removed.
 pub fn last_lines(raw: &str, n: usize) -> String {
     let mut text = String::new();
     crate::history::ansi::Stripper::default().push(raw, &mut text);
-    let lines: Vec<&str> = text.trim_end().lines().map(str::trim_end).collect();
+    let lines = clean_lines(text.trim_end());
     lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+/// Drops lines made only of spinner/box glyphs and collapses consecutive duplicates (TUI redraws).
+fn clean_lines(text: &str) -> Vec<&str> {
+    let glyph = |c: char| {
+        c.is_whitespace()
+            || ('\u{2500}'..='\u{259F}').contains(&c) // box drawing, blocks
+            || ('\u{2800}'..='\u{28FF}').contains(&c) // braille spinners
+            || "·•●○◐◓◑◒✢✳✶✻✽*|/-\\".contains(c)
+    };
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines().map(str::trim_end) {
+        let noise = !line.is_empty() && line.chars().all(glyph);
+        if !noise && lines.last() != Some(&line) {
+            lines.push(line);
+        }
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -677,5 +708,23 @@ mod tests {
         let body: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["output"], "b\nc");
         assert_eq!(last_lines("x\ny", 200), "x\ny");
+    }
+
+    #[test]
+    fn clean_lines_drops_redraw_noise() {
+        let raw = "a\n\u{2847}\n\u{256D}\u{2500}\u{256E}\na\na\n\n\nb";
+        assert_eq!(clean_lines(raw), ["a", "", "b"]);
+        assert_eq!(clean_lines("x\n  \u{2502} y \u{2502}"), ["x", "  \u{2502} y \u{2502}"]);
+    }
+
+    #[test]
+    fn prompts_get_the_no_build_note_once() {
+        let host = Fake::default();
+        tool(&host, "send_prompt", json!({ "paneId": "p1", "text": "go" }));
+        let noted = format!("go{NO_BUILD_NOTE}");
+        tool(&host, "queue_prompt", json!({ "paneId": "p1", "text": noted }));
+        let calls = host.calls.borrow();
+        assert_eq!(calls[0].1["text"], noted);
+        assert_eq!(calls[1].1["text"], noted);
     }
 }

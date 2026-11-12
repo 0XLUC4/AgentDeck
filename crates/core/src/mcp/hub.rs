@@ -7,7 +7,7 @@
 //! of their own. Grok has no CLI override: its scan of `~/.claude.json` is turned off in its panes.
 //!
 //! The hub answers `initialize` from the upstream's cached handshake, forwards requests under its own
-//! ids (one session shared by all panes) and runs `tools/call` one at a time.
+//! ids (one session shared by all panes). `tools/call` runs one at a time only for `serialize` servers.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -44,6 +44,9 @@ pub struct HubServer {
     pub env: HashMap<String, String>,
     pub url: String,
     pub headers: HashMap<String, String>,
+    /// Runs `tools/call` one at a time (others run concurrently). Roblox Studio always is: see [`Upstream::start`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub serialize: bool,
 }
 
 static SERVERS: LazyLock<Mutex<Vec<HubServer>>> = LazyLock::new(Default::default);
@@ -293,7 +296,7 @@ fn handle(name: &str, msg: &Value) -> Option<Value> {
                 return Ok(json!({ "jsonrpc": "2.0", "id": id, "result": up.init }));
             }
             // Two agents editing the same place at once is how Studio state gets mixed up.
-            let _turn = (method == "tools/call").then(|| lock(&up.calls));
+            let _turn = (method == "tools/call" && up.serialize).then(|| lock(&up.calls));
             up.request(method, msg.get("params"), CALL_TIMEOUT)
                 .map(|mut reply| {
                     reply["id"] = id.clone();
@@ -330,6 +333,7 @@ struct Upstream {
     /// The upstream's `initialize` result, replayed to every agent.
     init: Value,
     calls: Mutex<()>,
+    serialize: bool,
 }
 
 enum Link {
@@ -351,6 +355,8 @@ impl Upstream {
             next: AtomicU64::new(1),
             init: Value::Null,
             calls: Mutex::new(()),
+            // Saved and pasted Roblox Studio servers predate the flag: matched by name too.
+            serialize: server.serialize || server.name.to_ascii_lowercase().contains("roblox"),
         };
         let params = json!({
             "protocolVersion": PROTOCOL,

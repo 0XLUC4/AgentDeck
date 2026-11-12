@@ -19,6 +19,7 @@ use crate::AppHandle;
 const PART_BYTES: u64 = 5 * 1024 * 1024;
 const KEEP: Duration = Duration::from_secs(30 * 24 * 3600);
 const MAX_TOTAL_BYTES: u64 = 500 * 1024 * 1024;
+const JOURNAL_KEEP_DAYS: u64 = 90;
 const PURGE_EVERY: Duration = Duration::from_secs(3600);
 const SEARCH_BUDGET: Duration = Duration::from_secs(3);
 const FLUSH_EVERY: Duration = Duration::from_secs(2);
@@ -37,6 +38,7 @@ pub fn init(app: &AppHandle) {
         return;
     };
     journal::init(&data);
+    let journal_dir = data.join("journal");
     let root = data.join("history");
     if let Err(e) = fs::create_dir_all(&root) {
         eprintln!("history: cannot create {}: {e}", root.display());
@@ -50,6 +52,7 @@ pub fn init(app: &AppHandle) {
                 modified.elapsed().is_ok_and(|age| age > KEEP)
             });
             purge_oversize(&root, MAX_TOTAL_BYTES);
+            journal::purge(&journal_dir, chrono::Local::now().date_naive(), JOURNAL_KEEP_DAYS);
             std::thread::sleep(PURGE_EVERY);
         }
     });

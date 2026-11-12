@@ -3,10 +3,14 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+pub mod worktree_prep;
 
 use crate::hooks_server::{BROWSER_PORT_ENV, HookServer, TOKEN_HEADER, browser_server};
 
@@ -185,6 +189,15 @@ pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Main checkout of an AgentDeck worktree (`<parent>/<repo>-agentdeck-<id>`, see [`create_worktree_with`]),
+/// `None` for any other folder.
+pub fn agentdeck_worktree_root(cwd: &Path) -> Option<PathBuf> {
+    let name = cwd.file_name()?.to_str()?;
+    let (repo, _) = name.rsplit_once("-agentdeck-")?;
+    let root = cwd.parent()?.join(repo);
+    (cwd.join(".git").is_file() && root.join(".git").is_dir()).then_some(root)
+}
+
 /// Creates (or reuses) the dedicated git worktree for the pane and returns its path.
 pub fn create_worktree(cwd: &str, pane_id: &str) -> Result<String, String> {
     create_worktree_with(cwd, pane_id, "")
@@ -250,20 +263,107 @@ pub fn create_worktree_with(cwd: &str, pane_id: &str, setup: &str) -> Result<Str
     if target.is_dir() {
         return Ok(target_str); // restart / restored session: reuse this pane's worktree
     }
-    git(
-        &root,
-        &[
-            "worktree",
-            "add",
-            &target_str,
-            "-b",
-            &format!("agentdeck/{short}"),
-        ],
-    )?;
+    let branch = format!("agentdeck/{short}");
+    if !claim_spare(&root, &target, &branch) {
+        git(&root, &["worktree", "add", &target_str, "-b", &branch])?;
+        worktree_prep::prepare(&root, &target)?;
+    }
+    refill_spare(root.clone());
     if !setup.trim().is_empty() {
         run_setup(setup.trim(), &target, &root)?;
     }
     Ok(target_str)
+}
+
+/// Setup command for new worktrees of `main_root`: the repo's own `.agentdeck/setup.ps1` (Windows),
+/// `setup.sh` or `setup` script when there is one, else the global `settings.worktree_setup`.
+pub fn repo_setup_command(main_root: &Path, global: &str) -> String {
+    let dir = main_root.join(".agentdeck");
+    let ps1 = cfg!(windows).then_some("setup.ps1");
+    for name in ps1.into_iter().chain(["setup.sh", "setup"]) {
+        let path = dir.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let path = path.to_string_lossy();
+        return if name == "setup.ps1" {
+            format!("powershell -NoProfile -ExecutionPolicy Bypass -File \"{path}\"")
+        } else {
+            format!("sh \"{}\"", path.replace('\\', "/"))
+        };
+    }
+    global.to_owned()
+}
+
+/// One spare worktree per repo is made in the background after a worktree spawn, so the next
+/// spawn renames it instead of waiting for `git worktree add`. Off in tests (no stray threads).
+const SPARE_WORKTREE: bool = !cfg!(test);
+/// An older spare (or one whose commit is no longer the repo's HEAD) is removed, not reused.
+const SPARE_TTL: Duration = Duration::from_secs(5 * 60);
+
+struct Spare {
+    path: PathBuf,
+    branch: String,
+    head: String,
+    made: Instant,
+}
+
+/// Spares by main checkout; `None` = being made.
+static SPARES: Mutex<Vec<(PathBuf, Option<Spare>)>> = Mutex::new(Vec::new());
+
+fn remove_worktree(root: &Path, path: &Path, branch: &str) {
+    let _ = git(root, &["worktree", "remove", "--force", &path.to_string_lossy()]);
+    let _ = git(root, &["branch", "-D", branch]);
+}
+
+/// Moves the repo's ready spare to `target` on `branch`: true when the worktree is there.
+/// A stale spare (older than [`SPARE_TTL`], other commit) is removed instead.
+fn claim_spare(root: &Path, target: &Path, branch: &str) -> bool {
+    let spare = SPARES.lock().ok().and_then(|mut spares| {
+        let i = spares.iter().position(|(r, s)| r == root && s.is_some())?;
+        spares.remove(i).1
+    });
+    let Some(spare) = spare else { return false };
+    let fresh = spare.made.elapsed() < SPARE_TTL && git(root, &["rev-parse", "HEAD"]).is_ok_and(|h| h == spare.head);
+    if !fresh || git(root, &["worktree", "move", &spare.path.to_string_lossy(), &target.to_string_lossy()]).is_err() {
+        remove_worktree(root, &spare.path, &spare.branch);
+        return false;
+    }
+    if git(root, &["branch", "-m", &spare.branch, branch]).is_err() {
+        remove_worktree(root, target, &spare.branch);
+        return false;
+    }
+    true
+}
+
+/// Starts making the repo's spare worktree (branch `agentdeck/<new id>`) unless one exists.
+/// shortcut: a spare left when AgentDeck quits stays on disk as a normal agentdeck worktree.
+fn refill_spare(root: PathBuf) {
+    if !SPARE_WORKTREE {
+        return;
+    }
+    match SPARES.lock() {
+        Ok(mut spares) if !spares.iter().any(|(r, _)| *r == root) => spares.push((root.clone(), None)),
+        _ => return,
+    }
+    std::thread::spawn(move || {
+        let id: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
+        let branch = format!("agentdeck/{id}");
+        let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let path = root.parent().unwrap_or(&root).join(format!("{name}-agentdeck-{id}"));
+        let made = git(&root, &["worktree", "add", &path.to_string_lossy(), "-b", &branch])
+            .and_then(|_| worktree_prep::prepare(&root, &path))
+            .and_then(|()| git(&path, &["rev-parse", "HEAD"]));
+        if made.is_err() {
+            remove_worktree(&root, &path, &branch);
+        }
+        if let Ok(mut spares) = SPARES.lock() {
+            spares.retain(|(r, _)| *r != root);
+            if let Ok(head) = made {
+                spares.push((root, Some(Spare { path, branch, head, made: Instant::now() })));
+            }
+        }
+    });
 }
 
 /// Extra CLI args that wire `kind` to the hook server (prepended to user args).
@@ -562,6 +662,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn repo_setup_script_wins_over_global() {
+        let root = std::env::temp_dir().join(format!("agentdeck-setup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".agentdeck")).unwrap();
+        assert_eq!(repo_setup_command(&root, "pnpm install"), "pnpm install");
+        std::fs::write(root.join(".agentdeck/setup.sh"), "pnpm i").unwrap();
+        let cmd = repo_setup_command(&root, "pnpm install");
+        assert!(cmd.starts_with("sh \"") && cmd.ends_with("/.agentdeck/setup.sh\"") && !cmd.contains('\\'), "{cmd}");
+        if cfg!(windows) {
+            std::fs::write(root.join(".agentdeck/setup.ps1"), "pnpm i").unwrap();
+            assert!(repo_setup_command(&root, "").contains("-File"));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn merge_is_idempotent_and_keeps_user_hooks() {
         let user = json!({ "type": "command", "command": "echo hi" });
         let mut s = json!({
@@ -813,6 +928,8 @@ mod tests {
         let path = create_worktree(&repo.join("sub").to_string_lossy(), "abcdef12-3456").unwrap();
         assert_eq!(Path::new(&path), base.join("proj-agentdeck-abcdef12"));
         assert!(Path::new(&path).join(".git").exists());
+        assert_eq!(agentdeck_worktree_root(Path::new(&path)), Some(repo.clone()));
+        assert_eq!(agentdeck_worktree_root(&repo), None);
 
         // Setup runs once in the new worktree, with the main checkout in AGENTDECK_ROOT.
         let write_root = if cfg!(windows) {

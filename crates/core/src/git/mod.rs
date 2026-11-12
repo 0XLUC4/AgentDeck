@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -29,6 +29,67 @@ type StatusSlot = Arc<Mutex<Option<(Instant, GitStatus)>>>;
 /// Last status per root; the per-root mutex also coalesces concurrent calls.
 static STATUS_CACHE: LazyLock<Mutex<HashMap<PathBuf, StatusSlot>>> =
     LazyLock::new(Default::default);
+/// Last (HEAD or empty tree, snapshot tree) per root: per-file diffs reuse it for `STATUS_TTL`.
+static TREE_CACHE: LazyLock<Mutex<HashMap<PathBuf, (Instant, String, String)>>> =
+    LazyLock::new(Default::default);
+
+/// Heavy git work (snapshot, numstat) running at once, all repos together: 10 agents finishing
+/// together must not start ~100 git processes.
+const HEAVY_SLOTS: usize = 3;
+static HEAVY: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+
+/// One of the `HEAVY_SLOTS`, released on drop (unwinding included). Never held across another acquire.
+struct HeavySlot;
+
+impl HeavySlot {
+    fn acquire() -> Self {
+        let (busy, freed) = &HEAVY;
+        let mut busy = busy.lock().unwrap_or_else(PoisonError::into_inner);
+        while *busy >= HEAVY_SLOTS {
+            busy = freed.wait(busy).unwrap_or_else(PoisonError::into_inner);
+        }
+        *busy += 1;
+        HeavySlot
+    }
+}
+
+impl Drop for HeavySlot {
+    fn drop(&mut self) {
+        let (busy, freed) = &HEAVY;
+        *busy.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+        freed.notify_one();
+    }
+}
+
+/// Big generated folders that make `git add -A` crawl when they are not ignored.
+const HEAVY_DIRS: [&str; 6] = ["node_modules", "target", "dist", "build", ".venv", ".next"];
+const IGNORE_TTL: Duration = Duration::from_secs(60);
+static HUGE_CACHE: LazyLock<Mutex<HashMap<PathBuf, (Instant, Vec<String>)>>> =
+    LazyLock::new(Default::default);
+
+/// `HEAVY_DIRS` present at `root` and not ignored by git; cached per root for `IGNORE_TTL`.
+fn huge_untracked(root: &Path) -> Vec<String> {
+    if let Some((at, dirs)) = HUGE_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(root)
+        && at.elapsed() < IGNORE_TTL
+    {
+        return dirs.clone();
+    }
+    let dirs: Vec<String> = HEAVY_DIRS
+        .iter()
+        .filter(|d| root.join(d).is_dir())
+        // check-ignore exits 0 when ignored, 1 when not.
+        .filter(|d| run(root, &["check-ignore", "-q", &format!("{d}/")], None).is_err())
+        .map(|d| d.to_string())
+        .collect();
+    HUGE_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(root.to_path_buf(), (Instant::now(), dirs.clone()));
+    dirs
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +115,8 @@ pub struct GitStatus {
     /// Linked worktree on an `agentdeck/*` branch: merge and removal are allowed.
     pub agent_worktree: bool,
     pub files: Vec<FileChange>,
+    /// Big folders (e.g. `node_modules`) at the root not in `.gitignore`: left out of `files`.
+    pub huge_untracked: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -84,13 +147,22 @@ pub struct Comparison {
 }
 
 /// Runs git in `dir` (which must be a worktree root, for `safe.directory`), optionally on another index.
+/// Never takes optional locks nor starts an auto gc/maintenance (an agent may be committing meanwhile).
 fn run(dir: &Path, args: &[&str], index: Option<&Path>) -> Result<String, String> {
+    run_git(dir, args, index, true)
+}
+
+fn run_git(dir: &Path, args: &[&str], index: Option<&Path>, no_auto_gc: bool) -> Result<String, String> {
     let safe = format!(
         "safe.directory={}",
         dir.to_string_lossy().replace('\\', "/")
     );
     let mut cmd = Command::new("git");
-    cmd.arg("-c").arg(safe).arg("-C").arg(dir).args(args);
+    cmd.arg("-c").arg(safe).env("GIT_OPTIONAL_LOCKS", "0");
+    if no_auto_gc {
+        cmd.args(["-c", "gc.auto=0", "-c", "maintenance.auto=false"]);
+    }
+    cmd.arg("-C").arg(dir).args(args);
     if let Some(index) = index {
         cmd.env("GIT_INDEX_FILE", index);
     }
@@ -264,12 +336,20 @@ fn snapshot_tree(root: &Path) -> Result<String, String> {
 
 /// `snapshot_tree` when the real index path (`real`) is already known.
 fn snapshot_from_index(root: &Path, real: &str) -> Result<String, String> {
+    let _slot = HeavySlot::acquire();
     let index = std::env::temp_dir().join(format!("agentdeck-index-{}", uuid::Uuid::new_v4()));
     // Seeding from the real index keeps git's stat cache: only changed files get hashed.
     if Path::new(real).is_file() {
         std::fs::copy(real, &index).map_err(|e| format!("copy index: {e}"))?;
     }
-    let tree = run(root, &["add", "-A"], Some(&index))
+    // shortcut: tracked files inside a skipped dir keep their old index entry (changes there are hidden).
+    let excludes: Vec<String> = huge_untracked(root)
+        .iter()
+        .map(|d| format!(":(exclude){d}"))
+        .collect();
+    let mut add = vec!["add", "-A", "--", "."];
+    add.extend(excludes.iter().map(String::as_str));
+    let tree = run(root, &add, Some(&index))
         .and_then(|_| run(root, &["write-tree"], Some(&index)));
     let _ = std::fs::remove_file(&index);
     Ok(tree?.trim().to_string())
@@ -319,6 +399,7 @@ fn parse_numstat(out: &str) -> HashMap<String, (Option<u32>, Option<u32>)> {
 
 /// Files changed between two tree-ish, with line counts.
 fn changes(root: &Path, from: &str, to: &str) -> Result<Vec<FileChange>, String> {
+    let _slot = HeavySlot::acquire();
     let out = run(
         root,
         &["diff", "--raw", "--numstat", "-z", "--no-renames", from, to],
@@ -364,6 +445,34 @@ fn invalidate_status() {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clear();
+    TREE_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+}
+
+fn remember_tree(root: &Path, from: &str, tree: &str) {
+    TREE_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(root.to_path_buf(), (Instant::now(), from.into(), tree.into()));
+}
+
+/// (HEAD or empty tree, snapshot tree), reused from the last status or diff for `STATUS_TTL`.
+fn head_and_tree(root: &Path) -> Result<(String, String), String> {
+    if let Some((at, from, tree)) = TREE_CACHE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(root)
+        && at.elapsed() < STATUS_TTL
+    {
+        return Ok((from.clone(), tree.clone()));
+    }
+    let info = repo_info(root)?;
+    let tree = snapshot_from_index(root, &info.index)?;
+    let from = info.head.unwrap_or_else(|| EMPTY_TREE.into());
+    remember_tree(root, &from, &tree);
+    Ok((from, tree))
 }
 
 /// 5 git processes (6 off the base branch): rev-parse, for-each-ref, [rev-list], add, write-tree, diff.
@@ -390,6 +499,7 @@ fn compute_status(root: &Path) -> Result<GitStatus, String> {
     }
     let tree = snapshot_from_index(root, &info.index)?;
     let from = info.head.unwrap_or_else(|| EMPTY_TREE.into());
+    remember_tree(root, &from, &tree);
     Ok(GitStatus {
         root: root.to_string_lossy().into_owned(),
         // Same rule as `agent_worktree`, from data already fetched.
@@ -398,6 +508,7 @@ fn compute_status(root: &Path) -> Result<GitStatus, String> {
                 .as_deref()
                 .is_some_and(|b| b.starts_with(BRANCH_PREFIX)),
         files: changes(root, &from, &tree)?,
+        huge_untracked: huge_untracked(root),
         branch,
         base,
         ahead,
@@ -657,6 +768,28 @@ fn remove_worktree(cwd: &str) -> Result<(), String> {
     run(&main, &["branch", "-D", &branch], None).map(drop)
 }
 
+/// Removes an agent worktree only when clean and fully merged into the main checkout's branch.
+fn remove_worktree_if_merged(cwd: &str) -> Result<bool, String> {
+    let Ok(root) = repo_root(cwd) else {
+        return Ok(false);
+    };
+    let Ok((branch, main)) = agent_worktree(&root) else {
+        return Ok(false);
+    };
+    if !run_trim(&root, &["status", "--porcelain"])?.is_empty() {
+        return Ok(false);
+    }
+    let target = current_branch(&main).unwrap_or_else(|| "HEAD".into());
+    let unmerged = run_trim(&main, &["rev-list", "--count", &format!("{target}..{branch}")])?;
+    if unmerged != "0" {
+        return Ok(false);
+    }
+    run(&main, &["worktree", "remove", &root.to_string_lossy()], None)?;
+    run(&main, &["worktree", "prune"], None)?;
+    run(&main, &["branch", "-d", &branch], None)?;
+    Ok(true)
+}
+
 /// Directory where a pane's agent runs: its worktree when it has one (see `agents::create_worktree`).
 /// Same key for a file in the main repo and in any agent worktree of it (`repo-agentdeck-1a2b3c4d/x`
 /// -> `repo/x`), lowercased with `/`: two agents editing it will meet at merge time.
@@ -838,9 +971,27 @@ pub fn git_status(cwd: String) -> Result<GitStatus, String> {
 /// Unified diff of one file: HEAD vs current working tree (untracked files included).
 pub fn git_diff(cwd: String, path: String) -> Result<String, String> {
     let root = repo_root(&cwd)?;
-    let tree = snapshot_tree(&root)?;
-    let from = head(&root).unwrap_or_else(|| EMPTY_TREE.into());
+    let (from, tree) = head_and_tree(&root)?;
     unified_diff(&root, &from, &tree, &path)
+}
+
+/// Files under `paths` (pathspecs) that are modified or untracked, one `git status`, no snapshot.
+/// Returned as git prints them: relative to the repo root, `/`-separated.
+pub fn git_dirty_paths(cwd: String, paths: Vec<String>) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = repo_root(&cwd)?;
+    let mut args = vec!["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let out = run(&root, &args, None)?;
+    // `XY path\0` records; paths are relative to the root.
+    Ok(out
+        .split('\0')
+        .filter_map(|rec| rec.get(3..))
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Unified diff of one file between two trees returned by `git_compare`.
@@ -969,6 +1120,15 @@ pub fn git_remove_worktree(cwd: String) -> Result<(), String> {
     res
 }
 
+/// `Ok(true)` when `cwd` was a clean, fully merged agent worktree and got removed (branch too).
+pub fn git_remove_worktree_if_merged(cwd: String) -> Result<bool, String> {
+    let res = remove_worktree_if_merged(&cwd);
+    if res != Ok(false) {
+        invalidate_status();
+    }
+    res
+}
+
 pub fn git_pane_dir(cwd: String, pane_id: String, worktree: bool) -> String {
     pane_dir(&cwd, &pane_id, worktree)
 }
@@ -1000,6 +1160,13 @@ pub fn git_restore_checkpoint(
 
 pub fn git_compare(cwd: String, other_cwd: String) -> Result<Comparison, String> {
     compare(&cwd, &other_cwd)
+}
+
+/// Packs loose refs (checkpoints pile up) then lets git's normal auto gc run. Call when agents are idle.
+pub fn git_pack_refs(cwd: String) -> Result<(), String> {
+    let root = repo_root(&cwd)?;
+    run(&root, &["pack-refs", "--all"], None)?;
+    run_git(&root, &["gc", "--auto"], None, false).map(drop)
 }
 
 #[cfg(test)]
@@ -1300,6 +1467,86 @@ mod tests {
             )
             .is_err()
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn remove_if_merged_keeps_dirty_or_unmerged_worktrees() {
+        let Some((base, repo)) = temp_repo() else {
+            return;
+        };
+        let wt = PathBuf::from(crate::agents::create_worktree(&s(&repo), "beefcafe").unwrap());
+        assert_eq!(git_remove_worktree_if_merged(s(&repo)), Ok(false)); // main checkout
+        std::fs::write(wt.join("f.txt"), "f\n").unwrap();
+        assert_eq!(git_remove_worktree_if_merged(s(&wt)), Ok(false)); // dirty
+        commit(&s(&wt), "feat").unwrap();
+        assert_eq!(git_remove_worktree_if_merged(s(&wt)), Ok(false)); // unmerged commit
+        assert!(wt.exists());
+        merge_worktree(&s(&wt)).unwrap();
+        assert_eq!(git_remove_worktree_if_merged(s(&wt)), Ok(true));
+        assert!(!wt.exists());
+        assert!(run(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/agentdeck/beefcafe"], None).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dirty_paths_lists_only_changed_files() {
+        let Some((base, repo)) = temp_repo() else {
+            return;
+        };
+        std::fs::write(repo.join("a.txt"), "changed\n").unwrap();
+        std::fs::write(repo.join("n.txt"), "new\n").unwrap();
+        let mut dirty = git_dirty_paths(s(&repo), vec!["a.txt".into(), "n.txt".into(), "x.txt".into()]).unwrap();
+        dirty.sort();
+        assert_eq!(dirty, ["a.txt", "n.txt"]);
+        assert!(git_dirty_paths(s(&repo), vec![]).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn heavy_slots_cap_concurrency() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NOW: AtomicUsize = AtomicUsize::new(0);
+        static MAX: AtomicUsize = AtomicUsize::new(0);
+        let threads: Vec<_> = (0..10)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let _slot = HeavySlot::acquire();
+                    MAX.fetch_max(NOW.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(20));
+                    NOW.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert!((1..=HEAVY_SLOTS).contains(&MAX.load(Ordering::SeqCst)));
+        // A panic while holding a slot gives it back.
+        let _ = std::thread::spawn(|| {
+            let _slot = HeavySlot::acquire();
+            panic!("boom");
+        })
+        .join();
+        drop([HeavySlot::acquire(), HeavySlot::acquire(), HeavySlot::acquire()]);
+    }
+
+    #[test]
+    fn unignored_heavy_dir_is_left_out_of_status() {
+        let Some((base, repo)) = temp_repo() else {
+            return;
+        };
+        std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+        for dir in ["node_modules", "target"] {
+            std::fs::create_dir_all(repo.join(dir)).unwrap();
+            std::fs::write(repo.join(dir).join("big.js"), "x\n").unwrap();
+        }
+        std::fs::write(repo.join("app.js"), "y\n").unwrap();
+        let st = status(&s(&repo)).unwrap();
+        assert_eq!(st.huge_untracked, ["node_modules"]);
+        let mut paths: Vec<_> = st.files.iter().map(|f| f.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, [".gitignore", "app.js"]);
         let _ = std::fs::remove_dir_all(&base);
     }
 

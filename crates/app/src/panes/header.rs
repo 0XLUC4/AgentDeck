@@ -33,7 +33,6 @@ pub enum PaneHeaderEvent {
     ToggleDetach,
     OpenGit,
     OpenSkills,
-    OpenNotes,
     /// Reveal the pane's browser panel.
     ShowBrowser,
     /// Right click on the browser button: close the browser panel.
@@ -65,11 +64,11 @@ pub fn confirm_close(pane_id: &str, window: &mut Window, cx: &mut App) {
     let id = pane_id.to_owned();
     let Some(agent) = runtime_pane_agent(&id, cx) else { return };
     if !is_busy(&id, now_ms(), cx) {
-        runtime::close_pane(&id, cx);
+        runtime::close_pane_from_ui(&id, cx);
         return;
     }
     let message = format!("{} is still working. Close anyway?", agent_name(agent));
-    confirm(message, "Close", window, cx, move |cx| runtime::close_pane(&id, cx));
+    confirm(message, "Close", window, cx, move |cx| runtime::close_pane_from_ui(&id, cx));
 }
 
 fn confirm_restart(pane_id: &str, window: &mut Window, cx: &mut App) {
@@ -633,10 +632,6 @@ impl PaneHeader {
                 t.child(
                     icon_button("skills", IconName::Puzzle, "Skills: see, edit, install (GitHub link), uninstall")
                         .on_click(emit(PaneHeaderEvent::OpenSkills)),
-                )
-                .child(
-                    icon_button("notes", IconName::NotebookPen, "Notes: the agent's instructions and memory files")
-                        .on_click(emit(PaneHeaderEvent::OpenNotes)),
                 )
             })
             .when(crate::browser::supported(pane.agent), |t| {

@@ -203,7 +203,7 @@ pub fn spawn_pane(
         }
     };
     cmd.cwd(&cwd);
-    set_agent_env(&mut cmd, &app, &state, &pane_id, agent, &env, trust);
+    set_agent_env(&mut cmd, &app, &state, &pane_id, agent, &env, trust, &cwd);
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     #[cfg(windows)]
@@ -235,6 +235,7 @@ pub fn spawn_pane(
 }
 
 /// Env of every agent process: AgentDeck's pane id and hook server, minus a parent Claude's session.
+#[allow(clippy::too_many_arguments)]
 fn set_agent_env(
     cmd: &mut CommandBuilder,
     app: &AppHandle,
@@ -243,6 +244,7 @@ fn set_agent_env(
     agent: AgentKind,
     env: &HashMap<String, String>,
     trust: bool,
+    cwd: &str,
 ) {
     // When AgentDeck itself is started from a Claude Code session, don't leak that session's
     // identity (messaging token/socket, child-session markers) into the agents we spawn.
@@ -258,6 +260,13 @@ fn set_agent_env(
     cmd.env("COLORTERM", "truecolor");
     for (key, value) in env {
         cmd.env(key, value);
+    }
+    // A worktree builds into the main checkout's target: no from-scratch compile per agent.
+    if !env.contains_key("CARGO_TARGET_DIR")
+        && std::env::var_os("CARGO_TARGET_DIR").is_none()
+        && let Some(root) = agents::agentdeck_worktree_root(std::path::Path::new(cwd))
+    {
+        cmd.env("CARGO_TARGET_DIR", root.join("target"));
     }
     // Grok documents no trust-file format, only this switch (docs/user-guide/10-hooks.md).
     if trust && agent == AgentKind::Grok {
@@ -297,7 +306,7 @@ pub fn pipe_command(
     }
     let args = [crate::mcp::hub::agent_args(agent), args.to_vec()].concat();
     let mut builder = agents::command_for(agent, &args);
-    set_agent_env(&mut builder, app, &state, pane_id, agent, env, trust);
+    set_agent_env(&mut builder, app, &state, pane_id, agent, env, trust, cwd);
     let argv = builder.get_argv();
     let mut cmd = std::process::Command::new(argv.first().ok_or("empty command")?);
     cmd.args(&argv[1..]).current_dir(cwd).env_clear();

@@ -72,7 +72,10 @@ this terminal: the user sees it there. Run a long-running one (dev server, watch
 background with your shell tool and read its output from there. NEVER open an external console or terminal \
 window: no `start cmd`, `start powershell`, `cmd /c start`, `Start-Process` without `-NoNewWindow`, `wt`, \
 `conhost`, `CREATE_NEW_CONSOLE`, no new terminal tab or app. A window outside AgentDeck is one the user \
-cannot see or stop from here.";
+cannot see or stop from here.
+
+These rules say where to test and run commands, not that you must: when your task says not to build, run \
+or test (an AgentDeck orchestrator sends that to its worker agents), do not, the orchestrator verifies after.";
 
 /// `BROWSER` of the agent's process: tools that honor it (Python `webbrowser`, Vite, create-react-app)
 /// open their page in the panel (`POST <hook url>/open`, see `hooks_server::OPEN_PATH`) instead of the
@@ -779,7 +782,7 @@ mod tests {
             .as_array()
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
-        assert!(args.ends_with(&["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9333"]));
+        assert!(args.ends_with(&[agentdeck_core::hooks_server::CHROME_DEVTOOLS_MCP, "--browserUrl", "http://127.0.0.1:9333"]));
         // The webview opened later takes the port the running agent was told.
         assert_eq!(browser_config_port(&c.to_string()), Some(9333));
         assert!(valid_id("a-1").is_ok());
@@ -792,7 +795,7 @@ mod tests {
         let (args, env) = wiring(AgentKind::Codex, 9333, config, role);
         assert_eq!(args[0], "-c");
         assert!(args[1].starts_with("mcp_servers.browser={command='"));
-        assert!(args[1].ends_with("'chrome-devtools-mcp@latest','--browserUrl','http://127.0.0.1:9333']}"));
+        assert!(args[1].ends_with(&format!("'{}','--browserUrl','http://127.0.0.1:9333']}}", agentdeck_core::hooks_server::CHROME_DEVTOOLS_MCP)));
         assert!(!args[1].contains(' ') && env.is_empty());
         let (args, env) = wiring(AgentKind::OpenCode, 9333, config, role);
         let content: Value = serde_json::from_str(&env[0].1).unwrap();
