@@ -85,12 +85,14 @@ pub fn quit(cx: &mut App) {
 
 /// Update restart: same cleanup, then starts `exe` and exits at once. The new exe is started only
 /// after the cleanup: it waits a limited time for the single-instance port, and a slow cleanup
-/// (pseudoconsoles, MCP servers) made it give up and exit, so nothing restarted.
+/// (pseudoconsoles, MCP servers) made it give up and exit, so nothing restarted. Our PID follows the
+/// flag: the new exe waits for this process to be fully gone before taking the port.
 pub fn quit_for_update(exe: &std::path::Path, cx: &mut App) -> Result<(), String> {
     stop_agents(cx);
     agentdeck_core::shutdown();
     std::process::Command::new(exe)
         .arg(super::instance::AFTER_UPDATE)
+        .arg(std::process::id().to_string())
         .spawn()
         .map_err(|e| format!("cannot restart AgentDeck: {e}"))?;
     exit_now()
