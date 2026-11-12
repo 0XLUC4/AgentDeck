@@ -638,7 +638,7 @@ impl PaneHeader {
                         .on_click(emit(PaneHeaderEvent::OpenNotes)),
                 )
             })
-            .when(pane.agent == AgentKind::Claude, |t| {
+            .when(crate::browser::supported(pane.agent), |t| {
                 let hint = if pane.browser {
                     "Show this agent's browser (right-click to close it)"
                 } else {
