@@ -8,6 +8,7 @@
 
 mod automations;
 mod browser;
+mod chat;
 mod git;
 mod history;
 mod layout;

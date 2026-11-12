@@ -362,6 +362,8 @@ impl DeckView {
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.reattach(&id, cx))),
                 )
                 .into_any_element()
+        } else if self.deck.read(cx).state.panes.get(view).is_some_and(|p| p.chat) {
+            crate::chat::view(view, &self.deck, window, cx).into_any_element()
         } else {
             // Cached: a hover elsewhere re-renders the deck, not every terminal grid (laggy mouse).
             // The terminal notifies on its own changes (output, focus, theme, deck).
