@@ -1,5 +1,5 @@
 //! Terminal emulator view for one pane (replaces xterm.js): alacritty_terminal parses the VT stream,
-//! [`element`] paints the grid on the GPU. Scrollback 5000, selection + copy, paste (text, images
+//! [`element`] paints the grid on the GPU. Scrollback 2000, selection + copy, paste (text, images
 //! saved to a temp file, copied files), file drop as agent refs, zoom (Ctrl+= / Ctrl+- / Ctrl+0),
 //! bracketed paste, mouse reporting, Ctrl+click on URLs, resize reported to the pty, find in the
 //! scrollback (Ctrl+Shift+F, [`search`]).
@@ -36,8 +36,9 @@ use crate::panes::runtime;
 use crate::state::Deck;
 use crate::theme::{hsla, palette, ui};
 
-/// Lines kept above the screen (xterm `scrollback: 5000`).
-const SCROLLBACK: usize = 5000;
+/// Lines kept above the screen. Each line holds a full row of cells: measured ~19 MB per pane at
+/// 160 columns with 5000 lines, ~8 MB with 2000.
+const SCROLLBACK: usize = 2000;
 /// Cursor blink half-period.
 const BLINK_MS: u64 = 530;
 /// Delay before a new size is sent to the pty (TerminalPane.tsx `resizeTimer`).
