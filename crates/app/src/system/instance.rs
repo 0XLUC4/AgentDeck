@@ -21,8 +21,14 @@ pub fn single_instance() -> Option<TcpListener> {
     let legacy_update = std::env::args().any(|a| a == "/R");
     // Read now: the old instance is about to quit, and its path is where this exe belongs.
     let old_exe = if legacy_update { other_instance_exe() } else { None };
+    let args: Vec<String> = std::env::args().collect();
+    // The old instance can take longer than the port wait below to die (GPU, audio, agent
+    // teardown): seeing its port still held, the new exe pinged it and exited, so nothing restarted.
+    if let Some(pid) = old_pid(&args) {
+        wait_for_exit(pid, Duration::from_secs(120));
+    }
     let mut bound = TcpListener::bind(("127.0.0.1", INSTANCE_PORT));
-    if legacy_update || std::env::args().any(|a| a == AFTER_UPDATE) {
+    if legacy_update || args.iter().any(|a| a == AFTER_UPDATE) {
         for _ in 0..200 {
             // Up to 20 s: the old instance stops its agents before it frees the port.
             if bound.is_ok() {
@@ -66,12 +72,41 @@ fn take_place_of(target: &std::path::Path) -> bool {
     let Ok(current) = std::env::current_exe() else { return false };
     for _ in 0..30 {
         if std::fs::copy(&current, target).is_ok() {
-            return std::process::Command::new(target).arg(AFTER_UPDATE).spawn().is_ok();
+            return std::process::Command::new(target)
+                .args([AFTER_UPDATE, &std::process::id().to_string()])
+                .spawn()
+                .is_ok();
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     false
 }
+
+/// PID of the instance being replaced: `--after-update <pid>` (older updaters pass no PID).
+fn old_pid(args: &[String]) -> Option<u32> {
+    let at = args.iter().position(|a| a == AFTER_UPDATE)?;
+    args.get(at + 1)?.parse().ok()
+}
+
+/// Blocks until process `pid` has fully exited (its handles, the instance port included, are
+/// closed), or `timeout` passes. Returns at once when the process is already gone.
+#[cfg(windows)]
+fn wait_for_exit(pid: u32, timeout: Duration) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    // SAFETY: the handle is checked, waited on, and closed once.
+    unsafe {
+        let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            return;
+        }
+        WaitForSingleObject(process, u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX));
+        CloseHandle(process);
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_for_exit(_pid: u32, _timeout: Duration) {}
 
 /// Path of another running agentdeck.exe (the instance holding the port), if any.
 #[cfg(windows)]
@@ -147,4 +182,18 @@ pub(super) fn listen(cx: &mut App) {
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AFTER_UPDATE, old_pid};
+
+    #[test]
+    fn old_pid_follows_the_after_update_flag() {
+        let args = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(old_pid(&args(&["agentdeck.exe", AFTER_UPDATE, "4242"])), Some(4242));
+        assert_eq!(old_pid(&args(&["agentdeck.exe", AFTER_UPDATE])), None); // older updater
+        assert_eq!(old_pid(&args(&["agentdeck.exe", AFTER_UPDATE, "x"])), None);
+        assert_eq!(old_pid(&args(&["agentdeck.exe", "4242"])), None);
+    }
 }
