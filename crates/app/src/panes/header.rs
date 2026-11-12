@@ -315,6 +315,7 @@ impl PaneHeader {
     }
 
     fn menu(&self, pane: &Pane, cx: &mut Context<Self>) -> AnyElement {
+        crate::browser::popup_shown();
         let p = palette(cx);
         let mut items: Vec<(IconName, SharedString, MenuAction, bool)> = [
             (IconName::Pencil, "Rename", MenuAction::Rename, false),
