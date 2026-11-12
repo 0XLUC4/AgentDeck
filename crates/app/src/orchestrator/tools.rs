@@ -1,14 +1,15 @@
-//! MCP tools that act on panes (src/lib/orchestrator.ts `handleMcpRequest`). The read-only tools
-//! (list_agents, get_status, get_result, wait_for) are answered by `state::Deck`; everything else
+//! MCP tools that act on panes or need git (src/lib/orchestrator.ts `handleMcpRequest`). The
+//! read-only tools (get_status, get_result, wait_for) are answered by `state::Deck`; everything else
 //! arriving as `mcp-request` is run here and answered with `mcp::mcp_respond`.
 
 use agentdeck_core::agents::AgentKind;
 use agentdeck_core::git;
 use agentdeck_core::hooks_server::PaneStatus;
-use agentdeck_core::logic::deck::{Pane, PaneSpec, new_id};
+use agentdeck_core::logic::deck::{Pane, PaneSpec, activity_key, new_id};
 use agentdeck_core::logic::queue::{QUEUE_AGENTS, ready_for_next};
 use agentdeck_core::logic::orchestrator::{
-    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, OUTPUT_TAIL_CHARS, assert_can_type, resolve_inside, scope_of, target,
+    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, OUTPUT_TAIL_CHARS, assert_can_type, named_files, resolve_inside, scope_of,
+    target,
 };
 use agentdeck_core::mcp;
 use std::collections::BTreeMap;
@@ -21,7 +22,9 @@ use super::runtime;
 use crate::state::{Deck, DeckEvent};
 
 /// Answered synchronously by `state::Deck`.
-const READ_TOOLS: [&str; 4] = ["list_agents", "get_status", "get_result", "wait_for"];
+const READ_TOOLS: [&str; 3] = ["get_status", "get_result", "wait_for"];
+/// list_agents names at most this many changed files per agent (the count is always given).
+const LISTED_FILES: usize = 50;
 
 /// Pauses or resumes the orchestrator: launch, send and interrupt are refused while paused.
 pub fn set_paused(deck: &Entity<Deck>, paused: bool, cx: &mut App) {
@@ -89,6 +92,23 @@ fn target_pane(deck: &Entity<Deck>, orchestrator_id: &str, args: &Value, cx: &As
     })
 }
 
+/// The other agents of the orchestrator's workspace.
+fn scope_panes(deck: &Entity<Deck>, orchestrator_id: &str, cx: &AsyncApp) -> Result<Vec<Pane>, String> {
+    deck.read_with(cx, |d, _| {
+        Ok(scope_of(&d.state, orchestrator_id)?.panes.iter().map(|(p, _)| (*p).clone()).collect())
+    })
+}
+
+/// Sends nothing itself: the result of a prompt tool, with the file warnings (computed after the send).
+async fn prompt_result(target: &Pane, text: String, panes: Vec<Pane>, mut result: Value, cx: &AsyncApp) -> Value {
+    let target = target.clone();
+    let warnings = blocking(cx, move || edit_warnings(&target, &text, &panes)).await;
+    if !warnings.is_empty() {
+        result["warnings"] = json!(warnings);
+    }
+    result
+}
+
 /// Runs a blocking backend call off the UI thread.
 async fn blocking<R: Send + 'static>(cx: &AsyncApp, job: impl FnOnce() -> R + Send + 'static) -> R {
     cx.background_executor().spawn(async move { job() }).await
@@ -96,6 +116,29 @@ async fn blocking<R: Send + 'static>(cx: &AsyncApp, job: impl FnOnce() -> R + Se
 
 async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
     match tool {
+        "list_agents" => {
+            let agents: Vec<(Pane, String)> = deck.read_with(cx, |d, _| -> Result<_, String> {
+                let scope = scope_of(&d.state, orchestrator_id)?;
+                Ok(scope.panes.iter().map(|(p, t)| ((*p).clone(), t.name.clone())).collect())
+            })?;
+            blocking(cx, move || {
+                let panes: Vec<Pane> = agents.iter().map(|(p, _)| p.clone()).collect();
+                let by_dir = folders(&panes);
+                let list = agents.iter().map(|(p, session)| {
+                    // A worktree agent works in its own folder, not the pane's launch cwd.
+                    let dir = pane_dir(p);
+                    let files = by_dir.get(&dir).map_or(&[][..], |(_, f)| f.as_slice());
+                    json!({
+                        "paneId": p.id, "agent": p.agent, "title": p.title,
+                        "status": activity_key(p).as_str(), "lastAction": p.last_action,
+                        "session": session, "cwd": dir, "worktree": p.worktree,
+                        "changedFiles": &files[..files.len().min(LISTED_FILES)], "changedCount": files.len(),
+                    })
+                });
+                Ok(Value::Array(list.collect()))
+            })
+            .await
+        }
         "spawn_agent" => {
             let (spec, tab_id) = deck.read_with(cx, |d, _| -> Result<_, String> {
                 let scope = scope_of(&d.state, orchestrator_id)?;
@@ -132,8 +175,9 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
             let pane = target_pane(deck, orchestrator_id, args, cx)?;
             assert_can_type(&pane)?;
             let (text, submit) = (arg(args, "text"), args["submit"] != false);
+            let panes = scope_panes(deck, orchestrator_id, cx)?;
             cx.update(|cx| runtime::send_prompt(&pane.id, &text, submit, cx));
-            Ok(json!({ "ok": true }))
+            Ok(prompt_result(&pane, text, panes, json!({ "ok": true }), cx).await)
         }
         "queue_prompt" => {
             let pane = target_pane(deck, orchestrator_id, args, cx)?;
@@ -141,6 +185,7 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
                 return Err(format!("{} reports no end of task: use wait_for then send_prompt", pane.title));
             }
             let text = arg(args, "text");
+            let panes = scope_panes(deck, orchestrator_id, cx)?;
             let sent = cx.update(|cx| {
                 // Same rule as the review queue: straight away when idle with nothing ahead.
                 let idle = deck.update(cx, |d, cx| {
@@ -155,7 +200,7 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
                 }
                 idle
             });
-            Ok(json!({ "ok": true, "sent": sent, "queued": !sent }))
+            Ok(prompt_result(&pane, text, panes, json!({ "ok": true, "sent": sent, "queued": !sent }), cx).await)
         }
         "find_conflicts" => {
             let panes: Vec<Pane> = deck.read_with(cx, |d, _| -> Result<_, String> {
@@ -233,16 +278,47 @@ fn pane_dir(pane: &Pane) -> String {
 /// Blocking: files changed in more than one git folder of `panes`. Agents sharing a folder share
 /// its changes, so only distinct folders (worktrees) count.
 fn find_conflicts(panes: &[Pane]) -> Vec<Value> {
-    let mut by_dir: BTreeMap<String, Vec<&Pane>> = BTreeMap::new();
+    let by_dir = folders(panes);
+    overlaps(by_dir.values().map(|(owners, files)| (files.clone(), owners.as_slice())).collect())
+}
+
+/// Blocking: the live agents of `panes` by git folder, with that folder's uncommitted files
+/// (git status is cached for a second, so back-to-back tools share one run).
+fn folders(panes: &[Pane]) -> BTreeMap<String, (Vec<&Pane>, Vec<String>)> {
+    let mut by_dir: BTreeMap<String, (Vec<&Pane>, Vec<String>)> = BTreeMap::new();
     for pane in panes.iter().filter(|p| !p.exited) {
-        by_dir.entry(pane_dir(pane)).or_default().push(pane);
+        by_dir.entry(pane_dir(pane)).or_default().0.push(pane);
     }
-    let changed = by_dir.iter().filter_map(|(dir, owners)| {
-        // Not a repository (or git failed): nothing to merge from there.
-        let files = git::git_status(dir.clone()).ok()?.files;
-        Some((files.into_iter().map(|f| f.path).collect(), owners.as_slice()))
-    });
-    overlaps(changed.collect())
+    for (dir, (_, files)) in &mut by_dir {
+        // Not a repository (or git failed): no changes to report.
+        *files = git::git_status(dir.clone()).map_or_else(|_| Vec::new(), |s| s.files.into_iter().map(|f| f.path).collect());
+    }
+    by_dir
+}
+
+/// Blocking: one warning per file the prompt names that another working agent is changing.
+/// No git call when no other agent is working.
+fn edit_warnings(target: &Pane, text: &str, panes: &[Pane]) -> Vec<String> {
+    let busy: Vec<Pane> = panes
+        .iter()
+        .filter(|p| p.id != target.id && p.status == PaneStatus::Working)
+        .cloned()
+        .collect();
+    if busy.is_empty() {
+        return Vec::new();
+    }
+    let mut warnings = Vec::new();
+    for (owners, files) in folders(&busy).values() {
+        for file in named_files(text, files) {
+            for owner in owners {
+                warnings.push(format!(
+                    "file {file} is being edited by agent {} ({}): prefer queue_prompt to {}",
+                    owner.id, owner.title, owner.id
+                ));
+            }
+        }
+    }
+    warnings
 }
 
 /// Paths present in at least two folders, with the agents of those folders.
