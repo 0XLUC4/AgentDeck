@@ -531,6 +531,8 @@ fn validate_extra_env(env: &HashMap<String, String>) -> Result<(), String> {
         }
         // Per-agent dev server port (settings.basePort), so parallel agents don't collide.
         "PORT" => v.parse::<u16>().is_ok_and(|port| port >= 1024),
+        // Gemini's browser panel DevTools port, expanded in its settings file.
+        crate::hooks_server::BROWSER_PORT_ENV => v.parse::<u16>().is_ok(),
         SSH_ENV => ssh_target(v).is_some(),
         _ => false,
     });
@@ -618,6 +620,8 @@ mod tests {
         assert!(v(&env("PORT", "4100")).is_ok());
         assert!(v(&env("PORT", "80")).is_err());
         assert!(v(&env("PORT", "41a")).is_err());
+        assert!(v(&env("AGENTDECK_BROWSER_PORT", "9333")).is_ok());
+        assert!(v(&env("AGENTDECK_BROWSER_PORT", "x")).is_err());
     }
 
     /// Input is written in the order it was queued, and the thread ends with its sender.
