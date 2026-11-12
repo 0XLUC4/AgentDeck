@@ -203,34 +203,7 @@ pub fn spawn_pane(
         }
     };
     cmd.cwd(&cwd);
-    // When AgentDeck itself is started from a Claude Code session, don't leak that session's
-    // identity (messaging token/socket, child-session markers) into the agents we spawn.
-    for (key, _) in std::env::vars_os() {
-        if key.to_str().is_some_and(is_parent_claude_var) {
-            cmd.env_remove(&key);
-        }
-    }
-    cmd.env("AGENTDECK_PANE_ID", &pane_id);
-    cmd.env("AGENTDECK_HOOK_URL", state.hooks.url());
-    cmd.env("AGENTDECK_HOOK_TOKEN", &state.hooks.token);
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    for (key, value) in &env {
-        cmd.env(key, value);
-    }
-    // Grok documents no trust-file format, only this switch (docs/user-guide/10-hooks.md).
-    if trust && agent == AgentKind::Grok {
-        cmd.env("GROK_FOLDER_TRUST", "0");
-    }
-    if let Some((key, value)) = crate::mcp::hub::agent_env(agent) {
-        cmd.env(key, value);
-    }
-    if agent == AgentKind::Gemini
-        && let Ok(data) = app.app_data_dir()
-        && let Some((key, path)) = agents::gemini_env(&data, &state.hooks)
-    {
-        cmd.env(key, path);
-    }
+    set_agent_env(&mut cmd, &app, &state, &pane_id, agent, &env, trust);
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     #[cfg(windows)]
@@ -259,6 +232,82 @@ pub fn spawn_pane(
     let recorder = crate::history::Recorder::start(&pane_id, agent_name, &cwd, title);
     stream_output(app, pane_id, run, reader, recorder);
     Ok(())
+}
+
+/// Env of every agent process: AgentDeck's pane id and hook server, minus a parent Claude's session.
+fn set_agent_env(
+    cmd: &mut CommandBuilder,
+    app: &AppHandle,
+    state: &AppState,
+    pane_id: &str,
+    agent: AgentKind,
+    env: &HashMap<String, String>,
+    trust: bool,
+) {
+    // When AgentDeck itself is started from a Claude Code session, don't leak that session's
+    // identity (messaging token/socket, child-session markers) into the agents we spawn.
+    for (key, _) in std::env::vars_os() {
+        if key.to_str().is_some_and(is_parent_claude_var) {
+            cmd.env_remove(&key);
+        }
+    }
+    cmd.env("AGENTDECK_PANE_ID", pane_id);
+    cmd.env("AGENTDECK_HOOK_URL", state.hooks.url());
+    cmd.env("AGENTDECK_HOOK_TOKEN", &state.hooks.token);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    // Grok documents no trust-file format, only this switch (docs/user-guide/10-hooks.md).
+    if trust && agent == AgentKind::Grok {
+        cmd.env("GROK_FOLDER_TRUST", "0");
+    }
+    if let Some((key, value)) = crate::mcp::hub::agent_env(agent) {
+        cmd.env(key, value);
+    }
+    if agent == AgentKind::Gemini
+        && let Ok(data) = app.app_data_dir()
+        && let Some((key, path)) = agents::gemini_env(&data, &state.hooks)
+    {
+        cmd.env(key, path);
+    }
+}
+
+/// The agent as a plain piped process (chat panes): same checks, hooks, MCP servers and env as
+/// [`spawn_pane`], no PTY. `cwd` must already be the final folder (worktree created). Local only.
+pub fn pipe_command(
+    app: &AppHandle,
+    pane_id: &str,
+    agent: AgentKind,
+    cwd: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    trust: bool,
+) -> Result<std::process::Command, String> {
+    let state = app.state::<AppState>();
+    validate_spawn_input(pane_id, args)?;
+    validate_extra_env(env)?;
+    if env.contains_key(SSH_ENV) {
+        return Err("chat mode runs agents on this machine only".into());
+    }
+    agents::prepare_hooks(agent, cwd, &state.hooks)?;
+    if trust {
+        crate::trust::trust_folder(agent, cwd);
+    }
+    let args = [crate::mcp::hub::agent_args(agent), args.to_vec()].concat();
+    let mut builder = agents::command_for(agent, &args);
+    set_agent_env(&mut builder, app, &state, pane_id, agent, env, trust);
+    let argv = builder.get_argv();
+    let mut cmd = std::process::Command::new(argv.first().ok_or("empty command")?);
+    cmd.args(&argv[1..]).current_dir(cwd).env_clear();
+    cmd.envs(builder.iter_full_env_as_str());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    Ok(cmd)
 }
 
 pub fn write_to_pane(
@@ -685,7 +734,7 @@ mod tests {
 /// Windows Job Object with kill-on-close: the agent and everything it starts die with the pane,
 /// even processes outside the pseudoconsole and even if AgentDeck crashes.
 #[cfg(windows)]
-mod job {
+pub mod job {
     use std::ffi::c_void;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{

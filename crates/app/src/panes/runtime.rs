@@ -547,6 +547,9 @@ fn run_spawn(job: SpawnJob) -> Result<(), String> {
     if pane.worktree && pane.ssh.is_none() && !job.setup.is_empty() {
         agentdeck_core::agents::create_worktree_with(&pane.cwd, &pane.id, &job.setup)?;
     }
+    if pane.chat {
+        return crate::chat::spawn(&job.backend, &pane, args, env, job.trust);
+    }
     pty::spawn_pane(
         &job.backend,
         pane.id.clone(),
@@ -680,6 +683,7 @@ fn fail_pane(id: &str, err: &str, cx: &mut App) {
 }
 
 fn kill_in_background(id: &str, cx: &mut App) {
+    crate::chat::kill(id);
     let Some(state) = app_state(cx) else { return };
     let id = id.to_owned();
     cx.background_spawn(async move {
@@ -933,6 +937,9 @@ fn schedule_rate_limit_retry(id: &str, cx: &mut App) {
 
 /// Types the prompt, then presses Enter in a separate write (a TUI reads text + Enter in one write as a paste).
 pub fn send_prompt(id: &str, text: &str, cx: &mut App) {
+    if let Some(p) = pane(id, cx).filter(|p| p.chat) {
+        return crate::chat::send(&p, text, cx);
+    }
     send_input(id, &prompt_text(text), cx);
     let id = id.to_owned();
     cx.spawn(async move |cx| {
@@ -968,6 +975,9 @@ pub fn send_input(id: &str, data: &str, cx: &mut App) {
 /// Interrupts the current task (Esc, or Ctrl+C for a shell); the agent session stays alive.
 pub fn interrupt_pane(id: &str, cx: &mut App) {
     if let Some(p) = pane(id, cx).filter(|p| !p.exited) {
+        if p.chat {
+            return crate::chat::interrupt(id);
+        }
         send_input(id, interrupt_key(p.agent), cx);
     }
 }
@@ -1170,7 +1180,7 @@ fn derive_statuses(now: i64, cx: &mut App) {
         .panes
         .values()
         // Codex only reports the end of a turn (notify): its "working" comes from its output too.
-        .filter(|p| !p.exited && (!p.hooked || p.agent == AgentKind::Codex))
+        .filter(|p| !p.exited && !p.chat && (!p.hooked || p.agent == AgentKind::Codex))
         .filter(|p| matches!(p.status, PaneStatus::Working | PaneStatus::Idle | PaneStatus::Done))
         // Claude and Gemini say when they work through their hooks: their welcome screen, a resumed
         // conversation or a menu is output, not work. Over ssh no hook comes back: output it is.
