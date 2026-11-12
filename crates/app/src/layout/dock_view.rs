@@ -363,7 +363,9 @@ impl DeckView {
                 )
                 .into_any_element()
         } else {
-            self.terminal(view, cx).into_any_element()
+            // Cached: a hover elsewhere re-renders the deck, not every terminal grid (laggy mouse).
+            // The terminal notifies on its own changes (output, focus, theme, deck).
+            self.terminal(view, cx).cached(StyleRefinement::default().size_full()).into_any_element()
         };
         let select = view.to_owned();
         let tab = tab_id.to_owned();

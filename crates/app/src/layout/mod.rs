@@ -699,6 +699,7 @@ fn usage_ticker(cx: &mut Context<DeckView>) -> Task<()> {
 
 impl Render for DeckView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::browser::frame_drawn();
         let p = palette(cx);
         self.ensure_headers(window, cx);
         let active_tab = self.deck.read(cx).state.active_tab_id.clone();

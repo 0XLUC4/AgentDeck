@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/app"]
 
 [workspace.package]
-version = "0.2.18"
+version = "0.2.19"
 edition = "2024"
 authors = ["Luca"]
 
@@ -21,3 +21,5 @@ strip = true
 # Local fix: skips re-sending unchanged bounds/visibility to WebView2 on every frame (lag, flicker).
 [patch.crates-io]
 gpui-webview = { path = "vendor/gpui-webview" }
+# Local fix: one frame of latency instead of three (laggy mouse, see DirectXRendererDevices::new).
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

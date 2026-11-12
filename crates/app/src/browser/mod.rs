@@ -45,7 +45,12 @@ testing: open it there, try what you changed and report what you saw. While the 
 anything else on the web too (look something up, read a page, check a link), so the user sees the page you are \
 on; while it is closed, plain lookups may use search or fetch. The panel has a mobile preview mode (phone width), \
 toggled by the user in its bar: for mobile apps, check the layout at phone width. The user may send you notes \
-about elements of the page: each one names the element by its CSS selector.";
+about elements of the page: each one names the element by its CSS selector. \
+Never open a web page anywhere else: no separate browser window or tab (no `start`, `open`, `xdg-open`, \
+`explorer <url>`, `Start-Process <url>`, Python `webbrowser`, a dev server's `--open` flag or `open: true` \
+setting), and no other browser tools (another Chrome DevTools, Playwright, Puppeteer, Chrome extension or \
+computer-use server), even if they are available: only the tools of the `browser` MCP server drive the \
+panel the user sees. To show a page, navigate the panel to its URL.";
 /// Phone viewport of the mobile preview, in logical pixels.
 const PHONE_WIDTH: f32 = 390.0;
 const PHONE_HEIGHT: f32 = 844.0;
@@ -143,6 +148,17 @@ fn notes_prompt(json: &str) -> Option<String> {
         .collect();
     (!notes.is_empty())
         .then(|| format!("Changes asked on the page, from notes made in the browser:\n\n{}\n", notes.join("\n\n")))
+}
+
+thread_local! {
+    /// Frames drawn by the main window (see `frame_drawn`).
+    static FRAME: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Called once per drawn frame of the main window (its root view's render). A panel that was not
+/// drawn in the last frame has left the screen: its native webview is hidden, without forcing redraws.
+pub fn frame_drawn() {
+    FRAME.with(|f| f.set(f.get() + 1));
 }
 
 pub fn init(cx: &mut App) {
@@ -341,8 +357,8 @@ pub struct BrowserPanel {
     annotating: bool,
     /// Mobile preview: the page is laid out as a phone viewport, with mobile emulation.
     mobile: bool,
-    /// Set by the body's prepaint: the panel was drawn in the last frame.
-    seen: Rc<Cell<bool>>,
+    /// Set by the body's prepaint: the last frame (see `FRAME`) the panel was drawn in.
+    seen_frame: Rc<Cell<u64>>,
     /// The webview was hidden natively because the panel left the screen.
     hidden: Rc<Cell<bool>>,
     _subscriptions: Vec<Subscription>,
@@ -374,7 +390,7 @@ impl BrowserPanel {
         let follow = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(FOLLOW_MS)).await;
-                if this.update_in(cx, |this, window, cx| this.follow(window, cx)).is_err() {
+                if this.update(cx, |this, cx| this.follow(cx)).is_err() {
                     break;
                 }
             }
@@ -394,7 +410,7 @@ impl BrowserPanel {
             editing: false,
             annotating: false,
             mobile: false,
-            seen: Rc::new(Cell::new(false)),
+            seen_frame: Rc::new(Cell::new(0)),
             hidden: Rc::new(Cell::new(true)),
             _subscriptions: subscriptions,
             _tasks: vec![follow, read_url],
@@ -474,25 +490,13 @@ impl BrowserPanel {
         self.hidden.set(true);
     }
 
-    /// While shown, redraws and checks after that frame that the body was drawn; hides the webview when not.
-    fn follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.hidden.get() {
-            return; // a redraw that includes the body shows it again
+    /// While shown, hides the webview when the last drawn frame left the body out (tab switch, layout
+    /// change). Views are re-rendered every frame, so no redraw is forced: that lagged and flickered.
+    fn follow(&mut self, cx: &mut Context<Self>) {
+        // A frame that draws the body again shows it again.
+        if !self.hidden.get() && self.seen_frame.get() != FRAME.with(Cell::get) {
+            self.hide_native(cx);
         }
-        self.seen.set(false);
-        cx.notify();
-        let this = cx.entity().downgrade();
-        let seen = self.seen.clone();
-        // Next-frame callbacks run before that frame draws: the second one runs after the redraw.
-        window.on_next_frame(move |window, _| {
-            window.on_next_frame(move |_, cx| {
-                if !seen.get()
-                    && let Some(this) = this.upgrade()
-                {
-                    this.read(cx).hide_native(cx);
-                }
-            });
-        });
     }
 
     fn remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -609,12 +613,12 @@ impl Render for BrowserPanel {
         let p = palette(cx);
         let body = match browser_view(&self.pane_id, cx) {
             Ok(view) => {
-                let (seen, hidden) = (self.seen.clone(), self.hidden.clone());
+                let (seen_frame, hidden) = (self.seen_frame.clone(), self.hidden.clone());
                 let webview = view.clone();
                 // Runs before the webview's own prepaint, which positions and shows the native view.
                 let guard = canvas(
                     move |_, window, cx| {
-                        seen.set(true);
+                        seen_frame.set(FRAME.with(Cell::get));
                         hidden.set(false);
                         // A native webview sits above every GPUI layer: hide it while a dialog is open.
                         let dialog = window.has_active_dialog(cx);
