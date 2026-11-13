@@ -79,6 +79,8 @@ pub(super) fn open(
     let bounds = read_geometry(deck.read(cx), pane_id)
         .unwrap_or_else(|| Bounds::centered(None, size(px(900.0), px(600.0)), cx));
     let options = WindowOptions {
+        app_id: Some(agentdeck_core::APP_IDENTIFIER.into()),
+        icon: crate::system::app_icon(),
         titlebar: Some(TitlebarOptions {
             title: Some(title.clone().into()),
             ..TitleBar::title_bar_options()
