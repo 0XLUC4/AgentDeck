@@ -150,9 +150,10 @@ pub fn start(data_dir: PathBuf) -> AppHandle {
     app
 }
 
-/// App exit: stops shared MCP servers (they would keep their ports otherwise).
+/// App exit: stops shared MCP servers (they would keep their ports otherwise) and drops spare worktrees.
 pub fn shutdown() {
     mcp::hub::stop_all();
+    agents::drop_spares();
 }
 
 #[cfg(test)]
