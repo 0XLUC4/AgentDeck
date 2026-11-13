@@ -336,8 +336,18 @@ fn claim_spare(root: &Path, target: &Path, branch: &str) -> bool {
     true
 }
 
+/// App exit: removes the ready spares, which hold no work and would stay on disk.
+/// shortcut: a spare still being made at exit is left behind, rare (needs a quit within seconds of a spawn).
+pub fn drop_spares() {
+    let spares = SPARES.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default();
+    for (root, spare) in spares {
+        if let Some(spare) = spare {
+            remove_worktree(&root, &spare.path, &spare.branch);
+        }
+    }
+}
+
 /// Starts making the repo's spare worktree (branch `agentdeck/<new id>`) unless one exists.
-/// shortcut: a spare left when AgentDeck quits stays on disk as a normal agentdeck worktree.
 fn refill_spare(root: PathBuf) {
     if !SPARE_WORKTREE {
         return;
