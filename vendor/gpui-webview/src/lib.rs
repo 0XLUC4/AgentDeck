@@ -4,6 +4,9 @@ extern crate gpui_kit as gpui;
 mod composition;
 #[cfg(target_os = "linux")]
 mod linux;
+// Other GTK consumers (for example tray menus) can initialize GTK before the first webview.
+#[cfg(target_os = "linux")]
+pub use linux::ensure_gtk;
 #[cfg(target_os = "macos")]
 mod macos;
 

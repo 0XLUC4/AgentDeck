@@ -19,6 +19,12 @@ enum TrayAction {
 }
 
 pub(super) fn init(cx: &mut App) {
+    // GPUI does not initialize GTK; Linux tray menus require it even without a webview.
+    #[cfg(target_os = "linux")]
+    if let Err(e) = gpui_webview::ensure_gtk(cx) {
+        eprintln!("tray icon unavailable: GTK initialization failed: {e}");
+        return;
+    }
     match build() {
         Ok(tray) => cx.set_global(Tray(tray)),
         Err(e) => {

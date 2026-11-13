@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AgentDeck
+Comment=Multi-agent terminal dashboard
+Exec=agentdeck
+Icon=com.agentdeck.app
+Terminal=false
+Categories=Development;
+StartupWMClass=com.agentdeck.app
+StartupNotify=true

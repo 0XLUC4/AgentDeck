@@ -43,6 +43,8 @@ jobs:
         run: |
           mkdir -p dist/agentdeck
           cp target/release/agentdeck dist/agentdeck/
+          cp crates/app/assets/logo.png packaging/linux/com.agentdeck.app.desktop packaging/linux/install.sh dist/agentdeck/
+          chmod +x dist/agentdeck/install.sh
           tar -C dist -czf agentdeck-linux-x86_64.tar.gz agentdeck
 
       - uses: actions/upload-artifact@v4

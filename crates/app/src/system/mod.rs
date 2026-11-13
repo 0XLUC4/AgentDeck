@@ -36,6 +36,14 @@ use gpui_kit::*;
 
 use crate::layout::DeckView;
 
+/// Native X11 icon; desktop launchers use the same logo and application identifier.
+pub fn app_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
+    image::load_from_memory(include_bytes!("../../assets/logo.png"))
+        .map(|image| std::sync::Arc::new(image.into_rgba8()))
+        .map_err(|error| eprintln!("cannot load window icon: {error}"))
+        .ok()
+}
+
 /// Wires everything to the first `DeckView` (the main window) once it exists.
 /// Starts or stops the phone page according to the settings (startup, Settings > General).
 pub fn apply_phone(deck: &crate::state::Deck) -> Result<(), String> {

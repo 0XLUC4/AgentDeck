@@ -99,6 +99,11 @@ Download `agentdeck.exe` from the [releases page](https://github.com/0XLUC4/Agen
 It is a single portable exe, no installer and no admin rights needed. Windows SmartScreen may warn the first time
 because the exe isn't code-signed yet: click "More info" then "Run anyway".
 
+On Linux, extract `agentdeck-linux-x86_64.tar.gz`, then run `sh install.sh` inside the
+extracted `agentdeck` folder. This installs the binary in `~/.local/bin` and registers
+AgentDeck in the application menu with its icon (including dock/taskbar grouping).
+Runtime libraries include GTK 3, WebKitGTK 4.1, ALSA, XKBCommon X11 and Ayatana AppIndicator.
+
 You need at least one agent CLI on your PATH:
 [Claude Code](https://code.claude.com/docs/en/setup),
 [Codex](https://github.com/openai/codex),

@@ -82,6 +82,8 @@ fn main() {
             cx.on_app_quit(|_| async { agentdeck_core::shutdown() })
                 .detach();
             let options = WindowOptions {
+                app_id: Some(agentdeck_core::APP_IDENTIFIER.into()),
+                icon: system::app_icon(),
                 titlebar: Some(TitlebarOptions {
                     title: Some("AgentDeck".into()),
                     ..TitleBar::title_bar_options()

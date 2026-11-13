@@ -23,7 +23,7 @@ struct GtkMainLoop;
 impl Global for GtkMainLoop {}
 
 /// Initialize GTK on the X11 backend once and drive its main loop from GPUI.
-pub(crate) fn ensure_gtk(cx: &mut App) -> wry::Result<()> {
+pub fn ensure_gtk(cx: &mut App) -> wry::Result<()> {
     if cx.has_global::<GtkMainLoop>() {
         return Ok(());
     }
