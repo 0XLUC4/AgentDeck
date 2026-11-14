@@ -1,65 +1,81 @@
 ---
 name: agentdeck-form-flow
-description: Test a user flow end to end in the AgentDeck browser panel - sign up, log in, checkout, create, edit, delete, upload, search, multi-step wizards - with valid, invalid and edge-case input, network checks and data checks. Use when a form, a multi-step flow or its API changed, or when asked to test a flow.
+description: Test a user flow end to end in the AgentDeck browser panel - sign up, log in, checkout, create, edit, delete, upload, search, multi-step wizards - with a written plan, valid, invalid and edge-case input, keyboard and accessibility of errors, double submit, offline, network payload and stored data checks, and a pass/fail table. Use when a form, a multi-step flow or the API behind it changed, or when asked to test a flow, before saying it works.
 ---
 
 # Flow test in the AgentDeck browser panel
 
-Use only the `browser` MCP tools (the AgentDeck panel the user watches).
+Only the `browser` MCP tools (the panel the user watches).
 
 ## 1. Plan
 
 Write the steps first: start URL, each action, the expected result after each one (text on screen,
-URL, request sent, data stored). Note the test data you will use.
+URL, request sent, data stored). Note the test data. Never use the user's real accounts or real
+money; ask when the flow needs them. Payments: provider test mode and test cards only.
 
 ## 2. Happy path
 
-`navigate_page`, `take_snapshot` for uids, `fill_form` (several fields in one call) / `fill` /
-`click`, `wait_for` the expected text after each step. Screenshot the end state.
+`navigate_page`, `wait_for` the page text, `take_snapshot` for uids, then `fill_form` (all fields in
+one call: faster and more reliable than several `fill`), `click`, and `wait_for` the expected result
+text after each step. Take a fresh snapshot after every navigation or DOM change: old uids go stale.
+Screenshot the end state.
 
-## 3. Failure and edge cases
+## 3. Bad and edge input
 
 For each field that matters:
 
 | Case | Example |
 |---|---|
 | Empty required | submit with nothing |
-| Wrong format | `abc` for an email, letters in a phone |
-| Limits | 1 char, max length, max + 1, very long text |
-| Special text | accents `éàü`, emoji, `<script>alert(1)</script>`, `' OR 1=1 --`, spaces only |
-| Numbers | 0, negative, decimals with `,` and `.`, huge |
+| Wrong format | `abc` as an email, letters in a phone number |
+| Limits | 1 character, max length, max + 1, 10 000 characters |
+| Special text | accents `éàü`, emoji, RTL text, leading and trailing spaces, spaces only |
+| Injection | `<img src=x onerror=alert(1)>`, `' OR 1=1 --`, `{{7*7}}` |
+| Numbers | 0, negative, `1,5` and `1.5`, huge |
 | Duplicate | same email twice, same name twice |
-| Auth | wrong password, expired session, user without the right role |
-| Files | wrong type, too big, empty file (`upload_file`) |
+| Auth | wrong password, expired session, user without the role |
+| Files | wrong type, too big, empty (`upload_file`) |
 
-Each one must show a clear message next to the field, keep what the user typed, and never show a raw
-server error or stack trace. Injected HTML must be displayed as text, not run.
+Each must show a clear message next to the field, keep what was typed, and never show a raw server
+error or stack trace. Injected markup is shown as text, never run (no dialog appears; check with
+`list_console_messages`).
 
-## 4. Behaviour around the form
+## 4. Errors are accessible
 
-- Double submit: click twice fast; only one request, button disabled while sending.
-- Server error: the page shows a message and the user can retry (check with a failing request if the
-  project has a way to force one).
-- Back button and reload in the middle of a wizard: no crash, no duplicate record.
-- Keyboard: Enter submits, Tab order is logical, errors get focus or are announced.
+In the snapshot after a failed submit: the error is text (not only a red border), linked to its
+field (`aria-describedby`, `aria-invalid`), and focus moves to the first error. Inputs have labels
+and `autocomplete` values (`email`, `current-password`, `new-password`, `one-time-code`):
+`list_console_messages` with `types: ["issue"]` reports missing ones.
 
-## 5. Network
+## 5. Behaviour around the form
 
-For each submit (`list_network_requests`, `get_network_request`): right method and URL, payload
-matches what was typed, status code, no secrets in the URL, no request sent for input the page must
-reject itself. Server must also reject bad input on its own: client validation is not security.
+- **Double submit**: click twice fast; exactly one request, button disabled while sending.
+- **Keyboard only**: `press_key` Tab through the form in a logical order, focus visible, Enter
+  submits, Escape closes dialogs.
+- **Offline**: `emulate` with `networkConditions: "Offline"`, submit: a clear message, data kept,
+  retry works once back online (`emulate` with nothing). Never pass `viewport`.
+- **Server error**: the page shows a message and allows retry (force a failure if the project can).
+- **Back, forward and reload** in the middle of a wizard: no crash, no duplicate record, no data lost
+  without warning (`handle_dialog` for `beforeunload`).
 
-## 6. Data
+## 6. Network
 
-Check the result outside the page when there is one (database row, file, email log, queue), then
-reload: the data must still be there and appear the same. Edit and delete flows: check it really
-changed or disappeared, and that related data is handled.
+For each submit (`list_network_requests` with `resourceTypes: ["fetch", "xhr", "document"]`,
+`get_network_request`): right method and URL, payload matches what was typed, expected status, no
+password or token in the URL or in console logs, no request for input the page should reject
+itself. The server must reject bad input on its own: client validation is not security (send a bad
+payload with `evaluate_script` + `fetch` when the project allows).
 
-## 7. Clean up
+## 7. Data
 
-Delete test data you created when the project allows it.
+Check the result outside the page when possible (database row, file, email log, queue), then reload:
+still there, shown the same. Edit and delete: really changed or gone, related data handled.
+
+## 8. Clean up
+
+Delete the test data you created when the project allows it.
 
 ## Report
 
-A table: step or case, expected, seen, pass/fail. Never use the user's real accounts or pay with real
-money; ask when the flow needs them. Payment: use the provider's test mode and test cards only.
+A table: step or case | expected | seen | pass/fail, then the bugs found with steps to reproduce,
+and what was not tested.

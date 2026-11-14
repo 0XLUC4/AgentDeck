@@ -160,9 +160,13 @@ fn default_ui_zoom() -> u32 {
 }
 
 impl Settings {
-    /// The plugin is on: the user's choice, else the catalog default.
+    /// The plugin is on: the user's choice, else on when a plugin it replaces was on, else the catalog default.
     pub fn plugin_on(&self, plugin: &crate::plugins::Plugin) -> bool {
-        self.plugins.get(plugin.id).copied().unwrap_or(plugin.default_on)
+        self.plugins
+            .get(plugin.id)
+            .copied()
+            .or_else(|| plugin.replaces.iter().any(|old| self.plugins.get(*old) == Some(&true)).then_some(true))
+            .unwrap_or(plugin.default_on)
     }
 
     pub fn agent(&self, kind: AgentKind) -> AgentDefaults {
