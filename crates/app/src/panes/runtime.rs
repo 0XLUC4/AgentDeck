@@ -400,7 +400,7 @@ fn clock_repaint(cx: &mut App) {
     };
     let minute = now / 60_000;
     let new_minute = std::mem::replace(&mut rts(cx).clock_minute, minute) != minute;
-    if seconds || (any_live && new_minute) || super::frame::voice_flash_pending(now, cx) {
+    if seconds || (any_live && new_minute) {
         // Statuses and timers are not saved: the autosave skips this notify.
         rts(cx).clock_repaint = true;
         deck.update(cx, |_, cx| cx.notify());
@@ -460,7 +460,6 @@ fn on_backend(event: &Event, cx: &mut App) {
                 }
             }
         }
-        "voice-state" | "voice-level" => super::frame::on_voice_event(event, cx),
         name => {
             if let Some(id) = name.strip_prefix("pane-exit:") {
                 on_exit(id, cx);

@@ -153,27 +153,17 @@ pub fn close(window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-/// Opens the skills manager of an agent pane.
+/// Opens the Plugins page on the skills tab of an agent pane's agent.
 pub fn open_skills(deck: Entity<Deck>, pane_id: &str, window: &mut Window, cx: &mut App) {
-    open_agent_dialog(deck, pane_id, AgentDialogKind::Skills, window, cx);
+    crate::plugins::open_skills(deck, pane_id, window, cx);
 }
 
 /// Opens the notes (instruction and memory files) editor of an agent pane.
 pub fn open_notes(deck: Entity<Deck>, pane_id: &str, window: &mut Window, cx: &mut App) {
-    open_agent_dialog(deck, pane_id, AgentDialogKind::Notes, window, cx);
-}
-
-fn open_agent_dialog(
-    deck: Entity<Deck>,
-    pane_id: &str,
-    kind: AgentDialogKind,
-    window: &mut Window,
-    cx: &mut App,
-) {
     let Some(pane) = deck.read(cx).state.panes.get(pane_id).map(|p| p.spec.clone()) else {
         return;
     };
-    let view = cx.new(|cx| AgentFilesDialog::new(pane, kind, window, cx));
+    let view = cx.new(|cx| AgentFilesDialog::new(pane.agent, pane.cwd, AgentDialogKind::Notes, false, window, cx));
     let focus = view.read(cx).initial_focus(cx);
     show(view.into(), focus, window, cx);
 }
@@ -278,6 +268,36 @@ fn page_frame(focus: &FocusHandle, panel: Div, cx: &App) -> Stateful<Div> {
         )
 }
 
+/// Small card centered over a dimmed page or dialog (install link...). The parent must be `relative`.
+pub(crate) fn popup(id: &'static str, title: &'static str, body: impl IntoElement, cx: &App) -> Stateful<Div> {
+    let p = palette(cx);
+    div()
+        .id(id)
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(hsla_a(p.gutter, 0.6))
+        .occlude()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .w(ui(520.0))
+                .max_w(relative(0.92))
+                .p_5()
+                .rounded(ui(agentdeck_core::logic::theme::RADIUS_LG))
+                .border_1()
+                .border_color(hsla(p.line))
+                .bg(hsla(p.panel))
+                .shadow_lg()
+                .child(div().text_size(ui(15.0)).font_weight(FontWeight::MEDIUM).child(title))
+                .child(body),
+        )
+}
+
 /// Header of the `Modal` shell: title, extra actions, close button.
 fn modal_header(title: String, actions: Option<AnyElement>, cx: &App) -> Div {
     let p = palette(cx);
@@ -355,7 +375,7 @@ fn segmented<T: Copy + PartialEq + 'static>(
 }
 
 /// Asks a yes/no question with a native dialog; true when the first answer is picked.
-async fn confirm(
+pub(crate) async fn confirm(
     message: String,
     yes: &'static str,
     cx: &mut AsyncWindowContext,
