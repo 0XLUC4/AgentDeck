@@ -11,6 +11,7 @@
 //! - pane header: [`orchestrator_badge`] (crown + activity log), palette: [`create_orchestrator`],
 //!   [`set_paused`], [`toggle_wall`]; sidebar: [`open_link_workspace`].
 
+mod auto_merge;
 mod button;
 mod link;
 pub(crate) mod runtime;
@@ -52,6 +53,7 @@ pub fn init(cx: &mut App) {
         let deck = view.deck().clone();
         cx.subscribe(&deck, |_, deck, event, cx| tools::on_deck_event(&deck, event, cx))
             .detach();
+        auto_merge::start(&deck, cx);
     })
     .detach();
 }

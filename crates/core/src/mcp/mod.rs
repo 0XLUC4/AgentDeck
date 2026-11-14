@@ -33,6 +33,8 @@ const FRONTEND_HOLD: Duration = Duration::from_secs(30);
 /// while the first git run keeps going.
 const GIT_TOOLS: [&str; 6] = ["get_diff", "merge_worktree", "find_conflicts", "restore_checkpoint", "list_agents", "close_agent"];
 const GIT_HOLD: Duration = Duration::from_secs(180);
+/// merge_worktree also runs the project's merge check (a build).
+const MERGE_HOLD: Duration = Duration::from_secs(600);
 const MAIN_WINDOW: &str = "main";
 const SECRET_HEADER: &str = "X-AgentDeck-Mcp";
 const VERSION_HEADER: &str = "MCP-Protocol-Version";
@@ -125,8 +127,11 @@ pub(crate) fn ask_ui(app: &AppHandle, event: &str, mut payload: Value) -> Result
     let request_id = uuid::Uuid::new_v4().to_string();
     lock(&WAITING).insert(request_id.clone(), tx);
     payload["requestId"] = json!(request_id);
-    let git = payload["tool"].as_str().is_some_and(|t| GIT_TOOLS.contains(&t));
-    let hold = if git { GIT_HOLD } else { FRONTEND_HOLD };
+    let hold = match payload["tool"].as_str() {
+        Some("merge_worktree") => MERGE_HOLD,
+        Some(t) if GIT_TOOLS.contains(&t) => GIT_HOLD,
+        _ => FRONTEND_HOLD,
+    };
     let sent = app.emit_to(MAIN_WINDOW, event, payload);
     let answer = sent
         .ok()
@@ -271,7 +276,9 @@ Chain a follow-up on a busy agent with `queue_prompt` instead of waiting for it.
 action list, `read_output` (raw terminal text) only when there is no summary. Check the work with \
 `get_diff` (ask for one `path` when the full diff is truncated); retry or correct if the result \
 is not right, or undo an agent's last task with `restore_checkpoint`.
-6. Run `find_conflicts` before merging, then integrate finished worktree work with `merge_worktree`, close agents you no longer need with `close_agent`.
+6. Run `find_conflicts` before merging, then integrate finished worktree work with `merge_worktree`, close agents you no longer need with `close_agent`. \
+`merge_worktree` builds the project after merging and undoes the merge if the build fails: send the error to the owning agent. \
+Worktrees you leave unmerged are merged by AgentDeck when you end your turn; failures come back to you as a prompt.
 7. End with a summary: what was done, by which agent, what is left to verify.
 
 Rules:
@@ -283,8 +290,8 @@ Report it and wait.
 - Two agents that must change the same repository at the same time get `worktree: true`; \
 run `find_conflicts` before merging.
 - Worker agents do not build, run or test heavy projects in parallel (unless the task is only a test): \
-they write the code and report; you run one integrated build/test after merging all work, and send \
-fixes back to the owning agent.
+they write the code and report; each merge is built by AgentDeck, you run the tests after merging \
+all work, and send fixes back to the owning agent.
 - You cannot act outside your workspace. Only restore, merge or close when the work calls for it.
 - If a tool answers \"paused by the user\", stop and wait for their instructions.
 - Reply in the user's language.

@@ -8,7 +8,9 @@ use agentdeck_core::logic::theme::{FONT_MONO, Palette, RADIUS_LG, RADIUS_MD};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use agentdeck_core::logic::text::agent_name;
 use gpui_kit::component::text::TextView;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -67,13 +69,15 @@ impl ChatView {
     fn new(pane_id: &str, deck: Entity<Deck>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Message the agent (Enter to send, Shift+Enter for a new line)")
+                .placeholder("Message the agent (Shift+Enter for a new line)")
                 .auto_grow(1, 8)
                 .submit_on_enter(true)
         });
         let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { shift: false, .. } = event {
-                this.submit(window, cx);
+            match event {
+                InputEvent::PressEnter { shift: false, .. } => this.submit(window, cx),
+                InputEvent::Change => cx.notify(), // greys or lights up the send button
+                _ => {}
             }
         });
         Self {
@@ -208,31 +212,35 @@ impl Render for ChatView {
         let items: Vec<AnyElement> = transcript.items.iter().enumerate().map(|(i, item)| self.item(i, item, &p, cx)).collect();
         let empty = items.is_empty();
         let pane_id = self.pane_id.clone();
-        let button = |id: &'static str, bg: u32| {
+        let (agent, model) = self.deck.read(cx).state.panes.get(&self.pane_id).map_or((String::new(), None), |pane| {
+            (agent_name(pane.agent).to_owned(), model_arg(&pane.args))
+        });
+        let typed = !self.input.read(cx).value().trim().is_empty();
+        // Square button in the text color (white on dark themes), its icon in the background color.
+        let button = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap_1()
-                .px_3()
-                .h(ui(32.0))
+                .justify_center()
+                .size(ui(28.0))
                 .rounded(ui(RADIUS_MD))
-                .bg(hsla(bg))
-                .text_color(hsla(p.on_accent))
+                .bg(hsla(p.fg))
+                .text_color(hsla(p.base))
                 .cursor_pointer()
+                .hover(|s| s.opacity(0.85))
+                .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
         };
         let action = if transcript.busy {
-            button("chat-stop", p.bad)
+            button("chat-stop", "Stop")
                 .on_click(move |_, _, _| super::interrupt(&pane_id))
                 .child(Icon::new(IconName::Square).size(ui(12.0)))
-                .child("Stop")
         } else {
-            button("chat-send", p.accent)
-                .hover(|s| s.bg(hsla(p.accent_hover)))
+            button("chat-send", "Send (Enter)")
+                .when(!typed, |el| el.opacity(0.4))
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx)))
-                .child(Icon::new(IconName::ArrowUp).size(ui(14.0)))
-                .child("Send")
+                .child(Icon::new(IconName::ArrowUp).size(ui(16.0)))
         };
         div()
             .size_full()
@@ -277,16 +285,65 @@ impl Render for ChatView {
                     ),
             )
             .child(
-                div()
-                    .flex()
-                    .items_end()
-                    .gap_2()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(hsla(p.line))
-                    .bg(hsla(p.panel))
-                    .child(div().flex_1().min_w_0().child(Textarea::new(&self.input)))
-                    .child(action),
+                div().px_3().pb_3().pt_1().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .px_3()
+                        .pt_2()
+                        .pb_2()
+                        .rounded(ui(RADIUS_COMPOSER))
+                        .border_1()
+                        .border_color(hsla(p.line))
+                        .bg(hsla(p.panel))
+                        .child(Textarea::new(&self.input).appearance(false).aria_label("Message"))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded(ui(RADIUS_MD))
+                                        .bg(hsla(p.hover))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(agent),
+                                )
+                                .child(div().flex_1())
+                                .when_some(model, |el, model| {
+                                    el.child(div().text_color(hsla(p.muted)).truncate().child(model))
+                                })
+                                .child(action),
+                        ),
+                ),
             )
+    }
+}
+
+/// Corner radius of the message box (rounder than the panes, like a chat composer).
+const RADIUS_COMPOSER: f32 = 14.0;
+
+/// `--model <name>` / `-m <name>` / `--model=<name>` from the agent's arguments.
+fn model_arg(args: &[String]) -> Option<String> {
+    args.iter().enumerate().find_map(|(i, arg)| match arg.as_str() {
+        "--model" | "-m" => args.get(i + 1).cloned(),
+        _ => arg.strip_prefix("--model=").map(str::to_owned),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_arg;
+
+    #[test]
+    fn reads_the_model_argument() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(model_arg(&args(&["--model", "sonnet"])).as_deref(), Some("sonnet"));
+        assert_eq!(model_arg(&args(&["-x", "--model=o3"])).as_deref(), Some("o3"));
+        assert_eq!(model_arg(&args(&["--model"])), None);
+        assert_eq!(model_arg(&[]), None);
     }
 }

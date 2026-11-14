@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod notes_graph;
 pub mod notify;
 pub mod persist;
+pub mod plugins;
 pub mod pty;
 pub mod remote;
 pub mod skills;

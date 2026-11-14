@@ -422,7 +422,10 @@ impl GitPanel {
         let Some(pending) = self.pending.take() else { return };
         self.focus.focus(window, cx);
         match pending {
-            Confirm::Merge => self.act(git_merge_worktree, |_, out, _, _| Some(out), window, cx),
+            Confirm::Merge => {
+                let check = self.deck.read(cx).settings.merge_check.clone();
+                self.act(move |dir| git_merge_worktree(dir, check), |_, out, _, _| Some(out), window, cx)
+            }
             Confirm::PullRequest { body } => {
                 let title = self.pr_title.read(cx).value().trim().to_owned();
                 if title.is_empty() {

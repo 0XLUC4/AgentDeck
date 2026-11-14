@@ -232,12 +232,13 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
                 return Err(format!("{} is still working: wait for it first", pane.title));
             }
             let message = arg(args, "commitMessage");
+            let check = deck.read_with(cx, |d, _| d.settings.merge_check.clone());
             blocking(cx, move || {
                 let dir = pane_dir(&pane);
                 if !message.is_empty() && !git::git_status(dir.clone())?.files.is_empty() {
                     git::git_commit(dir.clone(), message)?;
                 }
-                Ok(json!({ "result": git::git_merge_worktree(dir)? }))
+                Ok(json!({ "result": git::git_merge_worktree(dir, check)? }))
             })
             .await
         }

@@ -527,7 +527,57 @@ fn commit(cwd: &str, message: &str) -> Result<String, String> {
     run_trim(&root, &["rev-parse", "--short", "HEAD"])
 }
 
-fn merge_worktree(cwd: &str) -> Result<String, String> {
+/// Ends the `Ok` of a merge that had no new commit to bring in.
+pub const NOTHING_TO_MERGE: &str = "nothing to merge";
+/// Output lines of a failed merge check given back (the end holds the errors).
+const CHECK_TAIL: usize = 40;
+
+/// Check run in the main checkout after a merge: `setting` when set ("off" = none), else guessed
+/// from the project files (Cargo, Go, or a package.json `build` script).
+fn merge_check(main: &Path, setting: &str) -> Option<String> {
+    match setting.trim() {
+        "off" => None,
+        "" => detect_check(main),
+        command => Some(command.to_owned()),
+    }
+}
+
+fn detect_check(root: &Path) -> Option<String> {
+    if root.join("Cargo.toml").is_file() {
+        return Some("cargo check --quiet".into());
+    }
+    if root.join("go.mod").is_file() {
+        return Some("go build ./...".into());
+    }
+    let package: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("package.json")).ok()?).ok()?;
+    package["scripts"]["build"].as_str()?;
+    let runner = [("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lock", "bun"), ("bun.lockb", "bun")]
+        .into_iter()
+        .find(|(lock, _)| root.join(lock).is_file())
+        .map_or("npm", |(_, runner)| runner);
+    Some(format!("{runner} run build"))
+}
+
+/// Runs `command` in `dir`; `Err` is the end of its output (stdout then stderr).
+/// shortcut: no timeout, a check that never ends blocks the merge; add one if a project needs it.
+fn run_check(command: &str, dir: &Path) -> Result<(), String> {
+    let out = crate::agents::shell(command)
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run {command}: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    Err(format!("({}) {}", out.status, lines[lines.len().saturating_sub(CHECK_TAIL)..].join("\n")))
+}
+
+/// Merges the worktree's branch into the main checkout, then runs the merge check there
+/// (`check`: see [`merge_check`]): when it fails the merge is undone, so main is never broken.
+fn merge_worktree(cwd: &str, check: &str) -> Result<String, String> {
     let root = repo_root(cwd)?;
     let (branch, main) = agent_worktree(&root)?;
     if !run_trim(&root, &["status", "--porcelain"])?.is_empty() {
@@ -543,6 +593,9 @@ fn merge_worktree(cwd: &str) -> Result<String, String> {
         ));
     }
     let target = current_branch(&main).unwrap_or_else(|| "HEAD".into());
+    if run_trim(&main, &["rev-list", "--count", &format!("{target}..{branch}")])? == "0" {
+        return Ok(format!("{branch}: {NOTHING_TO_MERGE}"));
+    }
     if let Err(err) = run(&main, &["merge", "--no-ff", "--no-edit", &branch], None) {
         let conflicts = run_trim(&main, &["diff", "--name-only", "--diff-filter=U"])
             .unwrap_or_default()
@@ -554,7 +607,18 @@ fn merge_worktree(cwd: &str) -> Result<String, String> {
             format!("conflicts merging {branch} into {target} (merge aborted): {conflicts}")
         });
     }
-    Ok(format!("{branch} merged into {target}"))
+    let Some(command) = merge_check(&main, check) else {
+        return Ok(format!("{branch} merged into {target}"));
+    };
+    if let Err(output) = run_check(&command, &main) {
+        // Main had no tracked change before the merge: ORIG_HEAD is exactly where it was.
+        run(&main, &["reset", "--merge", "ORIG_HEAD"], None)
+            .map_err(|e| format!("`{command}` failed after merging {branch} and the merge could not be undone: {e}"))?;
+        return Err(format!(
+            "`{command}` failed after merging {branch} into {target} (merge undone, fix it in the worktree): {output}"
+        ));
+    }
+    Ok(format!("{branch} merged into {target} (`{command}` passed)"))
 }
 
 /// Pushes the worktree's branch to `origin` and opens a pull request with the GitHub CLI; returns its URL.
@@ -1014,8 +1078,9 @@ pub fn git_commit(cwd: String, message: String) -> Result<String, String> {
     res
 }
 
-pub fn git_merge_worktree(cwd: String) -> Result<String, String> {
-    let res = merge_worktree(&cwd);
+/// `check`: `settings.merge_check` ("" = guessed, "off" = none).
+pub fn git_merge_worktree(cwd: String, check: String) -> Result<String, String> {
+    let res = merge_worktree(&cwd, &check);
     invalidate_status();
     res
 }
@@ -1428,7 +1493,7 @@ mod tests {
         let wt = PathBuf::from(wt);
         assert_eq!(pane_dir(&s(&repo), "abcdef12", true), s(&wt));
         std::fs::write(wt.join("feature.txt"), "f\n").unwrap();
-        assert!(merge_worktree(&s(&wt)).unwrap_err().contains("uncommitted"));
+        assert!(merge_worktree(&s(&wt), "off").unwrap_err().contains("uncommitted"));
         commit(&s(&wt), "feat: add feature").unwrap();
         let st = status(&s(&wt)).unwrap();
         assert!(st.agent_worktree);
@@ -1443,14 +1508,14 @@ mod tests {
         );
 
         std::fs::write(repo.join("a.txt"), "dirty\n").unwrap();
-        let err = merge_worktree(&s(&wt)).unwrap_err();
+        let err = merge_worktree(&s(&wt), "off").unwrap_err();
         assert!(err.contains("main repository"), "{err}");
         assert!(!repo.join("feature.txt").exists());
 
         run(&repo, &["checkout", "-q", "--", "a.txt"], None).unwrap();
-        merge_worktree(&s(&wt)).unwrap();
+        merge_worktree(&s(&wt), "off").unwrap();
         assert!(repo.join("feature.txt").exists());
-        assert!(merge_worktree(&s(&repo)).is_err()); // main checkout is not an agent worktree
+        assert!(merge_worktree(&s(&repo), "off").is_err()); // main checkout is not an agent worktree
 
         remove_worktree(&s(&wt)).unwrap();
         assert!(!wt.exists());
@@ -1482,7 +1547,7 @@ mod tests {
         commit(&s(&wt), "feat").unwrap();
         assert_eq!(git_remove_worktree_if_merged(s(&wt)), Ok(false)); // unmerged commit
         assert!(wt.exists());
-        merge_worktree(&s(&wt)).unwrap();
+        merge_worktree(&s(&wt), "off").unwrap();
         assert_eq!(git_remove_worktree_if_merged(s(&wt)), Ok(true));
         assert!(!wt.exists());
         assert!(run(&repo, &["rev-parse", "--verify", "--quiet", "refs/heads/agentdeck/beefcafe"], None).is_err());
@@ -1560,7 +1625,7 @@ mod tests {
         commit(&s(&wt), "agent").unwrap();
         std::fs::write(repo.join("a.txt"), "user\n").unwrap();
         commit(&s(&repo), "user").unwrap();
-        let err = merge_worktree(&s(&wt)).unwrap_err();
+        let err = merge_worktree(&s(&wt), "off").unwrap_err();
         assert!(err.contains("conflicts") && err.contains("a.txt"), "{err}");
         assert!(
             run_trim(&repo, &["status", "--porcelain"])
@@ -1568,6 +1633,42 @@ mod tests {
                 .is_empty()
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn failed_merge_check_undoes_the_merge() {
+        let Some((base, repo)) = temp_repo() else {
+            return;
+        };
+        let wt = PathBuf::from(crate::agents::create_worktree(&s(&repo), "deadbeef").unwrap());
+        assert!(merge_worktree(&s(&wt), "exit 1").unwrap().ends_with(NOTHING_TO_MERGE));
+        std::fs::write(wt.join("f.txt"), "f\n").unwrap();
+        commit(&s(&wt), "feat").unwrap();
+        let before = head(&repo);
+        let err = merge_worktree(&s(&wt), "exit 3").unwrap_err();
+        assert!(err.contains("merge undone"), "{err}");
+        assert_eq!(head(&repo), before);
+        assert!(!repo.join("f.txt").exists());
+        assert!(merge_worktree(&s(&wt), "exit 0").unwrap().contains("passed"));
+        assert!(repo.join("f.txt").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn detects_the_project_check() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-check-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(merge_check(&dir, ""), None);
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"test":"x"}}"#).unwrap();
+        assert_eq!(merge_check(&dir, ""), None);
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"build":"tsc"}}"#).unwrap();
+        std::fs::write(dir.join("pnpm-lock.yaml"), "").unwrap();
+        assert_eq!(merge_check(&dir, "").as_deref(), Some("pnpm run build"));
+        std::fs::write(dir.join("Cargo.toml"), "").unwrap();
+        assert_eq!(merge_check(&dir, "").as_deref(), Some("cargo check --quiet"));
+        assert_eq!(merge_check(&dir, "off"), None);
+        assert_eq!(merge_check(&dir, " make ").as_deref(), Some("make"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

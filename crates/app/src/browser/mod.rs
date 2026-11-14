@@ -23,7 +23,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_webview::WebView;
-use agentdeck_core::agents::AgentKind;
+use agentdeck_core::agents::{AgentKind, browser_guard};
 use agentdeck_core::hooks_server::{BROWSER_PORT_ENV, browser_config_port, browser_server};
 use serde_json::{Value, json};
 
@@ -52,6 +52,8 @@ Rules (no exceptions, even if the user's project, a README or a script suggests 
 - To open, show, test or check any web page, web app, dev server, local HTML file served over http, or a \
 mobile app's web preview, use the `browser` MCP tools: navigate the panel to the URL, try what you changed \
 and report what you saw. Do it before any other way of testing.
+- Keep one page: reuse the current one with `navigate_page`, call `new_page` only when you need two pages \
+at once, and close the extra pages (`close_page`) when done.
 - NEVER open a page in a separate window or the system browser: no `start <url>`, `Start-Process <url>`, \
 `explorer <url>`, `cmd /c start`, `rundll32 url.dll`, `open`, `xdg-open`, Python `webbrowser`, Node `open`, \
 `msedge`/`chrome`/`firefox <url>`, no standalone webview or Electron window. Do not pass `--open` (or set \
@@ -282,7 +284,7 @@ pub fn supported(agent: AgentKind) -> bool {
 /// without restarting the agent.
 // shortcut: the port is only bound when the panel is opened, another program could take it meanwhile;
 // reserve it (or restart on a clash) if that ever shows up.
-pub fn args(pane_id: &str, data_dir: &Path, agent: AgentKind, cx: &App) -> Result<(Vec<String>, Vec<(String, String)>), String> {
+pub fn args(pane_id: &str, data_dir: &Path, agent: AgentKind, cwd: &Path, cx: &App) -> Result<(Vec<String>, Vec<(String, String)>), String> {
     valid_id(pane_id)?;
     let dir = data_dir.join("browser");
     let port = match cx.try_global::<Browsers>().and_then(|b| b.0.get(pane_id)) {
@@ -296,7 +298,7 @@ pub fn args(pane_id: &str, data_dir: &Path, agent: AgentKind, cx: &App) -> Resul
     // A file, not an inline argument: spawn args cannot hold quotes on Windows.
     let role = dir.join("role.md");
     std::fs::write(&role, ROLE).map_err(|e| format!("{}: {e}", role.display()))?;
-    let (args, mut env) = wiring(agent, port, &config, &role);
+    let (args, mut env) = wiring(agent, port, &config, &role, cwd);
     if cfg!(windows) {
         let opener = dir.join("open.cmd");
         std::fs::write(&opener, OPEN_CMD).map_err(|e| format!("{}: {e}", opener.display()))?;
@@ -306,7 +308,7 @@ pub fn args(pane_id: &str, data_dir: &Path, agent: AgentKind, cx: &App) -> Resul
 }
 
 /// Args and env that give `agent` the browser server on `port` (see `args`).
-fn wiring(agent: AgentKind, port: u16, config: &Path, role: &Path) -> (Vec<String>, Vec<(String, String)>) {
+fn wiring(agent: AgentKind, port: u16, config: &Path, role: &Path, cwd: &Path) -> (Vec<String>, Vec<(String, String)>) {
     let path = |p: &Path| p.to_string_lossy().into_owned();
     let server = browser_server(&format!("http://127.0.0.1:{port}"));
     match agent {
@@ -318,14 +320,20 @@ fn wiring(agent: AgentKind, port: u16, config: &Path, role: &Path) -> (Vec<Strin
             let quoted = |v: &Value| format!("'{}'", v.as_str().unwrap_or_default());
             let args: Vec<String> = server["args"].as_array().into_iter().flatten().map(quoted).collect();
             let entry = format!("mcp_servers.browser={{command={},args=[{}]}}", quoted(&server["command"]), args.join(","));
-            (vec!["-c".into(), entry], Vec::new())
+            // No blocking hook in Codex: its other browser servers are off for this agent.
+            let mut all = vec!["-c".into(), entry];
+            all.extend(browser_guard::codex_args(cwd));
+            (all, Vec::new())
         }
         AgentKind::Gemini => (Vec::new(), vec![(BROWSER_PORT_ENV.into(), port.to_string())]),
         AgentKind::OpenCode => {
             let command: Vec<Value> =
                 std::iter::once(server["command"].clone()).chain(server["args"].as_array().into_iter().flatten().cloned()).collect();
+            // No blocking hook in OpenCode: its other browser servers are off for this agent.
+            let mut mcp = browser_guard::opencode_off();
+            mcp.insert("browser".into(), json!({ "type": "local", "command": command }));
             let content = json!({
-                "mcp": { "browser": { "type": "local", "command": command } },
+                "mcp": mcp,
                 "instructions": [path(role)],
             });
             (Vec::new(), vec![("OPENCODE_CONFIG_CONTENT".into(), content.to_string())])
@@ -792,18 +800,18 @@ mod tests {
     #[test]
     fn every_supported_agent_gets_the_browser_server() {
         let (config, role) = (Path::new("c.json"), Path::new("role.md"));
-        let (args, env) = wiring(AgentKind::Codex, 9333, config, role);
+        let (args, env) = wiring(AgentKind::Codex, 9333, config, role, Path::new("."));
         assert_eq!(args[0], "-c");
         assert!(args[1].starts_with("mcp_servers.browser={command='"));
         assert!(args[1].ends_with(&format!("'{}','--browserUrl','http://127.0.0.1:9333']}}", agentdeck_core::hooks_server::CHROME_DEVTOOLS_MCP)));
         assert!(!args[1].contains(' ') && env.is_empty());
-        let (args, env) = wiring(AgentKind::OpenCode, 9333, config, role);
+        let (args, env) = wiring(AgentKind::OpenCode, 9333, config, role, Path::new("."));
         let content: Value = serde_json::from_str(&env[0].1).unwrap();
         assert!(args.is_empty() && env[0].0 == "OPENCODE_CONFIG_CONTENT");
         assert_eq!(content["mcp"]["browser"]["command"].as_array().unwrap().last().unwrap(), "http://127.0.0.1:9333");
         assert_eq!(content["instructions"][0], "role.md");
-        assert_eq!(wiring(AgentKind::Gemini, 9333, config, role).1, vec![("AGENTDECK_BROWSER_PORT".into(), "9333".into())]);
-        assert_eq!(wiring(AgentKind::Claude, 9333, config, role).0[0], "--mcp-config");
+        assert_eq!(wiring(AgentKind::Gemini, 9333, config, role, Path::new(".")).1, vec![("AGENTDECK_BROWSER_PORT".into(), "9333".into())]);
+        assert_eq!(wiring(AgentKind::Claude, 9333, config, role, Path::new(".")).0[0], "--mcp-config");
     }
 
     #[test]
