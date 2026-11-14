@@ -218,6 +218,8 @@ struct Browser {
     port: u16,
     /// Mobile preview: the page is laid out as a phone viewport, with mobile emulation.
     mobile: bool,
+    /// Set when a WebView2 process failed (GPU, renderer): the panel revives the view (see `revive`).
+    crashed: Rc<Cell<bool>>,
     _context: wry::WebContext,
 }
 
@@ -270,9 +272,58 @@ pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -
     let webview = WebView::build(builder, window, cx).map_err(|e| format!("cannot open the browser: {e}"))?;
     // Off-screen until the panel's prepaint shows it at its bounds; usable by the agent meanwhile.
     park(&webview);
+    let crashed = Rc::new(Cell::new(false));
+    #[cfg(windows)]
+    watch_crashes(webview.raw(), crashed.clone());
     let view = cx.new(|_| webview);
-    cx.default_global::<Browsers>().0.insert(pane_id.to_owned(), Browser { view, port, mobile: false, _context: context });
+    let browser = Browser { view, port, mobile: false, crashed, _context: context };
+    cx.default_global::<Browsers>().0.insert(pane_id.to_owned(), browser);
     Ok(())
+}
+
+/// Flags the view when a WebView2 process fails: a GPU process restart leaves the view black until it
+/// is hidden and shown again. A dead or hung renderer also gets its page reloaded.
+#[cfg(windows)]
+fn watch_crashes(webview: &wry::WebView, crashed: Rc<Cell<bool>>) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
+    };
+    use wry::WebViewExtWindows as _;
+    let handler = webview2_com::ProcessFailedEventHandler::create(Box::new(move |page, args| {
+        let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+        if let Some(args) = args {
+            // SAFETY: COM calls on the UI thread that owns the webview, as WebView2 events are.
+            unsafe { args.ProcessFailedKind(&mut kind)? };
+        }
+        eprintln!("browser: WebView2 process failed (kind {}), reviving the view", kind.0);
+        if matches!(kind, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED | COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE)
+            && let Some(page) = page
+        {
+            // SAFETY: as above.
+            unsafe { page.Reload()? };
+        }
+        crashed.set(true);
+        Ok(())
+    }));
+    let mut token = 0i64;
+    // SAFETY: registers the handler on the UI thread; it lives as long as the webview.
+    if let Err(e) = unsafe { webview.webview().add_ProcessFailed(&handler, &mut token) } {
+        eprintln!("browser: cannot watch WebView2 failures: {e}");
+    }
+}
+
+/// Hides and shows the native view again, which makes WebView2 rebuild its visual (a page left black by
+/// a GPU process restart, sleep, a display change). The next prepaint puts it back at its bounds.
+fn revive(view: &WebView) {
+    let _ = view.set_visible(false);
+    let _ = view.set_visible(true);
+    #[cfg(windows)]
+    {
+        use wry::WebViewExtWindows as _;
+        // SAFETY: a COM call on the UI thread that owns the webview.
+        let _ = unsafe { view.raw().controller().NotifyParentWindowPositionChanged() };
+    }
 }
 
 /// Agents that can be given the browser MCP server at spawn. Grok only reads MCP servers from its
@@ -378,6 +429,11 @@ pub fn go(pane_id: &str, to: &str, cx: &mut App) -> Result<(), String> {
         "reload" => raw.reload(),
         _ => raw.load_url(parse_url(to)?.as_str()),
     };
+    // A black view does not come back with the page: reload also rebuilds the view.
+    if to == "reload" && view.read(cx).visible() {
+        revive(view.read(cx));
+        cx.refresh_windows();
+    }
     result.map_err(|e| e.to_string())
 }
 
@@ -618,6 +674,15 @@ impl BrowserPanel {
         // A frame that draws the body again shows it again.
         if !self.hidden.get() && self.seen_frame.get() != FRAME.with(Cell::get) {
             self.hide_native(cx);
+        }
+        // A failed WebView2 process left the view black; a hidden view is revived when shown again.
+        let crashed = cx.try_global::<Browsers>().and_then(|b| b.0.get(&self.pane_id)).map(|b| (b.view.clone(), b.crashed.clone()));
+        if let Some((view, crashed)) = crashed
+            && crashed.replace(false)
+            && !self.hidden.get()
+        {
+            revive(view.read(cx));
+            cx.notify();
         }
     }
 

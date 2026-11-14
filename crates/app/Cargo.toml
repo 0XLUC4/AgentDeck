@@ -64,6 +64,8 @@ tauri-winrt-notification = "0.8"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Media_Audio", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Power", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 # Strings for WebView2's DevTools protocol call (mobile emulation); the version webview2-com uses.
 windows-core = "0.61"
+# WebView2 events (process failures: revive a black page); the version wry uses.
+webview2-com = "0.38"
 
 [build-dependencies]
 winresource = "0.1"
