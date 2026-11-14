@@ -84,6 +84,87 @@ pub const CATALOG: &[Plugin] = &[
         default_on: false,
         skills: &[skill!("debugging", "agentdeck-debug")],
     },
+    Plugin {
+        id: "senior-dev",
+        name: "Senior developer",
+        description: "Work like a senior engineer: understand first, fit the architecture, simplest correct design, \
+                      errors and edge cases handled, verified for real, honest report of risks.",
+        category: "Engineering",
+        default_on: false,
+        skills: &[skill!("senior-dev", "agentdeck-senior-dev")],
+    },
+    Plugin {
+        id: "plan-first",
+        name: "Plan first",
+        description: "Big or vague tasks split into small ordered steps, each with a check; risks spotted early, \
+                      parallel parts ready to hand to several agents.",
+        category: "Engineering",
+        default_on: false,
+        skills: &[skill!("plan-first", "agentdeck-plan-first")],
+    },
+    Plugin {
+        id: "tests-first",
+        name: "Tests first",
+        description: "A failing test before the fix or feature, smallest change to pass, then refactor. \
+                      Fast, reliable tests; never weakened to get green.",
+        category: "Quality",
+        default_on: false,
+        skills: &[skill!("tests-first", "agentdeck-tests-first")],
+    },
+    Plugin {
+        id: "security",
+        name: "Security",
+        description: "Validation, injections, auth, permissions, secrets, uploads, dependencies, LLM prompt \
+                      injection: a checklist per area and a ranked report.",
+        category: "Quality",
+        default_on: false,
+        skills: &[skill!("security", "agentdeck-security")],
+    },
+    Plugin {
+        id: "git-workflow",
+        name: "Git workflow",
+        description: "Atomic Conventional Commits, branches, rebase or merge, conflicts, pull requests, and \
+                      safe ways to undo mistakes.",
+        category: "Engineering",
+        default_on: false,
+        skills: &[skill!("git-workflow", "agentdeck-git")],
+    },
+    Plugin {
+        id: "web-research",
+        name: "Web research",
+        description: "Fast, reliable web lookups: parallel precise searches, official docs first, pages read not \
+                      skimmed, versions and dates checked, sources cited.",
+        category: "Research",
+        default_on: false,
+        skills: &[skill!("web-research", "agentdeck-web-research")],
+    },
+    Plugin {
+        id: "lean-code",
+        name: "Lean code",
+        description: "The whole task with the least new code: reuse what exists, no speculative features or \
+                      dependencies, every caller and test finished, skipped parts said out loud.",
+        category: "Quality",
+        default_on: false,
+        skills: &[skill!("lean-code", "agentdeck-lean-code")],
+    },
+    Plugin {
+        id: "terse",
+        name: "Terse replies",
+        description: "Short answers that keep every technical fact: no filler, greetings or recaps, answer \
+                      first. Fewer tokens, faster to read.",
+        category: "Style",
+        default_on: false,
+        skills: &[skill!("terse", "agentdeck-terse")],
+    },
+    Plugin {
+        id: "3d",
+        name: "3D",
+        description: "3D that looks right and runs smooth. Blender first: bpy scripts run headless, rendered \
+                      previews checked, clean models, baking, glTF export. Also Three.js, R3F, Godot, Unity, Roblox.",
+        category: "3D",
+        default_on: false,
+        skills: &[skill!("3d", "agentdeck-3d")],
+    },
 ];
 
 /// FNV-1a: stable across builds (unlike `DefaultHasher`), enough to spot an edited file.

@@ -1,9 +1,10 @@
 //! Dictation pill: live mic bars, model download progress, transcribing dots, errors and a check
 //! once the words land. One entity for the whole run, shown at the bottom of the target pane.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
 use gpui_kit::*;
 
 use crate::state::{Deck, DeckEvent};
@@ -16,6 +17,44 @@ const MIN_HEIGHT: f32 = 0.1;
 const NOISE_GATE: f32 = 0.2;
 /// Per-frame easing toward the target height, so bars glide instead of jumping.
 const EASE: f32 = 0.35;
+/// Length of the "sent" check pop.
+const CHECK_MS: u64 = 420;
+const CHECK_SIZE: f32 = 22.0;
+
+/// Ease-out with a small overshoot (easeOutBack): the check pops slightly past full size, then settles.
+fn ease_out_back(t: f32) -> f32 {
+    const C1: f32 = 1.4;
+    let u = t - 1.0;
+    1.0 + (C1 + 1.0) * u * u * u + C1 * u * u
+}
+
+/// Green disc with a check, popping in (grow with overshoot + fade); the tick follows a beat later.
+/// The fixed-size slot keeps the pill from resizing while it animates.
+fn check_mark(key: usize, color: Hsla) -> Div {
+    let disc = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(color)
+        .text_color(white())
+        .child(
+            Icon::new(IconName::Check).with_animation(
+                SharedString::from(format!("voice-check-tick-{key}")),
+                Animation::new(Duration::from_millis(CHECK_MS)),
+                |icon, t| {
+                    let k = ease_out_back(((t - 0.3) / 0.7).clamp(0.0, 1.0));
+                    icon.size(px(14.0 * k.max(0.0)))
+                },
+            ),
+        )
+        .with_animation(
+            SharedString::from(format!("voice-check-disc-{key}")),
+            Animation::new(Duration::from_millis(CHECK_MS)),
+            |disc, t| disc.size(px(CHECK_SIZE * ease_out_back(t).max(0.0))).opacity((t * 2.5).min(1.0)),
+        );
+    div().size(px(CHECK_SIZE)).flex_shrink_0().flex().items_center().justify_center().child(disc)
+}
 
 pub struct VoicePill {
     pub deck: Entity<Deck>,
@@ -23,6 +62,8 @@ pub struct VoicePill {
     error: String,
     /// A transcript landed since the last recording started: show the check.
     delivered: bool,
+    /// Transcripts delivered so far: keys the check animation.
+    deliveries: usize,
     percent: Option<u64>,
     history: [f32; BAR_COUNT],
     shown: [f32; BAR_COUNT],
@@ -37,6 +78,7 @@ impl VoicePill {
             state: "idle".into(),
             error: String::new(),
             delivered: false,
+            deliveries: 0,
             percent: None,
             history: [0.0; BAR_COUNT],
             shown: [0.0; BAR_COUNT],
@@ -57,7 +99,11 @@ impl VoicePill {
                 }
             }
             "voice-error" => self.error = text(),
-            "voice-transcript" => self.delivered = !text().is_empty(),
+            "voice-transcript" => {
+                self.delivered = !text().is_empty();
+                // New id per delivery, so the check animation plays again.
+                self.deliveries += usize::from(self.delivered);
+            }
             "voice-download" => {
                 let p = &event.payload;
                 self.percent = match (p["received"].as_u64(), p["total"].as_u64()) {
@@ -142,17 +188,12 @@ impl Render for VoicePill {
             "transcribing" => pill.child(self.dots()),
             "error" => pill.child(div().truncate().text_sm().text_color(hsla(p.bad)).child(self.label())),
             "downloading" => pill.child(text(self.label(), 0.7)),
-            _ if self.delivered => pill.child(
-                div()
-                    .size(px(24.0))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .bg(hsla(p.ok))
-                    .text_color(white())
-                    .child(IconName::Check),
+            _ if self.delivered => pill.child(check_mark(self.deliveries, hsla(p.ok))).child(
+                text("Sent".into(), 0.85).with_animation(
+                    SharedString::from(format!("voice-sent-label-{}", self.deliveries)),
+                    Animation::new(Duration::from_millis(CHECK_MS)).with_easing(ease_out_quint()),
+                    |el, t| el.opacity(t),
+                ),
             ),
             _ => pill.child(text(self.label(), 0.7)),
         }

@@ -62,6 +62,9 @@ pub fn init(cx: &mut App) {
         };
         let deck = view.deck().clone();
         window::wire(window, deck.clone(), cx);
+        if std::env::args().any(|a| a == instance::AFTER_UPDATE) {
+            window::show_main(cx); // relaunched by the updater: come to the front
+        }
         instance::listen(cx);
         if let Err(e) = apply_phone(deck.read(cx)) {
             eprintln!("{e}");

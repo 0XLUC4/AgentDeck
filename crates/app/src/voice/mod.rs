@@ -1,6 +1,5 @@
 //! Voice: dictation pill on the target pane (level meter, check mark), dictation
-//! routing to a pane ("Codex, run the tests"), voice glow data for the target pane, spoken task
-//! summaries (TTS).
+//! routing to a pane ("Codex, run the tests"), spoken task summaries (TTS).
 //! Original: src/components/VoicePill, src/voice.tsx, src/lib/{voiceListener,voiceRoute,tts}.ts.
 //! Backend: agentdeck_core::voice; logic: agentdeck_core::logic::{voice_route,text::speech_text}.
 
@@ -13,7 +12,7 @@ use std::time::Duration;
 use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::DeckState;
 use agentdeck_core::logic::queue::{SUBMIT_DELAY_MS, prompt_text};
-use agentdeck_core::logic::text::{agent_name, now_ms, speech_text};
+use agentdeck_core::logic::text::{agent_name, speech_text};
 use agentdeck_core::logic::voice_route::{RouteCandidate, route_transcript};
 use agentdeck_core::persist::{JsonStore, LOCAL_FILE};
 use agentdeck_core::{AppHandle, AppState};
@@ -28,22 +27,6 @@ const RECENT_KEY: &str = "voice-recent";
 const RECENT_MAX: usize = 50;
 /// Distance between the pill and the bottom of the target pane, in logical px.
 const PILL_BOTTOM: f32 = 16.0;
-
-/// Dictation as seen by the main window, for the pane glow: recording state and the last delivery.
-#[derive(Debug, Clone, Default)]
-pub struct VoiceActivity {
-    /// "idle" | "listening" | "downloading" | "transcribing" | "error".
-    pub state: String,
-    pub sent_to: Option<String>,
-    pub sent_at: i64,
-}
-
-impl Global for VoiceActivity {}
-
-/// Current dictation activity (`state` is "idle" before the first recording).
-pub fn voice_activity(cx: &App) -> VoiceActivity {
-    cx.try_global::<VoiceActivity>().cloned().unwrap_or_default()
-}
 
 /// Id of the pane the next unnamed dictation goes to (header indicator).
 pub fn voice_target(cx: &App) -> Option<String> {
@@ -84,7 +67,6 @@ struct Voice {
 
 /// Registers the voice listener on the main window's deck, and the "any key silences speech" hook.
 pub fn init(cx: &mut App) {
-    cx.set_global(VoiceActivity { state: "idle".into(), ..Default::default() });
     cx.observe_new::<DeckView>(|view, _, cx| {
         if cx.has_global::<VoiceGlobal>() {
             return;
@@ -174,7 +156,6 @@ impl Voice {
             "voice-pill" => self.set_pill(text == "show", cx),
             // The pill truncates long errors: show the full message here too.
             "voice-error" => deck.update(cx, |d, cx| d.toast(format!("Voice: {text}"), cx)),
-            "voice-state" => cx.global_mut::<VoiceActivity>().state = text,
             "voice-transcript" => self.deliver(&text, cx),
             _ => {}
         }
@@ -202,19 +183,12 @@ impl Voice {
                 return;
             }
         };
-        let send = send_prompt(&backend, pane_id.clone(), &routed.text, submit, cx);
+        let send = send_prompt(&backend, pane_id, &routed.text, submit, cx);
         let deck = self.deck.clone();
         cx.spawn(async move |_, cx| {
-            let result = send.await;
-            cx.update(|cx| match result {
-                Ok(()) => {
-                    let activity = cx.global_mut::<VoiceActivity>();
-                    activity.sent_to = Some(pane_id);
-                    activity.sent_at = now_ms();
-                    deck.update(cx, |_, cx| cx.notify());
-                }
-                Err(e) => deck.update(cx, |d, cx| d.toast(format!("Dictation not sent: {e}"), cx)),
-            })
+            if let Err(e) = send.await {
+                cx.update(|cx| deck.update(cx, |d, cx| d.toast(format!("Dictation not sent: {e}"), cx)));
+            }
         })
         .detach();
     }

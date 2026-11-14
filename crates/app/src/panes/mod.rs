@@ -1,7 +1,7 @@
 //! Pane chrome and pane lifecycle: pane header (logo, title, timer, actions, menu), status badge,
-//! working outline and voice glow, exit bar, agent picker, permission cards, and the runtime that
+//! working outline, exit bar, agent picker, permission cards, and the runtime that
 //! spawns / restarts / closes the agents (store/runtime.ts).
-//! Original: src/components/TerminalPane/{PaneHeader,PaneMenu,PanePanel,WorkingOutline,VoiceGlow}.tsx,
+//! Original: src/components/TerminalPane/{PaneHeader,PaneMenu,PanePanel,WorkingOutline}.tsx,
 //! src/components/{AgentPicker,AgentLogo,StatusBadge,Permission,IconButton}, src/store/runtime.ts.
 //!
 //! Wiring: call [`start`] once with the deck (restores the saved sessions, starts the 1 s clock and the
@@ -24,7 +24,7 @@ use gpui_kit::*;
 
 // Public surface for layout and the feature modules; not every item is wired yet.
 #[allow(unused_imports)]
-pub use frame::{VoiceGlow, exit_bar, pane_border, pane_frame, pane_frame_border, pane_overlays, steps_bar};
+pub use frame::{exit_bar, pane_border, pane_frame, pane_frame_border, pane_overlays, steps_bar};
 #[allow(unused_imports)]
 pub use header::{PANE_COLORS, PaneHeader, PaneHeaderEvent, confirm_close, display_title};
 #[allow(unused_imports)]

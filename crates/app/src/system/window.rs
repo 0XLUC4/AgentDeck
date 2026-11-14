@@ -90,11 +90,30 @@ pub fn quit(cx: &mut App) {
 pub fn quit_for_update(exe: &std::path::Path, cx: &mut App) -> Result<(), String> {
     stop_agents(cx);
     agentdeck_core::shutdown();
-    std::process::Command::new(exe)
-        .arg(super::instance::AFTER_UPDATE)
-        .arg(std::process::id().to_string())
-        .spawn()
-        .map_err(|e| format!("cannot restart AgentDeck: {e}"))?;
+    // Windows only lets the foreground app hand focus on: without this the new window opens behind
+    // the others (only a taskbar flash), as if the update had not restarted.
+    #[cfg(windows)]
+    // SAFETY: plain Win32 call, no pointers.
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
+        AllowSetForegroundWindow(ASFW_ANY);
+    }
+    let restart = || {
+        let mut command = std::process::Command::new(exe);
+        command.arg(super::instance::AFTER_UPDATE).arg(std::process::id().to_string());
+        command
+    };
+    // Out of our job object: a launcher's kill-on-close job would end the new exe with this one.
+    // A job that forbids breakaway refuses the flag, so fall back to a plain start.
+    #[cfg(windows)]
+    let started = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        restart().creation_flags(CREATE_BREAKAWAY_FROM_JOB).spawn().or_else(|_| restart().spawn())
+    };
+    #[cfg(not(windows))]
+    let started = restart().spawn();
+    started.map_err(|e| format!("cannot restart AgentDeck: {e}"))?;
     exit_now()
 }
 

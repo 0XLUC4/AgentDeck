@@ -1,7 +1,7 @@
 //! Skills and Notes dialogs of one agent pane, with the Markdown file editor they share.
 //! Original: components/Skills/{AgentDialog,SkillsButton,NotesButton}.tsx.
 
-use agentdeck_core::logic::deck::PaneSpec;
+use agentdeck_core::agents::AgentKind;
 use agentdeck_core::logic::text::agent_name;
 use agentdeck_core::logic::theme::FONT_MONO;
 use agentdeck_core::skills::{
@@ -15,7 +15,7 @@ use gpui_kit::component::Disableable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{EDITOR_CONTEXT, SaveAgentFile, close_button, confirm, modal_frame, segmented};
+use super::{EDITOR_CONTEXT, SaveAgentFile, close_button, confirm, modal_frame, popup, segmented};
 use crate::theme::{hsla, palette, ui};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,80 +61,101 @@ impl Editor {
     }
 }
 
-/// Modal for one pane's agent: skills manager or notes list, both opening the file editor.
+/// One agent's skills manager or notes list, both opening the file editor. A modal, or the body of a
+/// tab of the Plugins page when `embedded`.
 pub struct AgentFilesDialog {
-    pane: PaneSpec,
+    agent: AgentKind,
+    cwd: String,
     kind: AgentDialogKind,
+    embedded: bool,
     pub focus: FocusHandle,
     skills: Option<Vec<SkillInfo>>,
     notes: Option<Vec<NoteFile>>,
     editing: Option<Editor>,
-    url: Entity<InputState>,
+    /// Search field.
+    query: Entity<InputState>,
+    /// GitHub link field of the install popup.
+    link: Entity<InputState>,
+    /// The install popup is open.
+    installing: bool,
     scope: Scope,
     busy: bool,
     /// Footer line; the default text shows when empty.
     status: String,
-    _url_events: Subscription,
+    _input_events: [Subscription; 2],
 }
 
 impl AgentFilesDialog {
     pub fn new(
-        pane: PaneSpec,
+        agent: AgentKind,
+        cwd: String,
         kind: AgentDialogKind,
+        embedded: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let placeholder = match kind {
-            AgentDialogKind::Skills => "Search skills, or paste a GitHub link to install one",
+            AgentDialogKind::Skills => "Search skills",
             AgentDialogKind::Notes => "Search notes",
         };
-        let url = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-        let url_events = cx.subscribe_in(&url, window, |this, _, event: &InputEvent, window, cx| {
-            match event {
-                InputEvent::PressEnter { .. } if this.query_is_link(cx) => this.install(window, cx),
-                _ => cx.notify(),
-            }
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let link = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("https://github.com/owner/repo/tree/main/skills/name")
         });
+        let input_events = [
+            cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
+            cx.subscribe_in(&link, window, |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.install(window, cx),
+                _ => cx.notify(),
+            }),
+        ];
         let mut this = Self {
-            pane,
+            agent,
+            cwd,
             kind,
+            embedded,
             focus: cx.focus_handle(),
             skills: None,
             notes: None,
             editing: None,
-            url,
+            query,
+            link,
+            installing: false,
             scope: Scope::User,
             busy: false,
             status: String::new(),
-            _url_events: url_events,
+            _input_events: input_events,
         };
         this.refresh(cx);
         this
     }
 
-    /// What gets the focus on open: the search / GitHub link field.
+    /// What gets the focus on open: the search field.
     pub fn initial_focus(&self, cx: &App) -> FocusHandle {
-        self.url.read(cx).focus_handle(cx)
+        self.query.read(cx).focus_handle(cx)
     }
 
-    /// The field holds a GitHub link to install, not a search.
-    fn query_is_link(&self, cx: &App) -> bool {
-        let text = self.url.read(cx).value();
-        let text = text.trim();
-        text.starts_with("http") || text.starts_with("github.com/")
-    }
-
-    /// Lowercased search text; empty when the field is empty or holds a link.
+    /// Lowercased search text.
     fn search(&self, cx: &App) -> String {
-        if self.query_is_link(cx) {
-            return String::new();
-        }
-        self.url.read(cx).value().trim().to_lowercase()
+        self.query.read(cx).value().trim().to_lowercase()
+    }
+
+    fn open_install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.installing = true;
+        self.link.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    /// Closes the install popup; false when it was not open (Esc closes the popup first).
+    pub fn close_popup(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = std::mem::take(&mut self.installing);
+        cx.notify();
+        open
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let agent = self.pane.agent;
-        let cwd = self.pane.cwd.clone();
+        let agent = self.agent;
+        let cwd = self.cwd.clone();
         let kind = self.kind;
         cx.spawn(async move |this, cx| {
             match kind {
@@ -178,8 +199,8 @@ impl AgentFilesDialog {
             text: text.clone(),
             _changes: changes,
         });
-        let agent = self.pane.agent;
-        let cwd = self.pane.cwd.clone();
+        let agent = self.agent;
+        let cwd = self.cwd.clone();
         cx.spawn_in(window, async move |this, cx| {
             let read_path = path.clone();
             let result = cx
@@ -213,8 +234,8 @@ impl AgentFilesDialog {
         };
         let text = editor.text.read(cx).value().to_string();
         let path = editor.path.clone();
-        let agent = self.pane.agent;
-        let cwd = self.pane.cwd.clone();
+        let agent = self.agent;
+        let cwd = self.cwd.clone();
         cx.spawn(async move |this, cx| {
             let (write_path, write_text) = (path.clone(), text.clone());
             let result = cx
@@ -257,15 +278,15 @@ impl AgentFilesDialog {
     }
 
     fn install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let url = self.url.read(cx).value().trim().to_string();
+        let url = self.link.read(cx).value().trim().to_string();
         if self.busy || url.is_empty() {
             return;
         }
         self.busy = true;
         self.status = "Downloading…".into();
         cx.notify();
-        let agent = self.pane.agent;
-        let cwd = self.pane.cwd.clone();
+        let agent = self.agent;
+        let cwd = self.cwd.clone();
         let scope = self.scope.id().to_string();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -280,7 +301,8 @@ impl AgentFilesDialog {
                             "Installed: {}. Restart the agent if it does not see them yet.",
                             names.join(", ")
                         );
-                        this.url.update(cx, |u, cx| u.set_value("", window, cx));
+                        this.link.update(cx, |u, cx| u.set_value("", window, cx));
+                        this.installing = false;
                         this.refresh(cx);
                     }
                     Err(e) => this.status = e,
@@ -292,8 +314,8 @@ impl AgentFilesDialog {
     }
 
     fn remove(&mut self, name: String, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        let agent = self.pane.agent;
-        let cwd = self.pane.cwd.clone();
+        let agent = self.agent;
+        let cwd = self.cwd.clone();
         cx.spawn_in(window, async move |this, cx| {
             let question = format!("Uninstall the skill \"{name}\"? Its folder is deleted.");
             if !confirm(question, "Uninstall", cx).await {
@@ -386,37 +408,19 @@ impl AgentFilesDialog {
 
     fn render_skills(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
-        let can_install = !self.busy && self.query_is_link(cx);
         let search = self.search(cx);
-        let scope = self.scope;
-        let picker = segmented(
-            "skill-scope",
-            &[(Scope::User, "All projects"), (Scope::Project, "This project")],
-            scope,
-            {
-                let this = cx.entity().downgrade();
-                move |scope, _, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        this.scope = scope;
-                        cx.notify();
-                    });
-                }
-            },
-            cx,
-        );
         let form = div()
             .flex()
             .items_center()
             .gap_2()
-            .child(div().flex_1().min_w_0().child(Input::new(&self.url)))
-            .child(picker)
+            .child(div().flex_1().min_w_0().child(Input::new(&self.query)))
             .child(
-                Button::new("skill-install")
+                Button::new("skill-install-open")
                     .primary()
                     .icon(IconName::Download)
                     .label("Install")
-                    .disabled(!can_install)
-                    .on_click(cx.listener(|this, _, window, cx| this.install(window, cx))),
+                    .tooltip("Install skills from a GitHub link")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_install(window, cx))),
             );
         let list = match &self.skills {
             None => centered_note("Loading…", p.muted).into_any_element(),
@@ -543,7 +547,7 @@ impl AgentFilesDialog {
                         })),
                 )
         }));
-        div().flex().flex_col().gap_3().child(Input::new(&self.url)).child(list).into_any_element()
+        div().flex().flex_col().gap_3().child(Input::new(&self.query)).child(list).into_any_element()
     }
 }
 
@@ -565,6 +569,8 @@ impl Render for AgentFilesDialog {
             self.status.clone()
         };
         let panel = div()
+            .flex()
+            .flex_col()
             .child(
                 div()
                     .flex()
@@ -587,14 +593,10 @@ impl Render for AgentFilesDialog {
                                     .truncate()
                                     .text_size(ui(12.0))
                                     .text_color(hsla(p.subtle))
-                                    .child(format!(
-                                        "{} · {}",
-                                        agent_name(self.pane.agent),
-                                        self.pane.cwd
-                                    )),
+                                    .child(format!("{} · {}", agent_name(self.agent), self.cwd)),
                             ),
                     )
-                    .child(close_button()),
+                    .when(!self.embedded, |d| d.child(close_button())),
             )
             .child(div().flex().flex_col().gap_3().p_5().min_h_0().child(body))
             .child(
@@ -607,7 +609,68 @@ impl Render for AgentFilesDialog {
                     .text_color(hsla(p.subtle))
                     .child(status),
             );
-        modal_frame(&self.focus, 768.0, panel, cx)
+        let install = self.installing.then(|| self.render_install(cx));
+        if self.embedded {
+            return div().relative().size_full().flex().flex_col().child(panel).children(install).into_any_element();
+        }
+        modal_frame(&self.focus, 768.0, panel.relative().children(install), cx).into_any_element()
+    }
+}
+
+impl AgentFilesDialog {
+    /// Install popup: GitHub link, where to install, Install / Cancel.
+    fn render_install(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let p = palette(cx);
+        let can_install = !self.busy && !self.link.read(cx).value().trim().is_empty();
+        let picker = segmented(
+            "skill-scope",
+            &[(Scope::User, "All projects"), (Scope::Project, "This project")],
+            self.scope,
+            {
+                let this = cx.entity().downgrade();
+                move |scope, _, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        this.scope = scope;
+                        cx.notify();
+                    });
+                }
+            },
+            cx,
+        );
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_xs().text_color(hsla(p.subtle)).whitespace_normal().child(format!(
+                "A GitHub repository or folder with SKILL.md files, installed for {}.",
+                agent_name(self.agent)
+            )))
+            .child(Input::new(&self.link))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(picker)
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("skill-install-cancel")
+                            .ghost()
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_popup(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("skill-install")
+                            .primary()
+                            .icon(IconName::Download)
+                            .label(if self.busy { "Installing…" } else { "Install" })
+                            .disabled(!can_install)
+                            .on_click(cx.listener(|this, _, window, cx| this.install(window, cx))),
+                    ),
+            );
+        popup("skill-install-popup", "Install skills", body, cx)
     }
 }
 
