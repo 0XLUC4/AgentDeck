@@ -311,6 +311,8 @@ impl DeckView {
             .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::history::OpenJournal), cx));
         let automations = on(icon_button("rail-automations", IconName::RotateCcwClock, "Automations: prompts that run on a schedule", &p), kind == Some("automations"))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| crate::automations::open(this.deck.clone(), window, cx)));
+        let plugins = on(icon_button("rail-plugins", IconName::Blocks, "Plugins: skills for every agent", &p), kind == Some("plugins"))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| crate::plugins::open(this.deck.clone(), window, cx)));
         let settings = icon_button("rail-settings", IconName::Settings, "Settings (Ctrl+,)", &p)
             .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::settings::OpenSettings), cx));
 
@@ -339,6 +341,7 @@ impl DeckView {
             .child(history)
             .child(journal)
             .child(automations)
+            .child(plugins)
             .child(div().flex_1())
             .child(settings)
             .into_any_element()

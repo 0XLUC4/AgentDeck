@@ -127,6 +127,16 @@ pub struct Settings {
     /// Shell command run once in each new agent worktree (install deps, copy .env); "" = none.
     #[serde(default)]
     pub worktree_setup: String,
+    /// Check run in the main checkout after merging an agent worktree, undone when it fails:
+    /// "" = guessed from the project (cargo check, npm run build...), "off" = none.
+    #[serde(default)]
+    pub merge_check: String,
+    /// Merges the orchestrator's worktree agents when its run ends.
+    #[serde(default = "default_true")]
+    pub auto_merge: bool,
+    /// Plugin id -> on/off chosen by the user; absent = the catalog default (`plugins::CATALOG`).
+    #[serde(default)]
+    pub plugins: BTreeMap<String, bool>,
     pub retry_rate_limit_minutes: u32,
     pub speech: SpeechSettings,
     pub auto_allow: Vec<AutoAllowRule>,
@@ -141,11 +151,20 @@ pub struct Settings {
     pub ui_zoom: u32,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_ui_zoom() -> u32 {
     UI_ZOOM_DEFAULT
 }
 
 impl Settings {
+    /// The plugin is on: the user's choice, else the catalog default.
+    pub fn plugin_on(&self, plugin: &crate::plugins::Plugin) -> bool {
+        self.plugins.get(plugin.id).copied().unwrap_or(plugin.default_on)
+    }
+
     pub fn agent(&self, kind: AgentKind) -> AgentDefaults {
         self.agents.get(&kind).cloned().unwrap_or(AgentDefaults {
             args: String::new(),
@@ -184,6 +203,9 @@ impl Default for Settings {
             sleep_minutes: 0,
             base_port: 0,
             worktree_setup: String::new(),
+            merge_check: String::new(),
+            auto_merge: true,
+            plugins: BTreeMap::new(),
             retry_rate_limit_minutes: 0,
             auto_allow: Vec::new(),
             budget: BudgetSettings {
@@ -280,6 +302,12 @@ pub fn merge_settings(raw: &Value) -> Settings {
         sleep_minutes: minutes(&raw["sleepMinutes"], d.sleep_minutes),
         base_port: port(&raw["basePort"]),
         worktree_setup: raw["worktreeSetup"].as_str().unwrap_or("").trim().to_owned(),
+        merge_check: raw["mergeCheck"].as_str().unwrap_or("").trim().to_owned(),
+        auto_merge: boolean(&raw["autoMerge"], d.auto_merge),
+        plugins: raw["plugins"]
+            .as_object()
+            .map(|m| m.iter().filter_map(|(id, on)| Some((id.clone(), on.as_bool()?))).collect())
+            .unwrap_or_default(),
         retry_rate_limit_minutes: minutes(&raw["retryRateLimitMinutes"], d.retry_rate_limit_minutes),
         notify: NotifySettings {
             enabled: boolean(&n["enabled"], d.notify.enabled),

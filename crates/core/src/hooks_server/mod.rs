@@ -218,7 +218,18 @@ fn launch_denied(body: &Value) -> Option<&'static str> {
     });
     static PROCESS: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"(?i)\b(start-process|saps)\b").expect("static regex"));
-    if body["hook_event_name"] != "PreToolUse" || !matches!(body["tool_name"].as_str(), Some("Bash" | "PowerShell")) {
+    if body["hook_event_name"] != "PreToolUse" {
+        return None;
+    }
+    let tool = body["tool_name"].as_str()?;
+    // Another MCP server driving its own browser window (a plugin's chrome-devtools, Playwright...).
+    if tool.starts_with("mcp__")
+        && !tool.starts_with("mcp__browser__")
+        && crate::agents::browser_guard::names_a_browser(tool)
+    {
+        return Some(BROWSER_DENIED);
+    }
+    if !matches!(tool, "Bash" | "PowerShell") {
         return None;
     }
     let command = body["tool_input"]["command"].as_str()?;
@@ -883,6 +894,17 @@ mod tests {
             assert_eq!(deny("Bash", cmd), None, "{cmd}");
         }
         assert_eq!(deny("Read", "start http://x"), None);
+        for tool in [
+            "mcp__plugin_ecc_chrome-devtools__new_page",
+            "mcp__playwright__browser_navigate",
+            "mcp__claude-in-chrome__navigate",
+            "mcp__computer-use__screenshot",
+        ] {
+            assert_eq!(deny(tool, ""), Some(BROWSER_DENIED), "{tool}");
+        }
+        for tool in ["mcp__browser__new_page", "mcp__github__create_issue", "WebFetch"] {
+            assert_eq!(deny(tool, ""), None, "{tool}");
+        }
     }
 
     #[test]

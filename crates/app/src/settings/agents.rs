@@ -16,6 +16,7 @@ use crate::theme::{hsla, ui};
 pub(super) struct Agents {
     base_port: Entity<InputState>,
     worktree_setup: Entity<InputState>,
+    merge_check: Entity<InputState>,
     retry: Entity<InputState>,
     daily_usd: Entity<InputState>,
     pane_usd: Entity<InputState>,
@@ -67,6 +68,13 @@ impl Agents {
                 this.set(cx, |s| s.worktree_setup = command);
             }
         }));
+        let merge_check = super::input(window, cx, "Guessed (cargo check, npm run build...)", &s.merge_check);
+        subs.push(cx.subscribe(&merge_check, |this, state, event: &InputEvent, cx| {
+            let command = state.read(cx).value().trim().to_owned();
+            if matches!(event, InputEvent::Blur) && command != this.settings(cx).merge_check {
+                this.set(cx, |s| s.merge_check = command);
+            }
+        }));
         let retry = super::number_input(
             window,
             cx,
@@ -112,6 +120,7 @@ impl Agents {
         Self {
             base_port,
             worktree_setup,
+            merge_check,
             retry,
             daily_usd,
             pane_usd,
@@ -230,6 +239,25 @@ impl SettingsDialog {
                      git-ignored files. AGENTDECK_ROOT is the main checkout (copy \"%AGENTDECK_ROOT%\\.env\" .env)",
                 ),
                 field(&a.worktree_setup, Some(256.0), true),
+                &p,
+            ),
+            row(
+                "Merge worktrees when the orchestrator finishes",
+                Some(
+                    "When the orchestrator ends its turn, AgentDeck commits and merges its agents' worktrees into \
+                     the main checkout. Failures go back to the orchestrator to fix",
+                ),
+                toggle("set-auto-merge", s.auto_merge, &p)
+                    .on_click(cx.listener(|this, _, _, cx| this.set(cx, |s| s.auto_merge = !s.auto_merge))),
+                &p,
+            ),
+            row(
+                "Check after merge",
+                Some(
+                    "Runs in the main checkout after each worktree merge; the merge is undone if it fails, so the \
+                     main branch always builds. Empty: guessed from the project. \"off\": no check",
+                ),
+                field(&a.merge_check, Some(256.0), true),
                 &p,
             ),
             row(

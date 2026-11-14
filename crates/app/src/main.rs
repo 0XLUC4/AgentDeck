@@ -15,6 +15,7 @@ mod layout;
 mod orchestrator;
 mod palette;
 mod panes;
+mod plugins;
 mod settings;
 mod skills;
 mod state;
@@ -70,6 +71,7 @@ fn main() {
                 history::init,
                 orchestrator::init,
                 palette::init,
+                plugins::init,
                 settings::init,
                 skills::init,
                 system::init,

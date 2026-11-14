@@ -166,7 +166,7 @@ fn definitions() -> Value {
         ),
         tool(
             "merge_worktree",
-            "Merges an agent's AgentDeck worktree branch into the main checkout (--no-ff). Uncommitted changes are committed first with commitMessage, or the merge is refused.",
+            "Merges an agent's AgentDeck worktree branch into the main checkout (--no-ff), then builds the project there: if the build fails the merge is undone and the error returned. Uncommitted changes are committed first with commitMessage, or the merge is refused.",
             json!({ "paneId": pane, "commitMessage": { "type": "string" } }),
             &["paneId"]
         ),

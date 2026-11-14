@@ -448,7 +448,7 @@ fn chip(id: impl Into<ElementId>, selected: bool, p: &Palette) -> Stateful<Div> 
 }
 
 /// On/off switch (same look as the Settings one). The caller adds `.on_click`.
-fn toggle(id: impl Into<ElementId>, checked: bool, p: &Palette) -> Stateful<Div> {
+pub(crate) fn toggle(id: impl Into<ElementId>, checked: bool, p: &Palette) -> Stateful<Div> {
     div()
         .id(id)
         .flex()

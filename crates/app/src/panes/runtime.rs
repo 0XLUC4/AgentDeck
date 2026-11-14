@@ -53,6 +53,8 @@ struct Output {
     notice: Option<String>,
     /// Set while the pane waits because of such a notification (cleared once output resumes).
     notice_waiting_since: Option<i64>,
+    /// Last Enter sent to the pane (a prompt submitted by the user, the queue or the orchestrator).
+    submitted_at: i64,
 }
 
 struct Runtime {
@@ -599,11 +601,12 @@ fn open_browser(id: &str, cx: &mut App) -> Result<(), String> {
 /// opens and closes without a restart; the webview itself is only opened for a pane with its panel on.
 /// Workers in an orchestrator's tab skip it unless their panel is on: one chrome-devtools-mcp (node) less each.
 fn browser_args(id: &str, agent: AgentKind, cx: &mut App) -> Result<(Vec<String>, Vec<(String, String)>), String> {
-    let (dir, on, worker) = {
+    let (dir, on, worker, cwd) = {
         let d = deck(cx).ok_or("deck not ready")?.read(cx);
         let is_orchestrator = |p: &String| p != id && d.state.panes.get(p).is_some_and(|p| p.orchestrator);
         let worker = d.state.tabs.iter().any(|t| t.pane_ids.iter().any(|p| p == id) && t.pane_ids.iter().any(is_orchestrator));
-        (d.data_dir.clone(), d.state.panes.get(id).is_some_and(|p| p.browser), worker)
+        let pane = d.state.panes.get(id);
+        (d.data_dir.clone(), pane.is_some_and(|p| p.browser), worker, pane.map(|p| p.cwd.clone()).unwrap_or_default())
     };
     let given = on || !worker;
     if let Some(rt) = rt_mut(id, cx) {
@@ -612,7 +615,7 @@ fn browser_args(id: &str, agent: AgentKind, cx: &mut App) -> Result<(Vec<String>
     if !given {
         return Ok(Default::default());
     }
-    let args = crate::browser::args(id, &dir, agent, cx)?;
+    let args = crate::browser::args(id, &dir, agent, std::path::Path::new(&cwd), cx)?;
     if on {
         open_browser(id, cx)?;
     }
@@ -1198,7 +1201,11 @@ pub fn send_input(id: &str, data: &str, cx: &mut App) {
     }
     // The echo of what the user types is not the agent working.
     if let Some(rt) = rt_mut(id, cx) {
-        lock(&rt.output).repaint_until = now_ms() + REPAINT_MS;
+        let mut output = lock(&rt.output);
+        output.repaint_until = now_ms() + REPAINT_MS;
+        if data.contains("\r") {
+            output.submitted_at = now_ms();
+        }
     }
     let Some(state) = app_state(cx) else { return };
     if let Err(e) = state.panes.write(id, data.as_bytes()) {
@@ -1393,7 +1400,22 @@ const TASK_MIN_MS: i64 = 5000;
 
 /// Status of a pane read from its output. `busy`: output arrived within the activity window;
 /// `last`: time of the latest output; `since`: when the pane got its current status.
-fn derived_status(agent: AgentKind, status: PaneStatus, busy: bool, last: i64, since: i64, now: i64) -> PaneStatus {
+/// `submitted`: for an agent that reports its own end of turn (Codex `notify`), the last prompt sent:
+/// once its turn is over only a new prompt starts the next one, not output (a dev server's logs, a
+/// background terminal, a timer redraw), so a server it left running does not keep it "working".
+fn derived_status(
+    agent: AgentKind,
+    status: PaneStatus,
+    busy: bool,
+    last: i64,
+    since: i64,
+    now: i64,
+    submitted: Option<i64>,
+) -> PaneStatus {
+    let resting = matches!(status, PaneStatus::Done | PaneStatus::Idle);
+    if resting && submitted.is_some_and(|at| at <= since) {
+        return status;
+    }
     match status {
         // The tail of a finished turn is still inside the window: only later output is a new turn.
         PaneStatus::Done if busy && last > since + ACTIVITY_WINDOW_MS => PaneStatus::Working,
@@ -1424,7 +1446,8 @@ fn derive_statuses(now: i64, cx: &mut App) {
             let last = lock(&rt.output).last_output_at;
             // The other agents print a banner when they start: not work either.
             let busy = now - last < ACTIVITY_WINDOW_MS && rt.started_at.is_some_and(|start| last > start + STARTUP_MS);
-            let status = derived_status(p.agent, p.status, busy, last, p.status_since, now);
+            let submitted = (p.hooked && p.agent == AgentKind::Codex).then(|| lock(&rt.output).submitted_at);
+            let status = derived_status(p.agent, p.status, busy, last, p.status_since, now, submitted);
             (status != p.status).then(|| (p.id.clone(), status))
         })
         .collect();
@@ -1609,7 +1632,7 @@ mod tests {
     #[test]
     fn status_from_output() {
         use PaneStatus::{Done, Idle, Working};
-        let codex = |status, busy, last, since, now| derived_status(AgentKind::Codex, status, busy, last, since, now);
+        let codex = |status, busy, last, since, now| derived_status(AgentKind::Codex, status, busy, last, since, now, None);
         assert_eq!(codex(Idle, true, 100, 0, 100), Working);
         // A short burst goes back to idle; a real stretch of work ends as done.
         assert_eq!(codex(Working, false, 2_000, 0, 4_000), Idle);
@@ -1617,7 +1640,12 @@ mod tests {
         // The tail of the finished turn does not restart it; later output does.
         assert_eq!(codex(Done, true, 1_000, 0, 1_500), Done);
         assert_eq!(codex(Done, true, 9_000, 0, 9_500), Working);
-        assert_eq!(derived_status(AgentKind::Shell, Working, false, 20_000, 0, 24_000), Idle);
+        assert_eq!(derived_status(AgentKind::Shell, Working, false, 20_000, 0, 24_000, None), Idle);
+        // Codex with notify: after its turn, a running server's output is not a new turn; a prompt is.
+        let hooked = |status, submitted| derived_status(AgentKind::Codex, status, true, 9_000, 1_000, 9_500, Some(submitted));
+        assert_eq!(hooked(Done, 500), Done);
+        assert_eq!(hooked(Idle, 500), Idle);
+        assert_eq!(hooked(Done, 8_000), Working);
     }
     use core::prelude::v1::test;
 

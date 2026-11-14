@@ -10,6 +10,7 @@ use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub mod browser_guard;
 pub mod worktree_prep;
 
 use crate::hooks_server::{BROWSER_PORT_ENV, HookServer, TOKEN_HEADER, browser_server};
@@ -205,23 +206,27 @@ pub fn create_worktree(cwd: &str, pane_id: &str) -> Result<String, String> {
 
 /// Runs the user's worktree setup command (install deps, copy .env) through the shell in `dir`.
 /// `AGENTDECK_ROOT` is the main checkout, where the git-ignored files live.
-fn run_setup(command: &str, dir: &Path, root: &Path) -> Result<(), String> {
+/// `command` run by the system shell (cmd on Windows, sh elsewhere), with no console window.
+pub(crate) fn shell(command: &str) -> Command {
     #[cfg(windows)]
-    let mut cmd = {
+    {
         use std::os::windows::process::CommandExt;
         let mut cmd = Command::new("cmd");
         // /S + outer quotes: cmd runs the text as typed, inner quotes included.
         cmd.args(["/D", "/S", "/C"]).raw_arg(format!("\"{command}\""));
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         cmd
-    };
+    }
     #[cfg(not(windows))]
-    let mut cmd = {
+    {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(command);
         cmd
-    };
-    let out = cmd
+    }
+}
+
+fn run_setup(command: &str, dir: &Path, root: &Path) -> Result<(), String> {
+    let out = shell(command)
         .current_dir(dir)
         .env("AGENTDECK_ROOT", root)
         .stdin(std::process::Stdio::null()) // a prompt must fail, not hang the spawn
@@ -665,6 +670,23 @@ fn merge_gemini_browser(settings: &mut Value) {
         *servers = json!({});
     }
     servers["browser"] = browser_server(&url);
+    // Gemini has no blocking hook: the user's other browser servers are left out of AgentDeck's agents.
+    let excluded = browser_guard::gemini_excluded();
+    if excluded.is_empty() {
+        return;
+    }
+    let mcp = obj.entry("mcp").or_insert_with(|| json!({}));
+    if !mcp.is_object() {
+        *mcp = json!({});
+    }
+    let list = mcp.as_object_mut().expect("object").entry("excluded").or_insert_with(|| json!([]));
+    if let Some(list) = list.as_array_mut() {
+        for name in excluded {
+            if !list.iter().any(|v| v == name.as_str()) {
+                list.push(json!(name));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
