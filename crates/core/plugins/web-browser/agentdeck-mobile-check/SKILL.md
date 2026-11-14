@@ -1,51 +1,56 @@
 ---
 name: agentdeck-mobile-check
-description: Check a web page at phone and tablet width in the AgentDeck browser panel - overflow, tap targets, text size, menus, forms, keyboard, safe areas, slow network. Use for responsive or mobile work, a mobile app's web preview (Expo web, Capacitor, PWA), or when asked if a page works on phones.
+description: Check a web page at phone width in the AgentDeck browser panel's mobile preview - measured overflow, tap targets (WCAG 2.2), input zoom, text size, viewport meta, 100vh and safe areas, menus, forms, slow network - with a ready audit script. Use for responsive or mobile work, a mobile app's web preview (Expo web, Capacitor, PWA), or when asked whether a page works on phones.
 ---
 
 # Mobile check in the AgentDeck browser panel
 
-Use only the `browser` MCP tools (the AgentDeck panel the user watches).
+Only the `browser` MCP tools (the panel the user watches).
 
-## Widths to check
+## Phone width: the panel's mobile preview
 
-| Device | Viewport | Why |
-|---|---|---|
-| Small phone | 360 x 740 | most Android, breaks first |
-| Phone | 390 x 844 | iPhone 13-15 |
-| Large phone | 430 x 932 | Pro Max, landscape-like spacing |
-| Tablet | 768 x 1024 | layout breakpoint |
-
-Use `emulate` with a mobile, touch viewport (sets touch events and the mobile user agent), or
-`resize_page`. The user can also turn on the panel's mobile preview.
+The panel has a mobile preview: 390 x 844 viewport, mobile user agent, touch. **Never call
+`resize_page`, or `emulate` with a `viewport`**: they resize the native page, which then leaves the
+panel. In a Claude agent such a call is blocked and switches the mobile preview on (width under 600)
+or off (wider) instead; other agents ask the user to click the phone button in the panel bar.
+Other widths (360, 430, tablet 768, landscape) are not available: say they were not checked.
 
 ## Steps
 
-1. Load the page (`navigate_page`), set the smallest width first.
-2. `take_screenshot` of the first screen, then scroll (`evaluate_script` `window.scrollBy(0, 800)`)
-   and screenshot again until the end of the page.
-3. Measure instead of guessing, with `evaluate_script`:
-   - horizontal overflow: `document.documentElement.scrollWidth > window.innerWidth`; find the
-     culprit: `[...document.querySelectorAll('*')].filter(e => e.getBoundingClientRect().right > innerWidth).map(e => e.tagName + '.' + e.className)`;
-   - tap targets under 44 x 44 px: same idea on `a, button, input, [role=button]`;
-   - text under 16 px on inputs (iOS zooms the page on focus) and under 14 px for body text.
-4. Use it: open the menu, dialogs, dropdowns; fill a form field; check the submit is still reachable
-   and the fixed header/footer does not cover content.
-5. Check the usual mobile breakers:
-   - `<meta name="viewport" content="width=device-width, initial-scale=1">` present;
-   - `100vh` on mobile: use `100dvh` / `100svh`;
-   - notch: `env(safe-area-inset-*)` with `viewport-fit=cover`;
-   - images with `max-width: 100%`, tables and code blocks scroll inside their own box;
-   - long words and URLs: `overflow-wrap: anywhere`;
-   - hover-only interactions have a tap equivalent;
-   - flex/grid children with `min-width: 0` so text can shrink.
-6. Slow network: `emulate` with a slow 4G/3G profile, reload, check loading states and that the page
-   is usable before everything arrives.
-7. Landscape: swap width and height once.
-8. Fix, reload, check again at every width. Put the viewport back (`emulate` with no viewport, or
-   `resize_page`) when done.
+1. `navigate_page` to the URL, mobile preview on (Claude: `resize_page` 390 x 844 switches it).
+2. **Audit**: `evaluate_script` with `sourcePath` = `scripts/mobile-audit.js` in this skill's folder
+   (absolute path; e.g. `~/.claude/skills/agentdeck-mobile-check/scripts/mobile-audit.js` expanded,
+   or `~/.agents/skills/...`), `waitForStableDom: false`. It returns:
+   - `userAgentMobile`, `viewportWidth`: confirm the preview is on (about 390, true).
+   - `horizontalOverflow` and `overflowCulprits` (deepest elements sticking out).
+   - `tapTargetsUnder24px` (fail, WCAG 2.2 AA) and `tapTargetsUnder44px` (warn, Apple and AAA).
+   - `inputsUnder16px` (iOS zooms the page on focus), `textUnder12px`.
+   - `viewportMetaProblems`, `rulesWith100vh`, `fixedBarsWithoutSafeArea`.
+3. **Look**: `take_screenshot` (`fullPage: true` for the whole page) and compare with the audit.
+4. **Use it**: fresh `take_snapshot` before each action (uids go stale after any DOM change); open
+   the menu, dialogs, dropdowns; `fill` a field; check the submit stays reachable and fixed headers
+   or footers do not cover content. Hover-only features need a tap equivalent.
+5. **Accessibility**: `lighthouse_audit` with `device: "mobile"`, `mode: "snapshot"`.
+6. **Slow network**: `emulate` with `networkConditions: "Slow 4G"` and `cpuThrottlingRate: 4` in one
+   call, no `viewport`; reload; loading states shown, page usable before everything arrives. Each
+   `emulate` call replaces all its settings and may drop the mobile user agent: rerun the audit and
+   check `userAgentMobile`; `emulate` with nothing to reset at the end.
+7. Fix, reload, rerun the audit until clean. Turn the preview off when done (Claude: `resize_page`
+   1280 x 800).
+
+## Usual fixes
+
+| Finding | Fix |
+|---|---|
+| Overflow | the culprit's fixed `width` → `max-width: 100%`; `min-width: 0` on flex/grid children; tables and code in their own `overflow-x: auto` box; long words and URLs `overflow-wrap: anywhere` |
+| Small tap target | padding to 44 px or `min-height`/`min-width: 44px`; at least 24 px with spacing |
+| Input zoom | `font-size: 16px` (or more) on inputs; never `user-scalable=no` or `maximum-scale=1` |
+| 100vh | `100dvh` (or `100svh` for a stable minimum) |
+| Notch, home bar | `viewport-fit=cover` plus `padding: env(safe-area-inset-*)` on fixed bars |
+| Missing viewport meta | `<meta name="viewport" content="width=device-width, initial-scale=1">` |
+| Component layout | container queries (`@container`) where the component, not the page, decides |
 
 ## Report
 
-Widths checked, what broke (with the element), what you fixed, what you could not test (real
-device, iOS Safari quirks, a real on-screen keyboard).
+What was checked at 390 px, audit results before and after, screenshots, what was fixed, and what
+was not tested: other widths, landscape, a real device, iOS Safari, an on-screen keyboard.

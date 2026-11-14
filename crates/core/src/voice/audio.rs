@@ -68,6 +68,7 @@ impl Capture {
 /// Owns the stream: opens it on start, keeps it [`KEEP_OPEN`] after stop, reopens it after an error.
 fn mic_thread(commands: Receiver<Command>) {
     boost_priority();
+    join_mta();
     let buffer = Shared::default();
     let recording = Arc::new(AtomicBool::new(false));
     let broken = Arc::new(AtomicBool::new(false));
@@ -143,6 +144,22 @@ fn boost_priority() {
 
 #[cfg(not(windows))]
 fn boost_priority() {}
+
+/// Puts the mic thread in COM's multithreaded apartment before cpal touches it. cpal otherwise makes it
+/// single-threaded (STA), and `ActivateAudioInterfaceAsync`, waited on without a message pump, then
+/// fails now and then with RPC_E_CHANGED_MODE ("Failed to get audio client"). cpal accepts an MTA thread.
+#[cfg(windows)]
+fn join_mta() {
+    use windows_sys::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+    // SAFETY: first COM call on this fresh thread; never uninitialized, the thread lives as long as the app.
+    let result = unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) };
+    if result < 0 {
+        eprintln!("voice: COM init failed: {}", std::io::Error::from_raw_os_error(result));
+    }
+}
+
+#[cfg(not(windows))]
+fn join_mta() {}
 
 fn open_stream(buffer: &Shared, recording: &Arc<AtomicBool>, broken: &Arc<AtomicBool>) -> Result<(cpal::Stream, u32), String> {
     let device = cpal::default_host()

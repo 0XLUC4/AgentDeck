@@ -1,62 +1,72 @@
 ---
 name: agentdeck-debug
-description: Find the root cause of a bug with evidence before changing code - reproduce, read the error, narrow down, prove the cause, fix once, prove the fix, guard with a test. Use for any bug, crash, panic, exception, failing test, flaky test, wrong output, regression, hang or "it does not work".
+description: Root-cause debugging from evidence - reproduce, read the full error, trace the bad value back to its origin, prove one hypothesis at a time, fix once at the source, prove the fix with a regression test. Use when hitting any bug, crash, panic, exception, failing or flaky test, wrong output, hang, regression or "it does not work", before proposing or writing any fix.
 ---
 
 # Debug from evidence
 
-Never change code to "see if it helps" before you know the cause.
+**Iron law: no fix without a proven root cause.** A change made "to see if it helps" is not debugging.
 
-## 1. Reproduce
+## Phase 1: Reproduce and read
 
-Get the exact error, input, steps, versions and environment. Turn them into a command or a test that
-fails every time. Cannot reproduce: collect logs, ask for the missing piece, do not guess a fix.
+1. Get the exact error text, input, steps, versions, environment. Turn them into one command or test
+   that fails every time. Cannot reproduce: collect logs and ask for the missing piece; do not guess.
+2. Read the whole message and stack trace: the first frame in project code, the logs just before.
+   Search the exact error text in the code base and in the dependency's issues.
+3. What changed? `git log -p --since=... -- <area>`, `git diff`, lock-file diff, config, env vars.
 
-## 2. Read the error fully
+## Phase 2: Trace back to the origin
 
-The whole message and stack trace, the first frame in *your* code, the logs just before. Search the
-exact error text in the codebase. Errors often point at the symptom: follow the bad value back to
-where it was made.
+The error line shows where the bad value was *noticed*, not where it was *made*. Walk the call chain
+backwards (caller of caller) until you find the first place where the value is wrong. Add a log or
+breakpoint at each component boundary (input and output of each step) instead of reading code and
+guessing. Compare with a working case (another input, an older commit, a similar feature) and list
+every difference.
 
-## 3. Narrow down
+Narrowing tools: smallest failing input; `git bisect run <test cmd>` between a good and a bad
+commit; clean build (`cargo clean`, delete `node_modules`/`.next`/`__pycache__`); in the browser
+panel `set_logpoints`, `get_network_request`, `list_console_messages` with `includeStackTraces`.
 
-- **Input**: shrink to the smallest failing case.
-- **Code**: `git bisect` between a good and a bad commit (`git bisect run <test cmd>` automates it);
-  comment out halves; replace parts with fixed values.
-- **Environment**: versions (`--version`, lock file diff), config, env vars, OS, clean build
-  (`cargo clean`, delete `node_modules` / `.next` / `__pycache__` caches).
-- **Observe**: logs at the boundaries (input and output of each step), a debugger with breakpoints,
-  in the browser `set_logpoints` and `get_network_request`.
+## Phase 3: One hypothesis at a time
 
-## 4. Prove the cause
+Write it: "X happens because Y". Test it with the smallest change or observation that would prove it
+wrong; change one variable at a time. Make the bug appear and disappear on purpose. Disproved: go
+back to Phase 2 with what you learned, never stack a second guess on top.
 
-Write one sentence: "X happens because Y". Check it by making the bug appear or disappear on purpose.
-A theory you did not test is not the cause. Two causes are possible: check the first fix fully solves it.
+## Phase 4: Fix and prove
 
-## Common causes by symptom
+1. A failing test that reproduces the bug (see `agentdeck-tests-first`).
+2. One fix, at the origin found in Phase 2, in shared code, not at each caller. Not by hiding the
+   error (`try/catch` that ignores, `?.` everywhere, a retry around a race).
+3. Search for the same mistake elsewhere (same pattern, same API misuse) and fix those too.
+4. Test passes, whole suite passes, the original reproduction passes. Flaky bug: run it 20-50 times
+   (`for i in $(seq 50); do <cmd> || break; done`). Remove temporary logs.
+
+**Three fixes failed? Stop.** The model of the problem is wrong, or the design is. Tell the user
+what you tried, what each attempt showed, and what you suspect, before trying a fourth.
+
+## Usual causes by symptom
 
 | Symptom | Look at |
 |---|---|
-| Works for me, fails elsewhere | env vars, paths, versions, locale, time zone, permissions, case of file names |
-| Fails sometimes (flaky) | race, shared state between tests, order, time, network, missing `await` |
-| Worked before | `git log -p` on the area, dependency updates, data changes |
-| `undefined` / `None` / null | an optional value not checked, wrong key, async value read too early |
-| Hang | deadlock, lock held across `await`, infinite loop, waiting on a closed channel, no timeout |
-| Wrong number | units, integer division, float rounding, off-by-one, overflow |
-| Encoding | UTF-8 vs Latin-1, BOM, `\r\n` |
-| Only in production build | minification, tree-shaking, env vars at build time, SSR vs client |
+| Works here, fails there | env vars, paths, versions, locale, time zone, permissions, file name case |
+| Sometimes fails | race, shared state between tests, order, time, network, missing `await` |
+| Worked before | `git bisect`, dependency updates, data or config changes |
+| null / undefined / None | optional not checked, wrong key, async value read too early |
+| Hang | deadlock, lock held across `await`, loop, waiting on a closed channel, no timeout |
+| Wrong number | units, integer division, float rounding, off-by-one, overflow, ms vs s |
+| Garbled text | UTF-8 vs Latin-1, BOM, `\r\n` |
+| Only in production build | minification, tree-shaking, build-time env vars, SSR vs client |
 
-## 5. Fix the root cause once
+## Red flags: stop when you think
 
-In the shared code, not at each caller, and not by hiding the error (`try/catch` that ignores,
-`?.` everywhere). Search for the same mistake elsewhere and fix it too.
-
-## 6. Prove the fix
-
-The failing test or command now passes; the other tests still pass. Add the reproduction as a
-regression test. Remove temporary logs and debug code. Flaky bug: run the test many times
-(`for i in $(seq 50)`) before calling it fixed.
+- "I see the problem, let me fix it" (before reproducing).
+- "Quick fix for now, investigate later."
+- "Let me change a few things and run the tests."
+- "One more attempt" (after the third).
+- "It is probably a caching / flaky / environment issue" (without evidence).
 
 ## Report
 
-The cause in one sentence, the evidence, the fix, how you verified it, the test added.
+The cause in one sentence, the evidence that proves it, the fix and where, the regression test, how
+it was verified. If not proven, say so and what is left to check.

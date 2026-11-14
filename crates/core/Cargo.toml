@@ -23,7 +23,7 @@ regex = "1"
 unicode-normalization = "0.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [features]
 # Vulkan GPU backend for local transcription (needs the Vulkan SDK at build time).

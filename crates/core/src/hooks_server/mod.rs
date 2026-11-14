@@ -140,7 +140,12 @@ fn process(app: &AppHandle, hook: &Hook) -> tiny_http::ResponseBox {
     if calls_browser(&hook.json) {
         open_browser(app, &hook.pane_id);
     }
-    if let Some(reason) = launch_denied(&hook.json) {
+    let viewport = viewport_request(&hook.json);
+    if let Some(mobile) = viewport {
+        let _ = app.emit("agent-browser-mobile", json!({ "paneId": hook.pane_id, "mobile": mobile }));
+    }
+    let denied = viewport.map(|mobile| if mobile { MOBILE_ON } else { MOBILE_OFF }).or_else(|| launch_denied(&hook.json));
+    if let Some(reason) = denied {
         let deny = json!({ "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
@@ -197,6 +202,36 @@ AgentDeck browser panel with the `browser` MCP tools (navigate_page / new_page):
 const CONSOLE_DENIED: &str = "AgentDeck: do not open an external console window (start, Start-Process, wt, \
 CREATE_NEW_CONSOLE): the user cannot see or stop it. Run the command with your own shell tool, in the \
 background for a long-running one (dev server, watcher), and read its output there.";
+
+const MOBILE_ON: &str = "AgentDeck: resizing the page moves it out of the browser panel, so it was not done. \
+Instead, AgentDeck turned on the panel's mobile preview: 390x844 phone viewport, mobile user agent, touch, \
+page reloaded. Go on testing (take_screenshot, take_snapshot...) as is. Call `emulate` again only for \
+network or CPU throttling, without a viewport.";
+const MOBILE_OFF: &str = "AgentDeck: resizing the page moves it out of the browser panel, so it was not done. \
+Instead, AgentDeck turned off the panel's mobile preview: the page is back at the panel's full size, \
+desktop user agent, page reloaded. Go on testing as is.";
+
+/// Phone layouts end below this width; at or above it the panel's own (desktop) size is used.
+const PHONE_MAX_WIDTH: u64 = 600;
+
+/// A Claude call that would resize the browser page (`resize_page`, or `emulate` with a viewport): the
+/// native view would leave the panel. Some(true) for a phone width, Some(false) for a wider one or a reset.
+fn viewport_request(body: &Value) -> Option<bool> {
+    if body["hook_event_name"] != "PreToolUse" {
+        return None;
+    }
+    let input = &body["tool_input"];
+    let width = match body["tool_name"].as_str()? {
+        "mcp__browser__resize_page" => input["width"].as_u64(),
+        "mcp__browser__emulate" => match input.get("viewport")? {
+            // "390x844x3,mobile,touch" or { width, height, ... }; null or "" resets it.
+            Value::String(text) => text.split(|c: char| !c.is_ascii_digit()).next().and_then(|w| w.parse().ok()),
+            viewport => viewport["width"].as_u64(),
+        },
+        _ => return None,
+    };
+    Some(width.is_some_and(|w| w > 0 && w < PHONE_MAX_WIDTH))
+}
 
 /// Why a Claude shell command must not run: it would open a page outside the browser panel (`start <url>`,
 /// `Start-Process <url>`, `explorer <url>`, `xdg-open`, `open <url>`, Python `webbrowser`, a browser
@@ -857,6 +892,22 @@ fn describe_tool(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_calls_switch_the_mobile_preview() {
+        let call = |tool: &str, input: Value| {
+            viewport_request(&json!({ "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input }))
+        };
+        assert_eq!(call("mcp__browser__resize_page", json!({ "width": 390, "height": 844 })), Some(true));
+        assert_eq!(call("mcp__browser__resize_page", json!({ "width": 1280, "height": 800 })), Some(false));
+        assert_eq!(call("mcp__browser__emulate", json!({ "viewport": "375x667x2,mobile,touch" })), Some(true));
+        assert_eq!(call("mcp__browser__emulate", json!({ "viewport": { "width": 360, "height": 740 } })), Some(true));
+        assert_eq!(call("mcp__browser__emulate", json!({ "viewport": null })), Some(false));
+        assert_eq!(call("mcp__browser__emulate", json!({ "viewport": "" })), Some(false));
+        // Throttling only: allowed.
+        assert_eq!(call("mcp__browser__emulate", json!({ "cpuThrottlingRate": 4 })), None);
+        assert_eq!(call("mcp__browser__take_screenshot", json!({})), None);
+    }
 
     #[test]
     fn denies_shell_commands_that_open_a_browser_or_a_console() {

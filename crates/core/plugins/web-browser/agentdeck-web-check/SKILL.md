@@ -1,59 +1,68 @@
 ---
 name: agentdeck-web-check
-description: Check a web page or web app for real in the AgentDeck browser panel (browser MCP tools) - load it, look at it, read console errors and failed requests, use it, fix, check again. Use after any change to a web UI, page, component, style, dev server or API called by a page, or when asked to test, check, show or debug a page.
+description: Check a web page or web app for real in the AgentDeck browser panel with the browser MCP tools - serve it, load it, look, read console errors and DevTools issues, check failed requests, use the changed feature, run a quick accessibility audit, fix and check again. Use after any change to a web UI, page, component, style, dev server or an API a page calls, and when asked to test, check, show or debug a page, before saying the change works.
 ---
 
 # Web check in the AgentDeck browser panel
 
-The user watches the AgentDeck browser panel next to your terminal. Only the `browser` MCP tools drive it
-(`navigate_page`, `take_snapshot`, `take_screenshot`, `click`, `fill`, `list_console_messages`,
-`list_network_requests`...). Never open a page any other way: no system browser, no other browser MCP
-server, no Playwright or Puppeteer window, no `start <url>`.
+**Never say a page works without having loaded and used it in the panel.**
+
+The user watches the AgentDeck browser panel. Only the `browser` MCP tools drive it (in Claude Code:
+`mcp__browser__*`). Never open a page any other way: no system browser, no other browser MCP server,
+no Playwright or Puppeteer window, no `start <url>`.
 
 ## Loop
 
-1. **Serve it.** Start the dev server with your own shell tool, in the background, without `--open`.
-   Read its output for the URL and port; wait for "ready"/"compiled" before loading. Port taken: use
-   the one the server picked, never kill a process you did not start. Static file: serve it over http
-   (`npx serve`, `python -m http.server`), do not open `file://`.
-2. **Load it.** `list_pages`, then `navigate_page` on the current page to the URL. Keep one page:
-   `new_page` only when you need two at once, `close_page` the extra ones when done.
-3. **Look.** `take_snapshot` for structure and element uids (cheap, use it first),
-   `take_screenshot` to see the layout. Compare with what was asked: text, spacing, alignment, colors,
-   hover/focus/disabled states, loading, empty and error states, long text, many items.
-4. **Read the errors.** `list_console_messages` (errors and warnings: hydration mismatch, React key,
-   undefined props, failed imports) and `list_network_requests` (4xx/5xx, failed, CORS, 404 assets).
-   Open one with `get_network_request` to read its payload and response.
-5. **Use it.** Do what a user would: `click`, `fill` / `fill_form`, `press_key` (Enter, Tab, Escape),
-   `hover`, `drag`, `upload_file`, `handle_dialog` for alert/confirm, `wait_for` the expected text.
-   Check the result on screen, not only that no error appeared.
-6. **Fix and repeat.** Change the code, wait for hot reload (or `navigate_page` again), redo steps 3
-   to 5 until the page is right with no new console error and no failed request.
+1. **Serve.** Start the dev server with your own shell tool, in the background, without `--open`.
+   Read its output for the URL; wait for "ready"/"compiled". Port taken: use the one the server
+   picked; never kill a process you did not start. Static files: serve over http
+   (`python -m http.server`, `npx serve`), never `file://`.
+2. **Load.** `list_pages` (gives the `pageId` every tool needs), then `navigate_page` on the current
+   page. One page: `new_page` only when you need two at once, `close_page` the extras after.
+3. **Wait and look.** `wait_for` text you expect (never a fixed sleep), then `take_snapshot`
+   (structure and uids, cheap) and `take_screenshot` (layout). Compare with what was asked: text,
+   spacing, alignment, colors, states (hover, focus, disabled, loading, empty, error), long text,
+   many items.
+4. **Read errors.** `list_console_messages` with `types: ["error", "warn", "issue"]` and
+   `includePreservedMessages: true` (keeps errors from before a redirect); `includeStackTraces: true`
+   to find the line. `issue` lists DevTools issues: missing labels, autocomplete, CSP, cookies,
+   mixed content. `list_network_requests`: 4xx/5xx, failed, CORS, 404 assets
+   (`resourceTypes: ["fetch", "xhr"]` for API calls); `get_network_request` for payload and response.
+5. **Use the changed feature.** Fresh `take_snapshot` before each action (uids go stale after any DOM
+   change). `click`, `fill` / `fill_form`, `press_key` (Enter, Tab, Escape), `hover`, `drag`,
+   `upload_file`, `handle_dialog` for alert/confirm. Then check the result on screen and re-read
+   console and network: many errors only appear on interaction.
+6. **Accessibility gate.** `lighthouse_audit` with `mode: "snapshot"` (current state, no reload,
+   ~2 s): buttons without a name, images without alt, inputs without a label, contrast, with
+   selectors. The snapshot alone misses them: an image without alt is not in it at all.
+7. **Fix and repeat.** Change the code, wait for hot reload or `navigate_page` with
+   `type: "reload", ignoreCache: true`, and redo 3 to 6 until the page is right with no new error.
+   Console and network lists keep everything since the last load: reload before reading them again.
 
 ## Find causes fast
 
-- Wrong style: `get_css_styles` on the element: which rule wins, computed size, overflow, z-index.
-- Wrong data: `get_network_request` on the API call; compare response with what is shown.
-- JS state: `evaluate_script` to read DOM values, `localStorage`, element sizes
-  (`el.getBoundingClientRect()`), or to call a function.
-- Logic in a running page: `set_logpoints` instead of adding `console.log` and rebuilding.
-- Animation or transition bug: `screencast_start` / `screencast_stop` to see it frame by frame.
-- Stale page after a fix: hard reload (`navigate_page` with cache ignored), check the dev server
-  rebuilt without errors.
+| Problem | Tool |
+|---|---|
+| Wrong style | `get_css_styles` on the uid: winning rule, overridden ones, source line |
+| Wrong data | `get_network_request` on the API call; compare the response with the screen |
+| State, sizes | `evaluate_script` (`el.getBoundingClientRect()`, `localStorage`, a function call) |
+| Logic in the running page | `set_logpoints` (`src/file.ts:42 'value', x`) instead of adding `console.log` and rebuilding |
+| Error before the page settles | `navigate_page` with `initScript` to hook `window.onerror` early |
+| Animation bug | `screencast_start` / `screencast_stop` |
+| Stale page | hard reload as in step 7; check the dev server rebuilt without errors |
 
 ## Also check quickly
 
-- Keyboard: Tab reaches every control in order, focus is visible, Escape closes dialogs.
-- Accessibility basics in the snapshot: buttons and links have names, images have alt, inputs have
-  labels.
-- Dark mode and a narrow window if the app supports them (use `agentdeck-mobile-check` for phones).
+- Keyboard: Tab reaches every control in order, focus visible, Escape closes dialogs.
+- Dark mode if supported: `emulate` with `colorScheme: "dark"`, then `"auto"`. Never pass
+  `viewport` to `emulate`; phones: `agentdeck-mobile-check`.
 
 ## Report
 
-Say what you loaded, what you did on the page, what you saw (screenshot or snapshot facts), and the
-console or network errors left, if any. Never claim a page works without having loaded it.
+What you loaded, what you did on the page, what you saw (screenshot or snapshot facts), console and
+network errors left, accessibility findings. Measured facts apart from guesses about their cause.
 
 ## Limits
 
-- A page behind a login: ask the user to log in in the panel, then continue. Never type their password.
+- Behind a login: ask the user to log in in the panel, then continue. Never type their password.
 - The task says not to run or test (an orchestrator worker): skip this skill.

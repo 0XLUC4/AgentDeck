@@ -63,8 +63,11 @@ Chrome DevTools MCP server, a Chrome extension or computer-use server. Only the 
 the panel the user sees.
 - While the panel is open, use it for anything else on the web too (look something up, read a page, check a \
 link); while it is closed, plain lookups may use search or fetch tools.
-- The panel has a mobile preview mode (phone width), toggled by the user in its bar: for mobile apps, check \
-the layout at phone width.
+- Phone width: the panel has a mobile preview (390x844 viewport, mobile user agent, touch), switched by \
+its phone button. NEVER call `resize_page`, or `emulate` with a viewport: they resize the native page, which \
+then leaves the panel. Claude agents: such a call is blocked and switches the mobile preview on (phone \
+width) or off (wider) instead. Other agents: ask the user to click the phone button. `emulate` without a \
+viewport (network, CPU throttling) is fine.
 - The user may send you notes about elements of the page: each one names the element by its CSS selector.
 
 # Side tasks: stay inside AgentDeck
@@ -213,6 +216,8 @@ pub fn init(cx: &mut App) {
 struct Browser {
     view: Entity<WebView>,
     port: u16,
+    /// Mobile preview: the page is laid out as a phone viewport, with mobile emulation.
+    mobile: bool,
     _context: wry::WebContext,
 }
 
@@ -266,7 +271,7 @@ pub fn open(pane_id: &str, data_dir: &Path, window: &mut Window, cx: &mut App) -
     // Off-screen until the panel's prepaint shows it at its bounds; usable by the agent meanwhile.
     park(&webview);
     let view = cx.new(|_| webview);
-    cx.default_global::<Browsers>().0.insert(pane_id.to_owned(), Browser { view, port, _context: context });
+    cx.default_global::<Browsers>().0.insert(pane_id.to_owned(), Browser { view, port, mobile: false, _context: context });
     Ok(())
 }
 
@@ -443,6 +448,24 @@ fn set_mobile(webview: &wry::WebView, on: bool) {
     let _ = webview.reload();
 }
 
+fn is_mobile(pane_id: &str, cx: &App) -> bool {
+    cx.try_global::<Browsers>().and_then(|b| b.0.get(pane_id)).is_some_and(|b| b.mobile)
+}
+
+/// Turns the pane's mobile preview on or off: from the panel's phone button, or when the agent tried to
+/// resize the page itself (`hooks_server::viewport_request`).
+pub fn set_mobile_preview(pane_id: &str, on: bool, cx: &mut App) -> Result<(), String> {
+    let browser = cx.default_global::<Browsers>().0.get_mut(pane_id).ok_or("no browser for this agent")?;
+    if browser.mobile == on {
+        return Ok(());
+    }
+    browser.mobile = on;
+    let view = browser.view.clone();
+    set_mobile(view.read(cx).raw(), on);
+    cx.refresh_windows();
+    Ok(())
+}
+
 /// Emitted when the user closed the browser for good: the pane is saved with `browser: false` and its
 /// webview is gone. The agent keeps running.
 #[derive(Debug, Clone)]
@@ -458,8 +481,6 @@ pub struct BrowserPanel {
     editing: bool,
     /// The page is in annotating mode (see `ANNOTATE_JS`).
     annotating: bool,
-    /// Mobile preview: the page is laid out as a phone viewport, with mobile emulation.
-    mobile: bool,
     /// Set by the body's prepaint: the last frame (see `FRAME`) the panel was drawn in.
     seen_frame: Rc<Cell<u64>>,
     /// The webview was hidden natively because the panel left the screen.
@@ -512,7 +533,6 @@ impl BrowserPanel {
             address,
             editing: false,
             annotating: false,
-            mobile: false,
             seen_frame: Rc::new(Cell::new(0)),
             hidden: Rc::new(Cell::new(true)),
             _subscriptions: subscriptions,
@@ -540,9 +560,9 @@ impl BrowserPanel {
 
     /// Turns the mobile preview on or off.
     fn toggle_mobile(&mut self, cx: &mut Context<Self>) {
-        self.mobile = !self.mobile;
-        if let Ok(view) = browser_view(&self.pane_id, cx) {
-            set_mobile(view.read(cx).raw(), self.mobile);
+        let on = !is_mobile(&self.pane_id, cx);
+        if let Err(e) = set_mobile_preview(&self.pane_id, on, cx) {
+            self.deck.update(cx, |d, cx| d.toast(format!("Browser: {e}"), cx));
         }
         cx.notify();
     }
@@ -676,7 +696,7 @@ impl BrowserPanel {
                 Button::new("browser-mobile")
                     .ghost()
                     .icon(IconName::Smartphone)
-                    .selected(self.mobile)
+                    .selected(is_mobile(&self.pane_id, cx))
                     .tooltip("Mobile preview: show the page at phone width")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_mobile(cx))),
             )
@@ -739,7 +759,7 @@ impl Render for BrowserPanel {
                 .absolute()
                 .size_full();
                 // Mobile preview: a phone viewport centered in the body, the rest keeps the panel background.
-                let page = match self.mobile {
+                let page = match is_mobile(&self.pane_id, cx) {
                     true => div().w(px(PHONE_WIDTH)).max_w_full().h_full().max_h(px(PHONE_HEIGHT)),
                     false => div().size_full(),
                 };

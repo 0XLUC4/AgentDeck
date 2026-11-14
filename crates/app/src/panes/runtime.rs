@@ -439,6 +439,21 @@ fn on_backend(event: &Event, cx: &mut App) {
                 .detach();
             }
         }
+        // The agent tried to resize its page (blocked: the view would leave the panel): mobile preview instead.
+        "agent-browser-mobile" => {
+            if let (Some(id), Some(on)) = (event.payload["paneId"].as_str(), event.payload["mobile"].as_bool()) {
+                let id = id.to_owned();
+                // Deferred like `show_browser`: the caller may be inside a window update.
+                cx.spawn(async move |cx| {
+                    cx.update(|cx| {
+                        if let Err(e) = crate::browser::set_mobile_preview(&id, on, cx) {
+                            toast(format!("Browser: {e}"), cx);
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
         // The deck notifies after every backend event: headers and the activity panel repaint.
         "agent-subagents" => {
             let list = serde_json::from_value::<Vec<Subagent>>(event.payload["subagents"].clone());
