@@ -308,17 +308,44 @@ pub const BROWSER_PORT_ENV: &str = "AGENTDECK_BROWSER_PORT";
 /// Pinned, not `@latest`: npx then reuses its cache instead of asking the npm registry at every agent start.
 pub const CHROME_DEVTOOLS_MCP: &str = "chrome-devtools-mcp@1.13.0";
 
+/// The pinned chrome-devtools-mcp script in npx's cache, run with plain `node`: without npx (and cmd
+/// on Windows) in between, one node process (~80 MB) less per agent. Looked up once per run; None
+/// until npx has installed it once, or when the path has a space (Codex's npm shim would split it).
+fn cached_browser_script() -> Option<String> {
+    static SCRIPT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    SCRIPT
+        .get_or_init(|| {
+            let (name, version) = CHROME_DEVTOOLS_MCP.rsplit_once('@')?;
+            let cache = if cfg!(windows) {
+                std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("npm-cache"))
+            } else {
+                home_dir().map(|h| h.join(".npm"))
+            }?;
+            std::fs::read_dir(cache.join("_npx")).ok()?.flatten().find_map(|entry| {
+                let package = entry.path().join("node_modules").join(name);
+                let manifest: Value = serde_json::from_str(&std::fs::read_to_string(package.join("package.json")).ok()?).ok()?;
+                if manifest["version"] != version {
+                    return None;
+                }
+                let script = package.join(manifest["bin"][name].as_str()?);
+                let script = script.to_str()?.to_owned();
+                (script.is_ascii() && !script.contains(' ') && Path::new(&script).is_file()).then_some(script)
+            })
+        })
+        .clone()
+}
+
 /// The `browser` MCP server (chrome-devtools-mcp) attached to the DevTools endpoint at `url`.
 pub fn browser_server(url: &str) -> Value {
     // No usage statistics: they cost a telemetry node process (~60 MB) per agent. The URL stays last
     // (`browser_config_port` reads it there).
-    let mut args = vec![
-        "-y".to_string(),
-        CHROME_DEVTOOLS_MCP.into(),
-        "--no-usage-statistics".into(),
-        "--browserUrl".into(),
-        url.to_owned(),
-    ];
+    let tail = ["--no-usage-statistics".to_string(), "--browserUrl".into(), url.to_owned()];
+    if let Some(script) = cached_browser_script() {
+        let args: Vec<String> = std::iter::once(script).chain(tail).collect();
+        return json!({ "command": "node", "args": args });
+    }
+    let mut args = vec!["-y".to_string(), CHROME_DEVTOOLS_MCP.into()];
+    args.extend(tail);
     // npx is a .cmd script on Windows: agents can only start it through cmd.
     let command = if cfg!(windows) {
         args.splice(0..0, ["/c".to_string(), "npx".into()]);

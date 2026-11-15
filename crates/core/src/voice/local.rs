@@ -115,8 +115,32 @@ pub fn preload(model_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The model (500 MB for `small`, over 1 GB for `large`) leaves memory after this long without a
+/// dictation. The key-down warm-up loads it back from the OS file cache while the user speaks.
+const UNLOAD_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// Frees the model once it has been idle for [`UNLOAD_AFTER`]. Skips a turn while a transcription
+/// holds the model.
+fn unload_when_idle() {
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+        let idle = LAST_RUN.lock().is_ok_and(|last| last.is_some_and(|at| at.elapsed() >= UNLOAD_AFTER));
+        if idle && let Ok(mut loaded) = LOADED.try_lock() {
+            *loaded = None;
+        }
+    }
+}
+
 fn load(loaded: &mut Option<(PathBuf, WhisperState)>, model_path: &Path) -> Result<(), String> {
+    static WATCH: std::sync::Once = std::sync::Once::new();
+    WATCH.call_once(|| {
+        let _ = std::thread::Builder::new().name("voice-unload".into()).spawn(unload_when_idle);
+    });
     if loaded.as_ref().is_none_or(|(path, _)| path != model_path) {
+        // Counts as use: a model just loaded is not freed before its first dictation.
+        if let Ok(mut last) = LAST_RUN.lock() {
+            *last = Some(Instant::now());
+        }
         *loaded = None; // free the previous model before loading another
         let path = model_path.to_str().ok_or("model path is not valid UTF-8")?;
         let mut params = WhisperContextParameters::default();

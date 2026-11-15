@@ -875,12 +875,9 @@ mod tests {
             .as_array()
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
-        assert!(args.ends_with(&[
-            agentdeck_core::hooks_server::CHROME_DEVTOOLS_MCP,
-            "--no-usage-statistics",
-            "--browserUrl",
-            "http://127.0.0.1:9333"
-        ]));
+        // Plain node on the cached script, or npx when it is not cached yet.
+        assert!(args.ends_with(&["--no-usage-statistics", "--browserUrl", "http://127.0.0.1:9333"]));
+        assert!(args[0].ends_with("chrome-devtools-mcp.js") || args.contains(&agentdeck_core::hooks_server::CHROME_DEVTOOLS_MCP));
         // The webview opened later takes the port the running agent was told.
         assert_eq!(browser_config_port(&c.to_string()), Some(9333));
         assert!(valid_id("a-1").is_ok());
@@ -893,10 +890,7 @@ mod tests {
         let (args, env) = wiring(AgentKind::Codex, 9333, config, role, Path::new("."));
         assert_eq!(args[0], "-c");
         assert!(args[1].starts_with("mcp_servers.browser={command='"));
-        assert!(args[1].ends_with(&format!(
-            "'{}','--no-usage-statistics','--browserUrl','http://127.0.0.1:9333']}}",
-            agentdeck_core::hooks_server::CHROME_DEVTOOLS_MCP
-        )));
+        assert!(args[1].ends_with("'--no-usage-statistics','--browserUrl','http://127.0.0.1:9333']}"));
         assert!(!args[1].contains(' ') && env.is_empty());
         let (args, env) = wiring(AgentKind::OpenCode, 9333, config, role, Path::new("."));
         let content: Value = serde_json::from_str(&env[0].1).unwrap();
