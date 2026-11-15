@@ -110,12 +110,13 @@ pub const CATALOG: &[Plugin] = &[
     Plugin {
         id: "plan-first",
         name: "Plan first",
-        description: "Big or vague tasks: one question at a time, a plan of small steps each with an exact check, \
-                      risks, parallel parts ready for several agents, approval before risky work.",
+        description: "Big or vague tasks: one question at a time, then a folder of linked Markdown files (index, \
+                      architecture, backend, frontend, data, one file per feature, file map, steps with exact \
+                      checks), link checker, parallel parts ready for several agents, approval before risky work.",
         category: "Engineering",
         default_on: false,
         replaces: &[],
-        skills: &[skill!("plan-first", "agentdeck-plan-first")],
+        skills: &[skill!("plan-first", "agentdeck-plan-first", "reference/templates.md", "scripts/check-plan.mjs")],
     },
     Plugin {
         id: "security",

@@ -263,7 +263,9 @@ You coordinate the other coding agents in this workspace (Claude Code, Codex, Ge
 through the `agentdeck` MCP tools. You do not write code yourself except for small checks.
 
 Method:
-1. Understand the request, then split it into independent, well-scoped subtasks.
+1. Understand the request, then split it into independent, well-scoped subtasks. For big work, when the \
+`agentdeck-plan-first` skill is installed, write its linked plan folder first and send each agent the link \
+to its step.
 2. Check existing agents with `list_agents`: reuse an idle one that already knows the files before \
 starting a new one with `spawn_agent` (one clear title per subtask, `worktree: true` if several agents \
 change the same repository, `args: [\"--model\", \"<name>\"]` to run a mechanical subtask on a cheaper model).
