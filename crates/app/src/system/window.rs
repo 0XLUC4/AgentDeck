@@ -98,6 +98,15 @@ pub fn quit_for_update(exe: &std::path::Path, cx: &mut App) -> Result<(), String
         use windows_sys::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
         AllowSetForegroundWindow(ASFW_ANY);
     }
+    // Through Explorer, like a double click: the new exe is not our child, so it does not inherit
+    // the job Windows (Program Compatibility Assistant) runs AgentDeck in, which ended it with us.
+    // Explorer passes no arguments: the new exe reads our PID from the relaunch file instead.
+    #[cfg(windows)]
+    if std::fs::write(super::instance::relaunch_file(), std::process::id().to_string()).is_ok()
+        && std::process::Command::new("explorer.exe").arg(exe).spawn().is_ok()
+    {
+        exit_now();
+    }
     let restart = || {
         let mut command = std::process::Command::new(exe);
         command.arg(super::instance::AFTER_UPDATE).arg(std::process::id().to_string());

@@ -22,13 +22,16 @@ pub fn single_instance() -> Option<TcpListener> {
     // Read now: the old instance is about to quit, and its path is where this exe belongs.
     let old_exe = if legacy_update { other_instance_exe() } else { None };
     let args: Vec<String> = std::env::args().collect();
+    let after_update = args.iter().any(|a| a == AFTER_UPDATE);
+    // Relaunched through Explorer (no arguments): the old instance left its PID in a file.
+    let old = old_pid(&args).or_else(take_relaunch_pid);
     // The old instance can take longer than the port wait below to die (GPU, audio, agent
     // teardown): seeing its port still held, the new exe pinged it and exited, so nothing restarted.
-    if let Some(pid) = old_pid(&args) {
+    if let Some(pid) = old {
         wait_for_exit(pid, Duration::from_secs(120));
     }
     let mut bound = TcpListener::bind(("127.0.0.1", INSTANCE_PORT));
-    if legacy_update || args.iter().any(|a| a == AFTER_UPDATE) {
+    if legacy_update || after_update || old.is_some() {
         for _ in 0..200 {
             // Up to 20 s: the old instance stops its agents before it frees the port.
             if bound.is_ok() {
@@ -86,6 +89,28 @@ fn take_place_of(target: &std::path::Path) -> bool {
 fn old_pid(args: &[String]) -> Option<u32> {
     let at = args.iter().position(|a| a == AFTER_UPDATE)?;
     args.get(at + 1)?.parse().ok()
+}
+
+/// File holding the PID of an instance that is quitting for an update (see `window::quit_for_update`).
+pub(super) fn relaunch_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("agentdeck-relaunch.pid")
+}
+
+/// Reads and removes the relaunch file. Ignored when older than a minute: a stale file must not
+/// make a later normal start wait on a reused PID.
+fn take_relaunch_pid() -> Option<u32> {
+    let path = relaunch_file();
+    let fresh = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < Duration::from_secs(60));
+    let text = std::fs::read_to_string(&path).ok();
+    let _ = std::fs::remove_file(&path);
+    if !fresh {
+        return None;
+    }
+    text?.trim().parse().ok()
 }
 
 /// Blocks until process `pid` has fully exited (its handles, the instance port included, are
