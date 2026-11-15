@@ -96,7 +96,10 @@ fn definitions() -> Value {
         ),
         tool(
             "spawn_agent",
-            "Starts a new agent in your session. Default cwd: the workspace folder (must stay inside it).",
+            "Starts a new agent in your workspace: in your session up to 8 agents, then in \"Workers N\" sessions \
+of the same project (still yours to drive). Agents start a few at a time: a reply with `starting: true` is \
+queued, do not spawn it again; prompts sent to it wait until it is up. Default cwd: the workspace folder \
+(must stay inside it).",
             json!({
                 "agent": { "type": "string", "enum": ["claude", "codex", "gemini", "grok", "opencode"] },
                 "title": { "type": "string" },

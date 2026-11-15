@@ -28,7 +28,8 @@ const STARTUP_MS: i64 = 5000;
 const BOOT_QUIET_MS: i64 = 500;
 const BOOT_POLL: Duration = Duration::from_millis(100);
 /// Upper bound on waiting for a starting agent (spawn slot included); the prompt goes anyway after.
-const BOOT_POLLS: u32 = 300;
+/// 3 min: the last of 50 agents an orchestrator starts waits for about a dozen slot turns.
+const BOOT_POLLS: u32 = 1800;
 /// A TUI repaints right after a click, a resize or a keystroke: that output must not light the pane up as busy.
 const REPAINT_MS: i64 = 600;
 /// Claude exits within this window when the conversation to resume no longer exists.
@@ -39,7 +40,7 @@ const CONFLICT_WINDOW_MS: i64 = 15 * 60_000;
 /// Sink owner label for `pty::attach_pane_output`.
 const OWNER: &str = "panes-runtime";
 /// At most this many agents start at once: a restore with many panes would otherwise spawn them all together.
-static SPAWN_SLOTS: Semaphore = Semaphore::new(3);
+static SPAWN_SLOTS: Semaphore = Semaphore::new(4);
 /// `git pack-refs` runs at most this often per repo, when the last agent goes idle.
 const PACK_REFS_EVERY: Duration = Duration::from_secs(10 * 60);
 
@@ -613,13 +614,15 @@ fn open_browser(id: &str, cx: &mut App) -> Result<(), String> {
 
 /// The args and env that connect the pane's agent to its browser, given at every spawn so that the panel
 /// opens and closes without a restart; the webview itself is only opened for a pane with its panel on.
-/// Workers in an orchestrator's tab skip it unless their panel is on: one chrome-devtools-mcp (node) less each.
+/// Workers (started by an orchestrator, or in its tab) skip it unless their panel is on: one
+/// chrome-devtools-mcp (two node processes, ~200 MB) less each.
 fn browser_args(id: &str, agent: AgentKind, cx: &mut App) -> Result<(Vec<String>, Vec<(String, String)>), String> {
     let (dir, on, worker, cwd) = {
         let d = deck(cx).ok_or("deck not ready")?.read(cx);
         let is_orchestrator = |p: &String| p != id && d.state.panes.get(p).is_some_and(|p| p.orchestrator);
-        let worker = d.state.tabs.iter().any(|t| t.pane_ids.iter().any(|p| p == id) && t.pane_ids.iter().any(is_orchestrator));
         let pane = d.state.panes.get(id);
+        let worker = pane.is_some_and(|p| p.worker)
+            || d.state.tabs.iter().any(|t| t.pane_ids.iter().any(|p| p == id) && t.pane_ids.iter().any(is_orchestrator));
         (d.data_dir.clone(), pane.is_some_and(|p| p.browser), worker, pane.map(|p| p.cwd.clone()).unwrap_or_default())
     };
     let given = on || !worker;
@@ -779,7 +782,8 @@ fn spawn(id: &str, cx: &mut App) {
         own
     };
     let Some(rt) = r.map.get_mut(id) else { return };
-    rt.started_at = Some(now_ms());
+    // Set once a spawn slot is taken: until then the pane is queued, and prompts wait (see `booting`).
+    rt.started_at = None;
     rt.resumed_at = None;
     rt.stopped = false;
     rt.asleep = false;
@@ -807,6 +811,11 @@ fn spawn(id: &str, cx: &mut App) {
         if !cx.update(|cx| alive(&id, token, cx)) {
             return;
         }
+        cx.update(|cx| {
+            if let Some(rt) = rt_mut(&id, cx) {
+                rt.started_at = Some(now_ms());
+            }
+        });
         // Outside any window update: the webview is created in the main window.
         if crate::browser::supported(job.pane.agent) {
             let agent = job.pane.agent;
@@ -841,7 +850,24 @@ fn spawn(id: &str, cx: &mut App) {
             }
         }
         let result = cx.background_spawn(async move { run_spawn(job) }).await;
+        let ok = result.is_ok();
         cx.update(|cx| after_spawn(&id, token, result, resumed, (cols, rows), cx));
+        // The slot is held until the agent has printed its banner (5 s at most): dozens of agents
+        // starting together (an orchestrator, a restore) would otherwise all load at once.
+        if ok {
+            let spawned_at = now_ms();
+            loop {
+                let wait = cx.update(|cx| {
+                    let rt = rts(cx).map.get(&id)?;
+                    let last_output_at = lock(&rt.output).last_output_at;
+                    Some(booting(Some(spawned_at), last_output_at, now_ms()))
+                });
+                if wait != Some(true) {
+                    break;
+                }
+                cx.background_executor().timer(BOOT_POLL).await;
+            }
+        }
     })
     .detach();
 }

@@ -8,7 +8,7 @@ use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::{Pane, PaneSpec, activity_key, new_id};
 use agentdeck_core::logic::queue::{QUEUE_AGENTS, ready_for_next};
 use agentdeck_core::logic::orchestrator::{
-    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, assert_can_type, named_files, resolve_inside, scope_of,
+    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, assert_can_type, named_files, resolve_inside, scope_of, worker_tab,
     target,
 };
 use agentdeck_core::mcp;
@@ -142,19 +142,25 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
             .await
         }
         "spawn_agent" => {
-            let (spec, tab_id) = deck.read_with(cx, |d, _| -> Result<_, String> {
-                let scope = scope_of(&d.state, orchestrator_id)?;
+            let (spec, tab_id) = deck.update(cx, |d, cx| -> Result<_, String> {
+                let (root, own_tab, workspace_id) = {
+                    let scope = scope_of(&d.state, orchestrator_id)?;
+                    (scope.root.clone(), scope.tab.id.clone(), scope.tab.workspace_id.clone())
+                };
                 let agent: AgentKind = serde_json::from_value(args["agent"].clone())
                     .map_err(|_| format!("Unknown agent: {}", args["agent"]))?;
-                let mut spec = PaneSpec::new(agent, arg(args, "title"), resolve_inside(&scope.root, Some(&arg(args, "cwd")))?);
+                let mut spec = PaneSpec::new(agent, arg(args, "title"), resolve_inside(&root, Some(&arg(args, "cwd")))?);
                 spec.id = new_id();
                 spec.args = args["args"]
                     .as_array()
                     .map(|a| a.iter().map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned)).collect())
                     .unwrap_or_default();
                 spec.worktree = args["worktree"] == true;
+                spec.worker = true;
                 spec.font_size = d.settings.font_size;
-                Ok((spec, scope.tab.id.clone()))
+                let tab_id = worker_tab(&mut d.state, &own_tab, &workspace_id);
+                cx.notify();
+                Ok((spec, tab_id))
             })?;
             let id = spec.id.clone();
             let started = runtime::create_pane(deck, spec, tab_id, cx).await;

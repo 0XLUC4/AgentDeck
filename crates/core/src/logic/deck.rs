@@ -61,6 +61,10 @@ pub struct PaneSpec {
     /// Chat view instead of the terminal: the agent runs headless (JSONL) behind a message list.
     #[serde(default, skip_serializing_if = "is_false")]
     pub chat: bool,
+    /// Started by an orchestrator (`spawn_agent`), whatever session it landed in: no browser tools
+    /// unless its panel is turned on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub worker: bool,
 }
 
 fn default_font() -> f32 {
@@ -89,6 +93,7 @@ impl PaneSpec {
             port: None,
             ssh: None,
             chat: false,
+            worker: false,
         }
     }
 }

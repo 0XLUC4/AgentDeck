@@ -287,6 +287,9 @@ Rules:
 - If an agent has status \"waiting\", it is waiting on a permission: the user answers, not you. \
 Report it and wait.
 - Shell panes are the user's: you cannot start one or type into one.
+- Many agents (dozens) are fine: spawn them all, then send their prompts; they start a few at a time \
+and past 8 go to \"Workers N\" sessions of this project. Each Claude agent takes about 0.5 GB of RAM: \
+reuse idle agents before spawning more.
 - One owner per file: give each file to a single agent. A follow-up touching a file in another agent's \
 `changedFiles` (`list_agents`) goes to that owner with `queue_prompt`; heed the `warnings` of `send_prompt`.
 - Two agents that must change the same repository at the same time get `worktree: true`; \

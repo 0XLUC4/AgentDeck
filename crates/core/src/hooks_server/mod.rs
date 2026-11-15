@@ -310,7 +310,15 @@ pub const CHROME_DEVTOOLS_MCP: &str = "chrome-devtools-mcp@1.13.0";
 
 /// The `browser` MCP server (chrome-devtools-mcp) attached to the DevTools endpoint at `url`.
 pub fn browser_server(url: &str) -> Value {
-    let mut args = vec!["-y".to_string(), CHROME_DEVTOOLS_MCP.into(), "--browserUrl".into(), url.to_owned()];
+    // No usage statistics: they cost a telemetry node process (~60 MB) per agent. The URL stays last
+    // (`browser_config_port` reads it there).
+    let mut args = vec![
+        "-y".to_string(),
+        CHROME_DEVTOOLS_MCP.into(),
+        "--no-usage-statistics".into(),
+        "--browserUrl".into(),
+        url.to_owned(),
+    ];
     // npx is a .cmd script on Windows: agents can only start it through cmd.
     let command = if cfg!(windows) {
         args.splice(0..0, ["/c".to_string(), "npx".into()]);

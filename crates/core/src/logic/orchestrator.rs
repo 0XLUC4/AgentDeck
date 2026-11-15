@@ -186,6 +186,30 @@ pub fn scope_of<'a>(deck: &'a DeckState, orchestrator_id: &str) -> Result<Scope<
     })
 }
 
+/// Agents an orchestrator puts in one session tab: more and each terminal is too small to read.
+pub const TAB_AGENTS: usize = 8;
+/// Name prefix of the overflow sessions ("Workers 2", "Workers 3"...).
+const WORKERS_TAB: &str = "Workers ";
+
+/// Session a new worker goes to: the orchestrator's own while it holds fewer than [`TAB_AGENTS`]
+/// workers, then the first "Workers N" session of the workspace with room, else a new one (added
+/// without switching to it, so the user keeps their view).
+pub fn worker_tab(deck: &mut DeckState, orchestrator_tab: &str, workspace_id: &str) -> String {
+    let own = deck.tabs.iter().find(|t| t.id == orchestrator_tab);
+    if own.is_some_and(|t| t.pane_ids.len() <= TAB_AGENTS) {
+        return orchestrator_tab.to_owned();
+    }
+    let workers = |t: &&Tab| t.workspace_id == workspace_id && t.name.starts_with(WORKERS_TAB);
+    if let Some(tab) = deck.tabs.iter().filter(workers).find(|t| t.pane_ids.len() < TAB_AGENTS) {
+        return tab.id.clone();
+    }
+    let number = deck.tabs.iter().filter(workers).count() + 2;
+    let tab = super::deck::new_tab(&format!("{WORKERS_TAB}{number}"), workspace_id, None);
+    let id = tab.id.clone();
+    deck.tabs.push(tab);
+    id
+}
+
 pub fn target<'a>(scope: &Scope<'a>, pane_id: &str) -> Result<&'a Pane, String> {
     if pane_id == scope.orchestrator.id {
         return Err("You cannot control yourself".into());
@@ -307,6 +331,37 @@ mod tests {
             d.add_pane(new_pane(s, 0), &tab);
         }
         d
+    }
+
+    #[test]
+    fn workers_overflow_into_new_sessions_of_the_workspace() {
+        let mut d = deck();
+        let (own, ws, active) = (d.tabs[0].id.clone(), d.tabs[0].workspace_id.clone(), d.active_tab_id.clone());
+        let mut add = |d: &mut DeckState, n: usize| {
+            let tab = worker_tab(d, &own, &ws);
+            let mut s = PaneSpec::new(AgentKind::Claude, "w", "C:\\proj");
+            s.id = format!("w{n}");
+            d.add_pane(new_pane(s, 0), &tab);
+            tab
+        };
+        // The orchestrator's tab holds it plus TAB_AGENTS workers (2 are there already).
+        for n in 0..TAB_AGENTS - 2 {
+            assert_eq!(add(&mut d, n), own);
+        }
+        let second = add(&mut d, 100);
+        assert_ne!(second, own);
+        for n in 1..TAB_AGENTS {
+            assert_eq!(add(&mut d, 100 + n), second);
+        }
+        let third = add(&mut d, 200);
+        let names: Vec<&str> = d.tabs.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.ends_with(&["Workers 2", "Workers 3"]), "{names:?}");
+        assert_eq!(d.tabs.last().unwrap().id, third);
+        assert!(d.tabs.iter().all(|t| t.workspace_id == ws));
+        assert_eq!(d.active_tab_id, active, "the user's view does not move");
+        // A freed seat in a workers session is reused before a new session.
+        d.remove_pane("w101");
+        assert_eq!(add(&mut d, 300), second);
     }
 
     #[test]
