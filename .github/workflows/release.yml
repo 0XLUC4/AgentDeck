@@ -125,8 +125,12 @@ jobs:
 
       - name: Create the release (draft) if needed
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --draft --verify-tag --notes-from-tag --title "$TAG"
+          gh release view "$TAG" >/dev/null 2>&1 && exit 0
+          # Release notes = the annotated tag message (empty for a lightweight tag).
+          ref=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" -q '.object | "\(.type) \(.sha)"')
+          notes=""
+          [ "${ref%% *}" = tag ] && notes=$(gh api "repos/$GH_REPO/git/tags/${ref#* }" -q .message)
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes "$notes"
 
       - name: latest.json
         run: |
