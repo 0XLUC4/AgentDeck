@@ -149,6 +149,56 @@ pub const CATALOG: &[Plugin] = &[
         skills: &[skill!("git-workflow", "agentdeck-git")],
     },
     Plugin {
+        id: "review",
+        name: "Code review",
+        description: "Reviews another agent's work like a senior: whole diff and its callers, real defects only \
+                      (logic, edge cases, data, security, missing tests), each finding verified and ranked, no edits.",
+        category: "Quality",
+        default_on: false,
+        replaces: &[],
+        skills: &[skill!("review", "agentdeck-review")],
+    },
+    Plugin {
+        id: "project-memory",
+        name: "Project memory",
+        description: "Agents learn a repository fast and keep AGENTS.md / CLAUDE.md short and true: exact commands \
+                      that were run, layout, conventions and traps, so every agent starts right.",
+        category: "Engineering",
+        default_on: false,
+        replaces: &[],
+        skills: &[skill!("project-memory", "agentdeck-project-memory")],
+    },
+    Plugin {
+        id: "backend",
+        name: "Backend & data",
+        description: "APIs and databases that hold: exact contracts, validation, per-resource authorization, \
+                      idempotent writes, safe expand-and-contract migrations, indexes, no N+1, checked with real requests.",
+        category: "Engineering",
+        default_on: false,
+        replaces: &[],
+        skills: &[skill!("backend", "agentdeck-backend")],
+    },
+    Plugin {
+        id: "frontend",
+        name: "Frontend",
+        description: "UI that is consistent, accessible and fast: project components and tokens reused, every state \
+                      handled, keyboard and screen readers, solid forms, then checked in the browser panel on phone and desktop.",
+        category: "Engineering",
+        default_on: false,
+        replaces: &[],
+        skills: &[skill!("frontend", "agentdeck-frontend")],
+    },
+    Plugin {
+        id: "upgrade",
+        name: "Upgrades",
+        description: "Dependency and framework upgrades without breakage: changelogs and migration guides read, one \
+                      major at a time, official codemods, lock file kept, audits, build, tests and the app checked.",
+        category: "Engineering",
+        default_on: false,
+        replaces: &[],
+        skills: &[skill!("upgrade", "agentdeck-upgrade")],
+    },
+    Plugin {
         id: "web-research",
         name: "Web research",
         description: "Effort scaled to the question, parallel searches, primary sources first, pages read not \
