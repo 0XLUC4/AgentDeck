@@ -50,6 +50,10 @@ pub struct HubServer {
 }
 
 static SERVERS: LazyLock<Mutex<Vec<HubServer>>> = LazyLock::new(Default::default);
+/// Servers of the agents' own configs switched off for the agents AgentDeck starts (Settings > MCP).
+/// Claude gets a same-named hub entry that starts nothing and lists no tool; Codex and Gemini their
+/// own off switch. The agents' config files are never edited.
+static DISABLED: LazyLock<Mutex<Vec<String>>> = LazyLock::new(Default::default);
 static RUNNING: LazyLock<Mutex<HashMap<String, Arc<Upstream>>>> = LazyLock::new(Default::default);
 /// `<app data>/hub` and the hook server port, set once by `init`.
 static DIR: OnceLock<(PathBuf, u16)> = OnceLock::new();
@@ -72,8 +76,13 @@ pub fn init(app: &AppHandle, port: u16) {
                 Vec::new()
             }),
     };
+    let disabled: Vec<String> = std::fs::read_to_string(dir.join("disabled.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
     let _ = DIR.set((dir, port));
     *lock(&SERVERS) = saved;
+    *lock(&DISABLED) = disabled;
     if let Err(e) = write_claude_config() {
         eprintln!("mcp hub: {e}");
     }
@@ -91,10 +100,20 @@ pub fn stop_all() {
 
 /// CLI args that point `kind` at the hub instead of starting its own servers.
 pub fn agent_args(kind: AgentKind) -> Vec<String> {
-    let servers = lock(&SERVERS);
-    if servers.is_empty() {
+    let disabled = lock(&DISABLED).clone();
+    let servers: Vec<HubServer> = lock(&SERVERS).iter().filter(|s| !disabled.contains(&s.name)).cloned().collect();
+    if servers.is_empty() && disabled.is_empty() {
         return Vec::new();
     }
+    // Codex rejects an entry with no command or URL: only servers its config defines are switched off.
+    let codex_off = || {
+        let defined = crate::agents::browser_guard::codex_config_names(None);
+        disabled
+            .iter()
+            .filter(|n| defined.contains(n) && bare_key(n))
+            .flat_map(|n| ["-c".to_owned(), format!("mcp_servers.{n}.enabled=false")])
+            .collect::<Vec<_>>()
+    };
     match kind {
         AgentKind::Claude => DIR
             .get()
@@ -118,9 +137,43 @@ pub fn agent_args(kind: AgentKind) -> Vec<String> {
                     ),
                 ]
             })
+            .chain(codex_off())
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// A bare TOML key: passes cmd.exe and the npm shim unquoted.
+fn bare_key(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Names switched off in Settings > MCP.
+pub fn disabled_list() -> Vec<String> {
+    lock(&DISABLED).clone()
+}
+
+/// Saves the switched-off names; agents started afterwards no longer run those servers.
+pub fn set_disabled(mut names: Vec<String>) -> Result<(), String> {
+    names.retain(|n| bare_key(n) && n.len() <= 64);
+    names.sort();
+    names.dedup();
+    write_file("disabled.json", &serde_json::to_string_pretty(&names).unwrap_or_default())?;
+    *lock(&DISABLED) = names;
+    write_claude_config()
+}
+
+/// Every MCP server name the agents' own configs define (Claude user scope, Codex, Gemini), plus
+/// the hub's: what Settings > MCP can switch off. AgentDeck's own `browser` and `agentdeck` are left out.
+pub fn known_servers() -> Vec<String> {
+    let mut names: Vec<String> = hub_claude_servers().into_iter().map(|s| s.name).collect();
+    names.extend(crate::agents::browser_guard::codex_config_names(None));
+    names.extend(crate::agents::browser_guard::gemini_names());
+    names.extend(lock(&SERVERS).iter().map(|s| s.name.clone()));
+    names.retain(|n| n != "browser" && n != "agentdeck" && bare_key(n));
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Extra env for `kind` while the hub is on.
@@ -136,19 +189,22 @@ fn hub_url(name: &str) -> String {
 }
 
 /// Token and pane id are expanded by Claude Code from the pane's env: the file holds no secret.
-fn claude_config(servers: &[HubServer]) -> Value {
+/// Switched-off names get the same hub entry: [`handle`] answers them with no tool and no process.
+fn claude_config(servers: &[HubServer], disabled: &[String]) -> Value {
     let entries: serde_json::Map<String, Value> = servers
         .iter()
-        .map(|s| {
+        .map(|s| s.name.as_str())
+        .chain(disabled.iter().map(String::as_str))
+        .map(|name| {
             let entry = json!({
                 "type": "http",
-                "url": hub_url(&s.name),
+                "url": hub_url(name),
                 "headers": {
                     TOKEN_HEADER: "${AGENTDECK_HOOK_TOKEN}",
                     PANE_HEADER: "${AGENTDECK_PANE_ID}",
                 },
             });
-            (s.name.clone(), entry)
+            (name.to_owned(), entry)
         })
         .collect();
     json!({ "mcpServers": entries })
@@ -161,7 +217,7 @@ fn write_file(name: &str, text: &str) -> Result<(), String> {
 }
 
 fn write_claude_config() -> Result<(), String> {
-    let config = claude_config(&lock(&SERVERS));
+    let config = claude_config(&lock(&SERVERS), &lock(&DISABLED));
     write_file(
         "claude.json",
         &serde_json::to_string_pretty(&config).unwrap_or_default(),
@@ -289,8 +345,10 @@ fn authorize(app: &AppHandle, req: &mut Request, token: &str) -> Result<Value, u
 fn handle(name: &str, msg: &Value) -> Option<Value> {
     let id = msg.get("id")?.clone();
     let method = msg["method"].as_str()?;
+    let off = lock(&DISABLED).iter().any(|n| n == name);
     let reply = match method {
         "ping" => Ok(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
+        _ if off => off_reply(name, method, id.clone()),
         _ => upstream(name).and_then(|up| {
             if method == "initialize" {
                 return Ok(json!({ "jsonrpc": "2.0", "id": id, "result": up.init }));
@@ -305,6 +363,23 @@ fn handle(name: &str, msg: &Value) -> Option<Value> {
         }),
     };
     Some(reply.unwrap_or_else(|e| rpc::error(id, -32603, &e)))
+}
+
+/// A switched-off server: a valid empty server, so the agent starts clean and has none of its tools.
+fn off_reply(name: &str, method: &str, id: Value) -> Result<Value, String> {
+    let result = match method {
+        "initialize" => json!({
+            "protocolVersion": PROTOCOL,
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": name, "version": "off" },
+            "instructions": "Switched off in AgentDeck (Settings > MCP).",
+        }),
+        "tools/list" => json!({ "tools": [] }),
+        "resources/list" => json!({ "resources": [] }),
+        "prompts/list" => json!({ "prompts": [] }),
+        _ => return Err(format!("{name} is switched off in AgentDeck (Settings > MCP)")),
+    };
+    Ok(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
 fn upstream(name: &str) -> Result<Arc<Upstream>, String> {
@@ -727,7 +802,7 @@ mod tests {
 
     #[test]
     fn claude_config_has_no_secret() {
-        let c = claude_config(&[stdio("roblox-studio-plus")]);
+        let c = claude_config(&[stdio("roblox-studio-plus")], &[]);
         let entry = &c["mcpServers"]["roblox-studio-plus"];
         assert_eq!(entry["type"], "http");
         assert!(
@@ -738,6 +813,17 @@ mod tests {
         );
         assert_eq!(entry["headers"][TOKEN_HEADER], "${AGENTDECK_HOOK_TOKEN}");
         assert_eq!(entry["headers"][PANE_HEADER], "${AGENTDECK_PANE_ID}");
+    }
+
+    #[test]
+    fn switched_off_server_is_an_empty_hub_entry() {
+        let c = claude_config(&[], &["rea".to_owned()]);
+        assert!(c["mcpServers"]["rea"]["url"].as_str().unwrap().ends_with("/hub/rea"));
+        let init = off_reply("rea", "initialize", json!(1)).unwrap();
+        assert_eq!(init["result"]["capabilities"], json!({ "tools": {} }));
+        assert_eq!(off_reply("rea", "tools/list", json!(2)).unwrap()["result"]["tools"], json!([]));
+        assert!(off_reply("rea", "tools/call", json!(3)).is_err());
+        assert!(bare_key("roblox_studio-2") && !bare_key("a b") && !bare_key(""));
     }
 
     #[test]

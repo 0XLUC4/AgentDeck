@@ -4,13 +4,15 @@ use std::collections::HashMap;
 
 use agentdeck_core::logic::text::split_args;
 use agentdeck_core::logic::theme::FONT_MONO;
-use agentdeck_core::mcp::hub::{HubServer, hub_claude_servers, hub_list, hub_save, hub_test};
+use agentdeck_core::mcp::hub::{
+    HubServer, disabled_list, hub_claude_servers, hub_list, hub_save, hub_test, known_servers, set_disabled,
+};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
 use super::SettingsDialog;
-use super::controls::{button, error_text, field, hint_text, section};
+use super::controls::{button, error_text, field, hint_text, row, section, toggle};
 use crate::theme::{hsla, palette, ui};
 
 pub(super) struct Hub {
@@ -20,6 +22,9 @@ pub(super) struct Hub {
     tests: HashMap<String, String>,
     name: Entity<InputState>,
     line: Entity<InputState>,
+    /// MCP servers of the agents' own configs (and the hub's), and those switched off.
+    known: Vec<String>,
+    disabled: Vec<String>,
 }
 
 /// What a row shows: the URL, or the command line.
@@ -67,6 +72,8 @@ impl Hub {
             tests: HashMap::new(),
             name,
             line,
+            known: known_servers(),
+            disabled: disabled_list(),
         }
     }
 }
@@ -116,6 +123,52 @@ impl SettingsDialog {
             next.extend(fresh);
             this.persist_hub(next, window, cx);
         });
+    }
+
+    /// Switches a server on or off for the agents started from now on.
+    fn toggle_server(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let mut next = self.hub.disabled.clone();
+        if let Some(at) = next.iter().position(|n| *n == name) {
+            next.remove(at);
+        } else {
+            next.push(name);
+        }
+        let saved = next.clone();
+        self.run(window, cx, move || set_disabled(saved), move |this, result, _, cx| {
+            match &result {
+                Ok(()) => {
+                    this.hub.error = None;
+                    this.hub.disabled = next;
+                }
+                Err(e) => this.hub.error = Some(e.clone()),
+            }
+            this.report(result, cx);
+        });
+    }
+
+    fn render_servers(&self, cx: &mut Context<Self>) -> Div {
+        let p = palette(cx);
+        let mut rows = vec![
+            hint_text(
+                "Servers from your agents' own settings (Claude, Codex, Gemini). Switched off, AgentDeck's agents \
+                 neither start nor see them: each one costs memory in every agent. Your config files are not \
+                 changed. Applies to agents started after a change.",
+                &p,
+            )
+            .py_3()
+            .into_any_element(),
+        ];
+        if self.hub.known.is_empty() {
+            rows.push(hint_text("No MCP server found in the agents' settings.", &p).py_3().into_any_element());
+        }
+        for (i, name) in self.hub.known.iter().enumerate() {
+            let on = !self.hub.disabled.contains(name);
+            let target = name.clone();
+            let switch = toggle(("mcp-server", i), on, &p)
+                .on_click(cx.listener(move |this, _, window, cx| this.toggle_server(target.clone(), window, cx)));
+            rows.push(row(name, None, switch, &p));
+        }
+        section("MCP servers", rows, &p)
     }
 
     fn test_server(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -215,7 +268,7 @@ impl SettingsDialog {
                 )
                 .into_any_element(),
         );
-        section("MCP hub", rows, &p)
+        div().flex().flex_col().child(self.render_servers(cx)).child(section("MCP hub", rows, &p))
     }
 }
 

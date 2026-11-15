@@ -36,8 +36,19 @@ fn json_keys(path: &Path, key: &str) -> Vec<String> {
 /// Codex: `-c mcp_servers.<name>.enabled=false` for each browser server of `~/.codex/config.toml`
 /// (or `$CODEX_HOME`) and the project's `.codex/config.toml`.
 pub fn codex_args(cwd: &Path) -> Vec<String> {
+    codex_config_names(Some(cwd))
+        .into_iter()
+        // Bare TOML keys only: they pass cmd.exe and the npm shim unquoted (see `hook_args`).
+        .filter(|n| other_browser_server(n) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .flat_map(|n| ["-c".to_owned(), format!("mcp_servers.{n}.enabled=false")])
+        .collect()
+}
+
+/// MCP server names of `~/.codex/config.toml` (or `$CODEX_HOME`), and of the project's
+/// `.codex/config.toml` when `cwd` is given. Sorted, without duplicates.
+pub fn codex_config_names(cwd: Option<&Path>) -> Vec<String> {
     let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| home().map(|h| h.join(".codex")));
-    let files = codex_home.into_iter().chain([cwd.join(".codex")]).map(|dir| dir.join("config.toml"));
+    let files = codex_home.into_iter().chain(cwd.map(|c| c.join(".codex"))).map(|dir| dir.join("config.toml"));
     let mut names: Vec<String> = Vec::new();
     for file in files {
         let Ok(doc) = std::fs::read_to_string(&file).unwrap_or_default().parse::<toml_edit::DocumentMut>() else {
@@ -50,22 +61,17 @@ pub fn codex_args(cwd: &Path) -> Vec<String> {
     names.sort();
     names.dedup();
     names
-        .into_iter()
-        // Bare TOML keys only: they pass cmd.exe and the npm shim unquoted (see `hook_args`).
-        .filter(|n| other_browser_server(n) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-        .flat_map(|n| ["-c".to_owned(), format!("mcp_servers.{n}.enabled=false")])
-        .collect()
+}
+
+/// MCP server names of `~/.gemini/settings.json`.
+pub fn gemini_names() -> Vec<String> {
+    home().map(|h| json_keys(&h.join(".gemini").join("settings.json"), "mcpServers")).unwrap_or_default()
 }
 
 /// Gemini: the browser servers of `~/.gemini/settings.json`, for `mcp.excluded` of AgentDeck's
 /// system defaults layer.
 pub fn gemini_excluded() -> Vec<String> {
-    home()
-        .map(|h| json_keys(&h.join(".gemini").join("settings.json"), "mcpServers"))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|n| other_browser_server(n))
-        .collect()
+    gemini_names().into_iter().filter(|n| other_browser_server(n)).collect()
 }
 
 /// OpenCode: `{"<name>": {"enabled": false}}` for each browser server of its global config, merged

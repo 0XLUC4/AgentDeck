@@ -670,8 +670,10 @@ fn merge_gemini_browser(settings: &mut Value) {
         *servers = json!({});
     }
     servers["browser"] = browser_server(&url);
-    // Gemini has no blocking hook: the user's other browser servers are left out of AgentDeck's agents.
-    let excluded = browser_guard::gemini_excluded();
+    // Gemini has no blocking hook: the user's other browser servers are left out of AgentDeck's agents,
+    // with the servers switched off in Settings > MCP.
+    let mut excluded = browser_guard::gemini_excluded();
+    excluded.extend(crate::mcp::hub::disabled_list());
     if excluded.is_empty() {
         return;
     }
