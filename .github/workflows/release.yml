@@ -1,7 +1,7 @@
 # Builds AgentDeck for Windows, macOS (Apple Silicon: M1 to M5) and Linux, then publishes the GitHub release.
 # Trigger: push a tag `vX.Y.Z` matching the workspace version (its annotation message = release notes),
 # or run manually with an existing tag (re-uploads the builds).
-# Secrets: TAURI_SIGNING_PRIVATE_KEY (content of the minisign key) and TAURI_SIGNING_PRIVATE_KEY_PASSWORD,
+# Secret: TAURI_SIGNING_PRIVATE_KEY (content of ~/.tauri/agentdeck.key, no password),
 # used to sign agentdeck.exe for the auto-updater (latest.json).
 name: release
 
@@ -119,10 +119,9 @@ jobs:
       - name: Sign the Windows exe (auto-updater)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is missing"; exit 1; }
-          npx --yes @tauri-apps/cli@2 signer sign out/agentdeck.exe
+          npx --yes @tauri-apps/cli@2 signer sign --password "" out/agentdeck.exe
 
       - name: Create the release (draft) if needed
         run: |
