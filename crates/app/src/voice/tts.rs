@@ -85,7 +85,7 @@ pub fn speak(backend: &AppHandle, speech: &SpeechSettings, text: String) {
     }
 }
 
-/// Silences the current utterance, if any.
+/// Silences the current utterance, if any. Runs on every keystroke: kills without waiting.
 pub fn stop() {
     let Ok(mut slot) = SPEAKING.lock() else {
         return;
@@ -94,7 +94,6 @@ pub fn stop() {
         && matches!(child.try_wait(), Ok(None))
     {
         let _ = child.kill();
-        let _ = child.wait();
     }
 }
 

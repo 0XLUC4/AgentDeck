@@ -97,17 +97,22 @@ impl ModelViewer {
         self.rendering = true;
         let (orbit, selected) = (self.orbit, self.selected);
         cx.spawn(async move |this, cx| {
-            let frame = cx
+            // The image is built off the UI thread from the pixels (moved, not copied); the frame
+            // keeps only the part ids for picking.
+            let (frame, image) = cx
                 .background_executor()
-                .spawn(async move { model3d::render(&model, &orbit, w, h, selected) })
+                .spawn(async move {
+                    let mut frame = model3d::render(&model, &orbit, w, h, selected);
+                    let image = render_image(frame.width, frame.height, std::mem::take(&mut frame.bgra));
+                    (frame, image)
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.rendering = false;
-                let frame = Arc::new(frame);
-                if let Some(image) = render_image(frame.width, frame.height, frame.bgra.clone()) {
+                if let Some(image) = image {
                     this.stale.extend(this.image.replace(image));
                 }
-                this.ids = Some(frame);
+                this.ids = Some(Arc::new(frame));
                 if std::mem::take(&mut this.dirty) {
                     this.request_frame(cx);
                 }

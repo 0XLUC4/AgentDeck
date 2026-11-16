@@ -144,9 +144,13 @@ impl Voice {
         }
         let speech = d.settings.speech.clone();
         let backend = d.backend.clone();
-        for text in speak {
-            tts::speak(&backend, &speech, text);
-        }
+        // Off the UI thread: it reads the voice config (credential store) and starts PowerShell.
+        cx.background_spawn(async move {
+            for text in speak {
+                tts::speak(&backend, &speech, text);
+            }
+        })
+        .detach();
     }
 
     fn on_event(&mut self, deck: Entity<Deck>, event: &DeckEvent, cx: &mut Context<Self>) {
