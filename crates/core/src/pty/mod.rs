@@ -11,6 +11,9 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use crate::{AppHandle, AppState};
 use crate::agents::{self, AgentKind};
 
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub mod conpty;
+
 /// Output is flushed to subscribers at most every 16 ms (~60 fps).
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 /// Wake-up period with nothing pending: matches the history recorder's flush cadence.
@@ -176,6 +179,8 @@ pub fn spawn_pane(
         }
     }
 
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    conpty::preload();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows,
@@ -487,7 +492,7 @@ fn is_parent_claude_var(key: &str) -> bool {
         )
 }
 
-/// Pane ids end up in hook URLs and args, and agents run through `cmd.exe /c`
+/// Pane ids end up in hook URLs and args, and agents may run through `cmd.exe /c`
 /// on Windows, which re-parses shell metacharacters: reject both up front.
 /// Env key carrying a pane's SSH target to `spawn_pane` (never given to the process).
 pub const SSH_ENV: &str = "AGENTDECK_SSH";
