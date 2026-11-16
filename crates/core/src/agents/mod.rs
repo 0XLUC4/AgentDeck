@@ -139,7 +139,15 @@ pub fn command_for(kind: AgentKind, args: &[String]) -> CommandBuilder {
                     c.arg(p);
                     c
                 }
-                // npm installs agents as .cmd shims, which need cmd.exe.
+                // npm .cmd shim: run its target directly, without cmd.exe in between.
+                (Some(p), Some("cmd")) if let Some((program, script)) = npm_shim_target(&p) => {
+                    let mut c = CommandBuilder::new(program);
+                    if let Some(script) = script {
+                        c.arg(script);
+                    }
+                    c
+                }
+                // Any other .cmd/.bat needs cmd.exe.
                 // Note: cmd.exe mangles quoted paths containing spaces; npm's default prefix has none.
                 (resolved, _) => {
                     let mut c = CommandBuilder::new("cmd.exe");
@@ -150,13 +158,50 @@ pub fn command_for(kind: AgentKind, args: &[String]) -> CommandBuilder {
             }
         }
         (Some(bin), false) => CommandBuilder::new(bin),
-        (None, true) => CommandBuilder::new("powershell.exe"),
+        (None, true) => {
+            let mut c = CommandBuilder::new(windows_shell());
+            c.arg("-NoLogo");
+            c
+        }
         (None, false) => {
             CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()))
         }
     };
     cmd.args(args);
     cmd
+}
+
+/// PowerShell 7 (`pwsh`, faster to start) when installed, else the built-in Windows PowerShell.
+fn windows_shell() -> PathBuf {
+    resolve_binary("pwsh")
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")))
+        .unwrap_or_else(|| "powershell.exe".into())
+}
+
+/// What an npm `.cmd` shim runs, read from the shim: `(exe, None)` for a native binary,
+/// `(node, Some(script))` for a node script. Skipping cmd.exe saves a process and its
+/// "Terminate batch job (Y/N)?" prompt on Ctrl+C. `None`: not an npm shim, cmd.exe runs it.
+fn npm_shim_target(shim: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    const DP0: &str = "\"%dp0%\\";
+    let text = std::fs::read_to_string(shim).ok()?;
+    let dir = shim.parent()?;
+    // The target is the last quoted "%dp0%\..." path (an earlier one may be the local node.exe).
+    let (_, rest) = text.rsplit_once(DP0)?;
+    let target = dir.join(rest.split('"').next()?);
+    if !target.is_file() {
+        return None;
+    }
+    let is_exe = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+    if is_exe(&target) {
+        return Some((target, None));
+    }
+    if !text.contains("\"%_prog%\"") {
+        return None;
+    }
+    // Same choice as the shim: the node.exe next to it, else node from PATH.
+    let local = dir.join("node.exe");
+    let node = if local.is_file() { Some(local) } else { resolve_binary("node") };
+    Some((node.filter(|p| is_exe(p))?, Some(target)))
 }
 
 /// Runs git with `safe.directory` set for `repo` (D: is exFAT: no ownership info).
@@ -901,6 +946,38 @@ mod tests {
             find_in_path("claude", &path, &[String::new()]),
             Some(dir.join("claude"))
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn npm_shim_target_reads_exe_and_node_shims() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-shim-{}", uuid::Uuid::new_v4()));
+        let pkg = dir.join("node_modules").join("pkg").join("bin");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("tool.exe"), "").unwrap();
+        std::fs::write(pkg.join("cli.js"), "").unwrap();
+        std::fs::write(dir.join("node.exe"), "").unwrap();
+        let shim = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("@ECHO off\r\nCALL :find_dp0\r\n{body}\r\n")).unwrap();
+            path
+        };
+        // claude.cmd style: a native exe.
+        let exe = shim("a.cmd", r#""%dp0%\node_modules\pkg\bin\tool.exe"   %*"#);
+        assert_eq!(npm_shim_target(&exe), Some((pkg.join("tool.exe"), None)));
+        // codex.cmd style: node + script; the local node.exe wins, its own "%dp0%\" path is skipped.
+        let js = shim(
+            "b.cmd",
+            "IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n)\r\n\
+             endLocal & \"%_prog%\"  \"%dp0%\\node_modules\\pkg\\bin\\cli.js\" %*",
+        );
+        assert_eq!(
+            npm_shim_target(&js),
+            Some((dir.join("node.exe"), Some(pkg.join("cli.js"))))
+        );
+        // Missing target or not a shim: cmd.exe runs it.
+        assert_eq!(npm_shim_target(&shim("c.cmd", r#""%dp0%\missing.exe" %*"#)), None);
+        assert_eq!(npm_shim_target(&shim("d.cmd", "echo hi")), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
