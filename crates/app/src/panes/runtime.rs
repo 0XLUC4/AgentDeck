@@ -311,9 +311,12 @@ fn schedule_save(cx: &mut App) {
             rts(cx).save_pending = false;
             let Some(deck) = deck(cx) else { return };
             // Waiting prompts survive a restart; nothing is sent by itself when the app comes back.
+            let dir = deck.read(cx).data_dir.clone();
             let queues = deck.read(cx).queues.clone();
+            // On this thread: local.json holds other keys written here (a background
+            // read-modify-write could drop one of them).
             if queues != rts(cx).saved_queues {
-                if let Err(e) = persist::save_queues(&deck.read(cx).data_dir, &queues) {
+                if let Err(e) = persist::save_queues(&dir, &queues) {
                     eprintln!("queues not saved: {e}");
                 }
                 rts(cx).saved_queues = queues;
@@ -323,7 +326,16 @@ fn schedule_save(cx: &mut App) {
                 return;
             }
             rts(cx).last_saved = snapshot;
-            deck.update(cx, |d, cx| d.save_now(cx));
+            // Snapshot here, disk off the UI thread.
+            let saved = persist::snapshot(&deck.read(cx).state, now_ms());
+            let write = crate::disk::write_later(crate::disk::STORE, move || persist::save_snapshot(&dir, &saved), cx);
+            let deck = deck.downgrade();
+            cx.spawn(async move |cx| {
+                if let Err(e) = write.await {
+                    let _ = deck.update(cx, |d, cx| d.toast(format!("Save failed: {e}"), cx));
+                }
+            })
+            .detach();
         });
     })
     .detach();

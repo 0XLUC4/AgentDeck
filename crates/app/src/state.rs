@@ -91,20 +91,28 @@ impl Deck {
         cx.notify();
     }
 
-    /// Writes workspaces, tabs and archive to store.json now (autosave, quit). Errors become a toast.
+    /// Writes workspaces, tabs and archive to store.json now, on this thread (quit). Errors become a toast.
     pub fn save_now(&mut self, cx: &mut Context<Self>) {
-        if let Err(e) = persist::save_deck(&self.data_dir, &self.state, now_ms()) {
+        let result = crate::disk::write_now(crate::disk::STORE, || persist::save_deck(&self.data_dir, &self.state, now_ms()));
+        if let Err(e) = result {
             self.toast(format!("Save failed: {e}"), cx);
         }
     }
 
-    /// Applies a settings change and writes settings.json.
-    pub fn update_settings(&mut self, edit: impl FnOnce(&mut Settings), cx: &mut Context<Self>) {
+    /// Applies a settings change at once and writes settings.json off the UI thread.
+    /// The task resolves to the write error, also shown as a toast.
+    pub fn update_settings(&mut self, edit: impl FnOnce(&mut Settings), cx: &mut Context<Self>) -> Task<Result<(), String>> {
         edit(&mut self.settings);
-        if let Err(e) = persist::save_settings(&self.data_dir, &self.settings) {
-            self.toast(format!("Settings not saved: {e}"), cx);
-        }
         cx.notify();
+        let (dir, settings) = (self.data_dir.clone(), self.settings.clone());
+        let write = crate::disk::write_later(crate::disk::SETTINGS, move || persist::save_settings(&dir, &settings), cx);
+        cx.spawn(async move |this, cx| {
+            let result = write.await;
+            if let Err(e) = &result {
+                let _ = this.update(cx, |d, cx| d.toast(format!("Settings not saved: {e}"), cx));
+            }
+            result
+        })
     }
 
     pub fn toast(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {

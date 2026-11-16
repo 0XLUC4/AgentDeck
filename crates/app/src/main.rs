@@ -9,6 +9,7 @@
 mod automations;
 mod browser;
 mod chat;
+mod disk;
 mod git;
 mod history;
 mod layout;

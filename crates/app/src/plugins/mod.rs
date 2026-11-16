@@ -205,6 +205,7 @@ impl PluginsView {
                 },
                 cx,
             )
+            .detach();
         });
         sync(self.deck.clone(), cx);
     }

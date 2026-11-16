@@ -83,7 +83,7 @@ pub fn auto_allow_here(request: &PermissionRequest, cx: &mut App) {
     deck.update(cx, |d, cx| {
         let known = d.settings.auto_allow.iter().any(|r| r.rule == rule && r.folder == cwd);
         if !known {
-            d.update_settings(|s| s.auto_allow.push(AutoAllowRule { rule, folder: cwd }), cx);
+            d.update_settings(|s| s.auto_allow.push(AutoAllowRule { rule, folder: cwd }), cx).detach();
         }
     });
     answer(request, "allow", None, cx);

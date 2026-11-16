@@ -17,7 +17,6 @@ mod voice;
 use std::time::Duration;
 
 use agentdeck_core::logic::settings::{Settings, step_ui_zoom};
-use agentdeck_core::persist;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{Root, WindowExt};
@@ -70,7 +69,7 @@ fn zoom_ui(delta: i32, cx: &mut App) {
             return;
         };
         let zoom = deck.update(cx, |deck, cx| {
-            deck.update_settings(|s| s.ui_zoom = step_ui_zoom(s.ui_zoom, delta), cx);
+            deck.update_settings(|s| s.ui_zoom = step_ui_zoom(s.ui_zoom, delta), cx).detach();
             deck.settings.ui_zoom
         });
         crate::theme::set_zoom(zoom, cx);
@@ -195,12 +194,12 @@ impl SettingsDialog {
 
     /// Applies a settings change, writes settings.json and reports it in the header.
     fn set(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Settings)) {
-        let result = self.deck.update(cx, |deck, cx| {
-            edit(&mut deck.settings);
-            cx.notify();
-            persist::save_settings(&deck.data_dir, &deck.settings)
-        });
-        self.report(result, cx);
+        let write = self.deck.update(cx, |deck, cx| deck.update_settings(edit, cx));
+        cx.spawn(async move |this, cx| {
+            let result = write.await;
+            let _ = this.update(cx, |this, cx| this.report(result, cx));
+        })
+        .detach();
     }
 
     /// "Saved" for 1.5 s, or "Could not save: ..." (the `Save` contract of the original).
