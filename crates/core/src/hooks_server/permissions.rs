@@ -29,6 +29,8 @@ pub struct PermissionRequest {
     pub request_id: String,
     pub pane_id: String,
     pub agent: String,
+    #[serde(default)]
+    pub cwd: String,
     pub tool_name: String,
     /// "Bash: rm -rf build", "Edit src/x.ts".
     pub summary: String,
@@ -128,6 +130,7 @@ impl Permissions {
             request_id: request_id.clone(),
             pane_id: pane_id.to_owned(),
             agent: "claude".into(),
+            cwd: body["cwd"].as_str().unwrap_or_default().to_owned(),
             summary: describe_tool(body).unwrap_or_else(|| tool_name.clone()),
             tool_name,
             detail,
@@ -306,7 +309,10 @@ mod tests {
     #[test]
     fn register_describes_request() {
         let p = Permissions::default();
-        let (req, _rx) = p.register("p1", &request("npm test"));
+        let mut body = request("npm test");
+        body["cwd"] = json!("/project/src");
+        let (req, _rx) = p.register("p1", &body);
+        assert_eq!(req.cwd, "/project/src");
         assert_eq!(req.summary, "Bash: npm test");
         assert_eq!(req.detail, "npm test");
         assert_eq!(req.suggestions, vec!["Bash(npm test)".to_string()]);

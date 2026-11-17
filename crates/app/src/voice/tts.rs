@@ -62,8 +62,8 @@ fn sapi_rate(rate: f64) -> i32 {
 
 /// Speaks `text` (stops what was being said). The dictation language picks the voice when none is set.
 pub fn speak(backend: &AppHandle, speech: &SpeechSettings, text: String) {
-    let lang = agentdeck_core::voice::voice_get_config(backend)
-        .map(|v| v.config.language)
+    let lang = agentdeck_core::voice::config_snapshot(backend)
+        .map(|v| v.language)
         .ok()
         .filter(|l| !l.is_empty() && l != "auto")
         .unwrap_or_default();

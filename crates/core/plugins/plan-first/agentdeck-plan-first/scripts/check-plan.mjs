@@ -16,13 +16,13 @@ function markdownFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) return entry.name.startsWith(".") ? [] : markdownFiles(path);
-    return entry.name.endsWith(".md") ? [path] : [];
+    return entry.isFile() && entry.name.endsWith(".md") ? [path] : [];
   });
 }
 
 /** Text without fenced code blocks and inline code (links and placeholders in code are examples). */
 function prose(text) {
-  return text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, "").replace(/`[^`\n]*`/g, "");
+  return text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, (block) => block.replace(/[^\n]/g, "")).replace(/`[^`\n]*`/g, "");
 }
 
 /** GitHub heading anchor: lower case, punctuation dropped, spaces to dashes. */
@@ -52,6 +52,7 @@ const VAGUE = /\b(TBD|TODO|FIXME|handle edge cases|add validation|update as need
 
 const files = markdownFiles(root);
 const texts = new Map(files.map((f) => [f, readFileSync(f, "utf8")]));
+const headings = new Map();
 const index = join(root, "README.md");
 const incoming = new Map(files.map((f) => [f, new Set()]));
 const errors = [];
@@ -66,14 +67,23 @@ for (const [file, text] of texts) {
     for (const [, target] of line.matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
       if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue; // http:, mailto:...
       const [path, anchor] = target.split("#");
-      const linked = path ? resolve(dirname(file), decodeURIComponent(path)) : file;
+      let linked;
+      let fragment;
+      try {
+        linked = path ? resolve(dirname(file), decodeURIComponent(path)) : file;
+        fragment = decodeURIComponent(anchor ?? "");
+      } catch {
+        errors.push(`${at(file, i + 1)} invalid URL encoding: ${target}`);
+        continue;
+      }
       if (!existsSync(linked)) {
         errors.push(`${at(file, i + 1)} broken link: ${target}`);
         continue;
       }
       if (linked !== file) incoming.get(linked)?.add(file);
-      if (anchor && texts.has(linked) && !anchors(texts.get(linked)).has(anchor.toLowerCase())) {
-        errors.push(`${at(file, i + 1)} no heading for anchor: ${target}`);
+      if (fragment && texts.has(linked)) {
+        if (!headings.has(linked)) headings.set(linked, anchors(texts.get(linked)));
+        if (!headings.get(linked).has(fragment)) errors.push(`${at(file, i + 1)} no heading for anchor: ${target}`);
       }
     }
     for (const [placeholder, name] of line.matchAll(/<([a-z][a-z0-9 ,._/|-]*)>/gi)) {

@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 description = "Multi-agent terminal dashboard (GPUI)"
 
+[features]
+gpu = ["agentdeck-core/gpu"]
+
 [dependencies]
 agentdeck-core.workspace = true
 gpui-kit = "0.9"
@@ -32,6 +35,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 # Phone access link as a QR code (Settings > General).
 qrcode = { version = "0.14", default-features = false }
 minisign-verify = "0.3"
+tempfile = "3"
 # Main window HWND for close to tray (GPUI has no hide on Windows).
 raw-window-handle = "0.6"
 # --- end system + voice ---

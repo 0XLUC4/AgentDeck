@@ -69,51 +69,53 @@ fn archive(history: &mut Vec<Task>, task: Task) {
 /// Pure reducer. A task starts on UserPromptSubmit or on the first working event without a running
 /// task, ends on done/error. `fallback_start` dates tasks seen only at their end (Codex notify).
 pub fn apply_task_event(log: &TaskLog, e: &TaskEvent, now: i64, fallback_start: i64) -> TaskLog {
-    let mut current = log.current.clone();
-    let mut history = log.history.clone();
-    let status = e.status.unwrap_or(PaneStatus::Idle);
-    let ended = matches!(status, PaneStatus::Done | PaneStatus::Error);
-    if e.event == "UserPromptSubmit" || (status == PaneStatus::Working && current.is_none()) {
-        if let Some(mut interrupted) = current.take() {
-            interrupted.ended_at = Some(now);
-            archive(&mut history, interrupted);
+    let mut next = log.clone();
+    next.apply(e, now, fallback_start);
+    next
+}
+
+impl TaskLog {
+    /// Applies a live hook without copying prior actions and finished tasks.
+    pub fn apply(&mut self, e: &TaskEvent, now: i64, fallback_start: i64) {
+        let status = e.status.unwrap_or(PaneStatus::Idle);
+        let ended = matches!(status, PaneStatus::Done | PaneStatus::Error);
+        if e.event == "UserPromptSubmit" || (status == PaneStatus::Working && self.current.is_none()) {
+            if let Some(mut interrupted) = self.current.take() {
+                interrupted.ended_at = Some(now);
+                archive(&mut self.history, interrupted);
+            }
+            self.current = Some(new_task(now, e.prompt));
         }
-        current = Some(new_task(now, e.prompt));
-    }
-    if current.is_none() && !ended {
-        return TaskLog { current, history };
-    }
-    let mut task = current.unwrap_or_else(|| new_task(fallback_start.min(now), None));
-    if let Some(action) = e.last_action
-        && status != PaneStatus::Error
-        && task.actions.last().is_none_or(|a| a.text != action)
-    {
-        task.actions.push(TaskAction {
-            at: now,
-            text: action.to_owned(),
-        });
-        let extra = task.actions.len().saturating_sub(MAX_ACTIONS);
-        task.actions.drain(..extra);
-    }
-    if task.prompt.is_none() {
-        task.prompt = e.prompt.map(str::to_owned);
-    }
-    if !ended {
-        return TaskLog {
-            current: Some(task),
-            history,
-        };
-    }
-    task.summary = e
-        .summary
-        .or(if status == PaneStatus::Error { e.last_action } else { None })
-        .map(str::to_owned);
-    task.ended_at = Some(now);
-    task.status = status;
-    archive(&mut history, task);
-    TaskLog {
-        current: None,
-        history,
+        if self.current.is_none() && !ended {
+            return;
+        }
+        let task = self.current.get_or_insert_with(|| new_task(fallback_start.min(now), None));
+        if let Some(action) = e.last_action
+            && status != PaneStatus::Error
+            && task.actions.last().is_none_or(|a| a.text != action)
+        {
+            task.actions.push(TaskAction {
+                at: now,
+                text: action.to_owned(),
+            });
+            let extra = task.actions.len().saturating_sub(MAX_ACTIONS);
+            task.actions.drain(..extra);
+        }
+        if task.prompt.is_none() {
+            task.prompt = e.prompt.map(str::to_owned);
+        }
+        if !ended {
+            return;
+        }
+        task.summary = e
+            .summary
+            .or(if status == PaneStatus::Error { e.last_action } else { None })
+            .map(str::to_owned);
+        task.ended_at = Some(now);
+        task.status = status;
+        if let Some(done) = self.current.take() {
+            archive(&mut self.history, done);
+        }
     }
 }
 

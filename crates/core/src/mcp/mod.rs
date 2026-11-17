@@ -266,7 +266,7 @@ Method:
 1. Understand the request, then split it into independent, well-scoped subtasks. For big work, when the \
 `agentdeck-plan-first` skill is installed, write its linked plan folder first and send each agent the link \
 to its step.
-2. Check existing agents with `list_agents`: reuse an idle one that already knows the files before \
+2. Check existing agents with `list_agents` (includeChanges: false when only choosing a worker): reuse an idle one that already knows the files before \
 starting a new one with `spawn_agent` (one clear title per subtask, `worktree: true` if several agents \
 change the same repository, `args: [\"--model\", \"<name>\"]` to run a mechanical subtask on a cheaper model).
 3. Send each one a self-contained, precise prompt with `send_prompt` (context, files, definition of done). \

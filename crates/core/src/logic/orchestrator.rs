@@ -264,6 +264,9 @@ pub fn named_files<'a>(text: &str, files: &'a [String]) -> Vec<&'a String> {
         .collect()
 }
 
+pub const READ_TOOLS: &[&str] = &["get_status", "get_result", "wait_for", "get_summaries"];
+const MAX_SUMMARY: usize = 1500;
+
 /// Answers the tools that only read state. `None`: the tool acts on panes, the app runs it.
 pub fn handle_read_tool(
     deck: &DeckState,
@@ -273,6 +276,9 @@ pub fn handle_read_tool(
     args: &Value,
     now: i64,
 ) -> Option<Result<Value, String>> {
+    if !READ_TOOLS.contains(&tool) {
+        return None;
+    }
     let scope = match scope_of(deck, orchestrator_id) {
         Ok(s) => s,
         Err(e) => return Some(Err(e)),
@@ -300,6 +306,23 @@ pub fn handle_read_tool(
                 })),
             })
         }),
+        "get_summaries" => {
+            let mut summaries = serde_json::Map::new();
+            for id in args["paneIds"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                // A finished pane may have closed since the wait ended.
+                if target(&scope, id).is_err() {
+                    continue;
+                }
+                if let Some(summary) = tasks.get(id).and_then(|log| log.history.first()).and_then(|t| t.summary.as_deref()) {
+                    let value = match summary.char_indices().nth(MAX_SUMMARY) {
+                        Some((end, _)) => format!("{}... (cut: get_result has the rest)", &summary[..end]),
+                        None => summary.to_owned(),
+                    };
+                    summaries.insert(id.to_owned(), json!({ "summary": value }));
+                }
+            }
+            Ok(Value::Object(summaries))
+        }
         "wait_for" => args["paneIds"]
             .as_array()
             .map_or(&[][..], Vec::as_slice)
@@ -337,7 +360,7 @@ mod tests {
     fn workers_overflow_into_new_sessions_of_the_workspace() {
         let mut d = deck();
         let (own, ws, active) = (d.tabs[0].id.clone(), d.tabs[0].workspace_id.clone(), d.active_tab_id.clone());
-        let mut add = |d: &mut DeckState, n: usize| {
+        let add = |d: &mut DeckState, n: usize| {
             let tab = worker_tab(d, &own, &ws);
             let mut s = PaneSpec::new(AgentKind::Claude, "w", "C:\\proj");
             s.id = format!("w{n}");
@@ -396,6 +419,21 @@ mod tests {
             summarize_call("wait_for", &json!({ "paneIds": ["a", "zzzzzzzzzz"], "until": "done" }), &d.panes),
             "a (claude), zzzzzzzz \u{2192} done"
         );
+    }
+
+    #[test]
+    fn batch_summaries_are_scoped_and_bounded() {
+        let d = deck();
+        let mut log = TaskLog::default();
+        let summary = "\u{e9}".repeat(MAX_SUMMARY + 1);
+        log.apply(&super::super::tasks::TaskEvent {
+            status: Some(PaneStatus::Done), event: "Stop", summary: Some(&summary), ..Default::default()
+        }, 1, 0);
+        let tasks = HashMap::from([("a".into(), log.clone()), ("outside".into(), log)]);
+        let out = handle_read_tool(&d, &tasks, "o", "get_summaries", &json!({"paneIds":["a","outside","b"]}), 1)
+            .unwrap().unwrap();
+        assert_eq!(out.as_object().unwrap().len(), 1);
+        assert_eq!(out["a"]["summary"], format!("{}... (cut: get_result has the rest)", "\u{e9}".repeat(MAX_SUMMARY)));
     }
 
     #[test]

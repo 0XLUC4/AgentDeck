@@ -14,7 +14,7 @@ use agentdeck_core::logic::deck::{DeckState, SavedSession};
 use agentdeck_core::logic::orchestrator::{OrchestratorState, handle_read_tool};
 use agentdeck_core::logic::queue::Queues;
 use agentdeck_core::logic::settings::Settings;
-use agentdeck_core::logic::tasks::{TaskEvent, TaskLog, apply_task_event};
+use agentdeck_core::logic::tasks::{TaskEvent, TaskLog};
 use agentdeck_core::logic::templates::SessionTemplate;
 use agentdeck_core::logic::text::now_ms;
 use agentdeck_core::{AppHandle, Event, persist};
@@ -126,10 +126,8 @@ impl Deck {
         match event.name.as_str() {
             "agent-status" => {
                 if let Ok(e) = serde_json::from_value::<AgentStatusEvent>(event.payload.clone()) {
-                    let log = self.tasks.remove(&e.pane_id).unwrap_or_default();
                     let started = self.state.panes.get(&e.pane_id).and_then(|p| p.task_started_at);
-                    let next = apply_task_event(&log, &TaskEvent::from(&e), now, started.unwrap_or(now));
-                    self.tasks.insert(e.pane_id.clone(), next);
+                    self.tasks.entry(e.pane_id.clone()).or_default().apply(&TaskEvent::from(&e), now, started.unwrap_or(now));
                     // A terminal notification is no hook: output keeps driving the status of such panes.
                     if e.event != agentdeck_core::logic::text::TERMINAL_NOTICE {
                         self.state.update_pane(&e.pane_id, |p| p.hooked = true);
@@ -167,10 +165,10 @@ impl Deck {
 
     /// Auto-allow rules answer at once (with a toast); other requests wait for a permission card.
     fn on_permission(&mut self, req: PermissionRequest, now: i64) {
-        let Some(cwd) = self.state.panes.get(&req.pane_id).map(|p| p.cwd.clone()) else {
+        if !self.state.panes.contains_key(&req.pane_id) {
             return;
-        };
-        let rule = auto_allowed(&req.tool_name, &req.detail, &cwd, &self.settings.auto_allow).cloned();
+        }
+        let rule = auto_allowed(&req.tool_name, &req.detail, &req.cwd, &self.settings.auto_allow).cloned();
         let Some(rule) = rule else {
             self.permissions.push(req);
             return;

@@ -24,8 +24,6 @@ const MUTATING: [&str; 7] = [
 const MAX_PROMPT: usize = 64 * 1024;
 const MAX_WAIT_S: u64 = 600;
 const MAX_LINES: u64 = 200;
-/// Characters of each finished agent's summary returned by wait_for.
-const MAX_SUMMARY: usize = 1500;
 /// Appended to every prompt sent to a worker: the orchestrator builds once after all agents finish.
 pub const NO_BUILD_NOTE: &str = "\n\n[AgentDeck] Do not build, run or test the whole project (no cargo build, \
 cargo check, cargo test, npm run build, etc.): the orchestrator builds and verifies once after all agents \
@@ -90,8 +88,8 @@ fn definitions() -> Value {
     json!([
         tool(
             "list_agents",
-            "Lists the agents in your workspace: paneId, agent, title, status, last action, session, folder (its worktree when it has one), uncommitted changedFiles of that folder.",
-            json!({}),
+            "Lists the agents in your workspace: paneId, agent, title, status, last action, session, folder (its worktree when it has one), uncommitted changedFiles of that folder. Pass includeChanges: false for a fast roster without Git scans.",
+            json!({"includeChanges": {"type": "boolean", "default": true}}),
             &[]
         ),
         tool(
@@ -218,7 +216,8 @@ fn run(name: &str, args: &Value, host: &impl Host) -> Result<Value, String> {
         return Err(PAUSED_MSG.into());
     }
     match name {
-        "list_agents" | "find_conflicts" => host.frontend(name, &json!({})),
+        "list_agents" => host.frontend(name, &json!({ "includeChanges": bool_arg(args, "includeChanges", true)? })),
+        "find_conflicts" => host.frontend(name, &json!({})),
         "queue_prompt" => host.frontend(
             name,
             &json!({ "paneId": pane_arg(args)?, "text": worker_prompt(prompt_arg(args)?) }),
@@ -296,27 +295,16 @@ fn wait_for(args: &Value, host: &impl Host) -> Result<Value, String> {
     let (met, statuses) = host
         .statuses()
         .wait(&ids, until, Duration::from_secs(timeout), |p| host.alive(p));
-    // Saves one get_result round trip per finished agent. Agents without hooks have no summary.
-    let mut results = serde_json::Map::new();
-    for (id, label) in &statuses {
-        if !matches!(label.as_str(), Some("done" | "error")) {
-            continue;
-        }
-        let result = host.frontend("get_result", &json!({ "paneId": id }));
-        let summary = result.as_ref().ok().and_then(|r| r["result"]["summary"].as_str());
-        if let Some(summary) = summary {
-            results.insert(id.clone(), json!({ "summary": cut_summary(summary) }));
-        }
-    }
+    let finished: Vec<_> = statuses.iter()
+        .filter(|(_, label)| matches!(label.as_str(), Some("done" | "error")))
+        .map(|(id, _)| id)
+        .collect();
+    let results = if finished.is_empty() {
+        json!({})
+    } else {
+        host.frontend("get_summaries", &json!({ "paneIds": finished })).unwrap_or_else(|_| json!({}))
+    };
     Ok(json!({ "met": met, "statuses": statuses, "results": results }))
-}
-
-/// First `MAX_SUMMARY` characters of a summary, with where to find the rest.
-fn cut_summary(summary: &str) -> String {
-    match summary.char_indices().nth(MAX_SUMMARY) {
-        Some((end, _)) => format!("{}... (cut: get_result has the rest)", &summary[..end]),
-        None => summary.to_owned(),
-    }
 }
 
 /// Validated `spawn_agent` arguments, normalized for the UI.
@@ -485,7 +473,7 @@ mod tests {
                 "read_output" => Ok(json!({ "raw": "\x1b[31ma\x1b[0m\r\nb\r\nc\r\n" })),
                 "wait_for" => Ok(json!({ "statuses": { "p1": "done", "p2": "working" } })),
                 "get_status" if args["paneId"] == "other-ws" => Err("outside workspace".into()),
-                "get_result" => Ok(json!({ "result": { "summary": "é".repeat(MAX_SUMMARY + 1) } })),
+                "get_summaries" => Ok(json!({"p1": {"summary": "finished"}})),
                 _ => Ok(json!({ "ok": true })),
             }
         }
@@ -660,6 +648,17 @@ mod tests {
     }
 
     #[test]
+    fn roster_can_skip_git_and_rejects_non_boolean_options() {
+        let err = |response: Value| response["isError"] == true;
+        let host = Fake::default();
+        assert!(!err(tool(&host, "list_agents", json!({"includeChanges":false}))));
+        assert_eq!(host.calls.borrow().last().unwrap().1["includeChanges"], false);
+        assert!(err(tool(&host, "list_agents", json!({"includeChanges":"false"}))));
+        assert!(!err(tool(&host, "list_agents", json!({}))));
+        assert_eq!(host.calls.borrow().last().unwrap().1["includeChanges"], true);
+    }
+
+    #[test]
     fn pause_blocks_mutating_tools_only() {
         let host = Fake {
             paused: true,
@@ -699,9 +698,9 @@ mod tests {
         assert_eq!(body["statuses"], json!({ "p1": "done", "p2": "working" }));
         // Only the finished agent gets its summary, cut on a char boundary.
         let summary = body["results"]["p1"]["summary"].as_str().unwrap();
-        assert!(summary.starts_with(&"é".repeat(MAX_SUMMARY)) && summary.ends_with("the rest)"));
+        assert_eq!(summary, "finished");
         assert!(body["results"].get("p2").is_none());
-        assert_eq!(cut_summary("short"), "short");
+        assert_eq!(host.calls.borrow().last().unwrap(), &("get_summaries".into(), json!({"paneIds":["p1"]})));
     }
 
     #[test]

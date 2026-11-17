@@ -133,7 +133,8 @@ fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app.app_data_dir()?.join("models"))
 }
 
-fn config_snapshot(app: &AppHandle) -> Result<VoiceConfig, String> {
+/// In-memory dictation settings for runtime consumers.
+pub fn config_snapshot(app: &AppHandle) -> Result<VoiceConfig, String> {
     Ok(app
         .state::<Voice>()
         .config
@@ -157,12 +158,15 @@ pub fn voice_get_config(app: &AppHandle) -> Result<VoiceConfigView, String> {
 /// (register the new one first; on failure keep the old one and do not call this).
 pub fn voice_set_config(app: &AppHandle, config: VoiceConfig) -> Result<VoiceConfigView, String> {
     config.validate()?;
-    *app.state::<Voice>()
-        .config
-        .lock()
-        .map_err(|e| e.to_string())? = config.clone();
+    let voice = app.state::<Voice>();
+    let mut current = voice.config.lock().map_err(|e| e.to_string())?;
     config.save(&config_path(app)?)?;
-    preload(app);
+    let model_changed = current.model != config.model || current.engine != config.engine;
+    *current = config.clone();
+    drop(current);
+    if model_changed {
+        preload(app);
+    }
     Ok(view(config))
 }
 
@@ -217,6 +221,7 @@ fn start(app: &AppHandle) -> Result<(), String> {
     if slot.is_some() || voice.transcribing.load(Ordering::SeqCst) {
         return Ok(());
     }
+    warm_up(app);
     let emitter = app.clone();
     let capture = Capture::start(move |rms| {
         // Speech RMS is ~0.01..0.2: sqrt spreads it over the visible 0..1 range.
@@ -227,7 +232,6 @@ fn start(app: &AppHandle) -> Result<(), String> {
     drop(slot);
     set_state(app, "listening");
     show_pill(app);
-    warm_up(app);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(MAX_RECORDING);
@@ -301,6 +305,9 @@ fn stop(app: &AppHandle, session: Option<u64>) -> Result<(), String> {
 
 fn transcribe(app: &AppHandle, samples: &[f32], rate: u32) -> Result<(), String> {
     let config = config_snapshot(app)?;
+    if samples.iter().all(|&s| s == 0.0) {
+        return Ok(());
+    }
     let pcm = audio::resample(samples, rate, audio::TARGET_RATE);
     let text = match config.engine {
         // Silence around the speech is cut first: a smaller upload and less audio for the server.

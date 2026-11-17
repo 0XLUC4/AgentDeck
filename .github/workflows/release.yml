@@ -30,6 +30,8 @@ jobs:
         include:
           - name: windows-x86_64
             os: windows-latest
+          - name: windows-x86_64-vulkan
+            os: windows-latest
           - name: macos-aarch64
             os: macos-latest
           - name: linux-x86_64
@@ -65,12 +67,38 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install Vulkan build tools
+        if: matrix.name == 'windows-x86_64-vulkan'
+        shell: pwsh
+        run: |
+          $sdk = Join-Path $env:RUNNER_TEMP 'vulkan-sdk'
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk.exe'
+          curl.exe --fail --location --retry 3 --silent --show-error --output $installer https://sdk.lunarg.com/sdk/download/1.4.363.1/windows/vulkan_sdk.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $installer).Hash -ne 'C02932BD9A968B22D404536108ADAACAC908C081CD6B0113F5BFEFC523DD0A6A') { throw 'Unexpected Vulkan SDK digest' }
+          $setup = Start-Process $installer -ArgumentList "--root `"$sdk`" --accept-licenses --default-answer --confirm-command install copy_only=1" -Wait -PassThru -WindowStyle Hidden
+          if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
+          if (!(Test-Path "$sdk/Bin/glslc.exe")) { throw 'Missing Vulkan shader compiler' }
+          "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+          "$sdk/Bin" >> $env:GITHUB_PATH
+
       - name: Build release
-        run: cargo build --release -p agentdeck --locked
+        env:
+          BUILD_VARIANT: ${{ matrix.name }}
+        run: |
+          flags=()
+          if [[ "$BUILD_VARIANT" == windows-x86_64-vulkan ]]; then flags+=(--features gpu); fi
+          cargo build --release -p agentdeck --locked "${flags[@]}"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        run: mkdir -p out && cp target/release/agentdeck.exe out/
+        env:
+          BUILD_VARIANT: ${{ matrix.name }}
+        run: |
+          mkdir -p out
+          filename=agentdeck.exe
+          if [[ "$BUILD_VARIANT" == windows-x86_64-vulkan ]]; then filename=agentdeck-vulkan.exe; fi
+          cp target/release/agentdeck.exe "out/$filename"
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -121,7 +149,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::secret TAURI_SIGNING_PRIVATE_KEY is missing"; exit 1; }
-          npx --yes @tauri-apps/cli@2 signer sign --password "" out/agentdeck.exe
+          for binary in out/agentdeck.exe out/agentdeck-vulkan.exe; do
+            npx --yes @tauri-apps/cli@2 signer sign --password "" "$binary"
+          done
 
       - name: Create the release (draft) if needed
         run: |
@@ -139,14 +169,16 @@ jobs:
             --arg version "${TAG#v}" \
             --arg notes "$notes" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg gpuSig "$(cat out/agentdeck-vulkan.exe.sig)" \
+            --arg gpuUrl "https://github.com/$GH_REPO/releases/download/$TAG/agentdeck-vulkan.exe" \
             --arg sig "$(cat out/agentdeck.exe.sig)" \
             --arg url "https://github.com/$GH_REPO/releases/download/$TAG/agentdeck.exe" \
             '{version: $version, notes: $notes, pub_date: $date,
-              platforms: {"windows-x86_64": {signature: $sig, url: $url}}}' > out/latest.json
+              platforms: {"windows-x86_64": {signature: $sig, url: $url}, "windows-x86_64-vulkan": {signature: $gpuSig, url: $gpuUrl}}}' > out/latest.json
           cat out/latest.json
 
       - name: Upload and publish
         run: |
           gh release upload "$TAG" --clobber \
-            out/agentdeck.exe out/agentdeck-macos-aarch64.zip out/agentdeck-linux-x86_64.tar.gz out/latest.json
+            out/agentdeck.exe out/agentdeck-vulkan.exe out/agentdeck-macos-aarch64.zip out/agentdeck-linux-x86_64.tar.gz out/latest.json
           gh release edit "$TAG" --draft=false --latest

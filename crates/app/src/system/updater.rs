@@ -2,8 +2,8 @@
 //! signed with the minisign key from tauri.conf.json. The running exe is swapped in place. Checked at startup and every few hours; shared by the
 //! title bar button ([`UpdateButton`]) and Settings > About ([`super::AppControls`]).
 
-use std::io::Read;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use agentdeck_core::logic::text::now_ms;
@@ -149,10 +149,11 @@ impl Updater {
             }
             let result = job.await;
             let _ = this.update(cx, |u, cx| {
-                match result.and_then(|path| {
+                match result.and_then(|(staged, current)| {
                     u.phase = UpdatePhase::Installing;
                     u.progress = Some(1.0);
-                    replace_exe(&path)
+                    replace_exe(staged, &current)?;
+                    Ok::<_, String>(current)
                 }) {
                     Ok(exe) => {
                         if let Err(e) = super::window::quit_for_update(&exe, cx) {
@@ -199,7 +200,11 @@ fn platform_keys() -> Vec<String> {
         other => other,
     };
     let base = format!("{os}-{}", std::env::consts::ARCH);
-    vec![format!("{base}-nsis"), format!("{base}-msi"), base]
+    if cfg!(feature = "gpu") {
+        vec![format!("{base}-vulkan")]
+    } else {
+        vec![format!("{base}-nsis"), format!("{base}-msi"), base]
+    }
 }
 
 /// The update described by `manifest`, or None when it is not newer than `current`.
@@ -248,7 +253,8 @@ fn is_newer(candidate: &str, current: &str) -> bool {
     a > b
 }
 
-fn download(update: &Update, progress: impl Fn(Option<f32>)) -> Result<PathBuf, String> {
+fn download(update: &Update, progress: impl Fn(Option<f32>)) -> Result<(tempfile::TempPath, PathBuf), String> {
+    const MAX_BYTES: usize = 256 * 1024 * 1024;
     let mut response = client()?
         .get(&update.url)
         .timeout(Duration::from_secs(30 * 60)) // the client default (30 s) also covers the body: slow links failed
@@ -256,26 +262,27 @@ fn download(update: &Update, progress: impl Fn(Option<f32>)) -> Result<PathBuf, 
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|e| format!("download failed: {e}"))?;
     let total = response.content_length().filter(|t| *t > 0);
-    let mut bytes = Vec::with_capacity(total.unwrap_or(0) as usize);
+    let too_large = "update exceeds the 256 MiB download limit";
+    if total.is_some_and(|n| n > MAX_BYTES as u64) {
+        return Err(too_large.into());
+    }
+    let mut bytes = Vec::new();
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
         let n = response.read(&mut chunk).map_err(|e| format!("download failed: {e}"))?;
         if n == 0 {
             break;
         }
+        if n > MAX_BYTES - bytes.len() {
+            return Err(too_large.into());
+        }
         bytes.extend_from_slice(&chunk[..n]);
         progress(total.map(|t| (bytes.len() as f32 / t as f32).min(1.0)));
     }
     verify(&bytes, &update.signature)?;
-    let name = update
-        .url
-        .rsplit('/')
-        .next()
-        .filter(|n| !n.is_empty() && !n.contains(['\\', ':']))
-        .unwrap_or("AgentDeck-setup.exe");
-    let path = std::env::temp_dir().join(name);
-    std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(path)
+    let current = std::env::current_exe().map_err(|e| format!("cannot locate running executable: {e}"))?;
+    let staged = stage_exe(&bytes, &current).map_err(|e| format!("cannot stage the update: {e}"))?;
+    Ok((staged, current))
 }
 
 fn verify(bytes: &[u8], signature_b64: &str) -> Result<(), String> {
@@ -314,19 +321,26 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Replaces the running exe with `new` (Windows lets a running exe be renamed, not overwritten),
-/// and returns its path. On failure the old exe is put back.
-fn replace_exe(new: &std::path::Path) -> Result<PathBuf, String> {
-    let current = std::env::current_exe().map_err(|e| format!("cannot find AgentDeck's exe: {e}"))?;
+fn stage_exe(bytes: &[u8], current: &Path) -> std::io::Result<tempfile::TempPath> {
+    let parent = current.parent().ok_or_else(|| std::io::Error::other("no application directory"))?;
+    let mut stage = tempfile::NamedTempFile::new_in(parent)?;
+    stage.write_all(bytes)?;
+    stage.as_file().set_permissions(current.metadata()?.permissions())?;
+    stage.as_file().sync_all()?;
+    Ok(stage.into_temp_path())
+}
+
+/// Both renames are on the executable's volume. The old binary remains available for recovery.
+fn replace_exe(staged: tempfile::TempPath, current: &Path) -> Result<(), String> {
     let old = current.with_extension("exe.old");
-    let _ = std::fs::remove_file(&old);
-    std::fs::rename(&current, &old).map_err(|e| format!("{}: {e}", current.display()))?;
-    if let Err(e) = std::fs::copy(new, &current) {
-        let _ = std::fs::rename(&old, &current);
+    std::fs::rename(current, &old).map_err(|e| format!("{}: {e}", current.display()))?;
+    if let Err(e) = staged.persist(current) {
+        std::fs::rename(&old, current).map_err(|restore| {
+            format!("cannot install the update: {e}; previous executable at {}: {restore}", old.display())
+        })?;
         return Err(format!("cannot install the update: {e}"));
     }
-    let _ = std::fs::remove_file(new);
-    Ok(current)
+    Ok(())
 }
 
 /// Title bar button: a dot when a new release is out, a small panel to install it and restart.
@@ -524,7 +538,22 @@ impl Render for UpdateButton {
 
 #[cfg(test)]
 mod tests {
-    use super::{PUBKEY, Value, base64_decode, is_newer, parse_manifest};
+    use super::{PUBKEY, Value, base64_decode, is_newer, parse_manifest, replace_exe, stage_exe};
+
+    #[test]
+    fn swaps_verified_bytes_and_restores_previous_executable_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("app.exe");
+        std::fs::write(&current, b"old").unwrap();
+        let staged = stage_exe(b"new", &current).unwrap();
+        replace_exe(staged, &current).unwrap();
+        assert_eq!(std::fs::read(&current).unwrap(), b"new");
+        assert_eq!(std::fs::read(current.with_extension("exe.old")).unwrap(), b"old");
+        let missing = stage_exe(b"later", &current).unwrap();
+        std::fs::remove_file(&missing).unwrap();
+        assert!(replace_exe(missing, &current).is_err());
+        assert_eq!(std::fs::read(&current).unwrap(), b"new");
+    }
 
     #[test]
     fn newer_versions() {

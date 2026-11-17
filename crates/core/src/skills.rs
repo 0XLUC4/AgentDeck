@@ -47,7 +47,7 @@ fn config_dir(agent: AgentKind) -> Result<&'static str, String> {
 
 /// Skill folders the agent reads, per scope; the first of each scope is where installs go.
 /// The agent's config folder under home: `~/.claude` etc., but `~/.config/opencode` for OpenCode.
-fn user_dir(agent: AgentKind, home: &Path) -> Result<PathBuf, String> {
+pub(crate) fn user_dir(agent: AgentKind, home: &Path) -> Result<PathBuf, String> {
     Ok(match agent {
         AgentKind::OpenCode => home.join(".config").join("opencode"),
         _ => home.join(config_dir(agent)?),
@@ -77,6 +77,22 @@ fn plain(s: &str) -> bool {
         && !s.starts_with('-')
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+}
+
+/// Names from a repository become local paths, including on Windows.
+fn safe_component(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    plain(name)
+        && !name.ends_with('.')
+        && !name.eq_ignore_ascii_case(".git")
+        && !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        && !(stem.len() == 4
+            && stem.ends_with(|c: char| c.is_ascii_digit())
+            && (stem.starts_with("COM") || stem.starts_with("LPT")))
 }
 
 /// `description:` from the SKILL.md front matter (single line, or a `>`/`|` block).
@@ -249,8 +265,12 @@ pub fn agent_file_write(
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
     // A rename would replace a link (AGENTS.md -> CLAUDE.md) with a plain file: write through it.
-    if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
-        return std::fs::write(&path, text).map_err(|e| format!("cannot save {}: {e}", path.display()));
+    if path
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return std::fs::write(&path, text)
+            .map_err(|e| format!("cannot save {}: {e}", path.display()));
     }
     crate::persist::write_atomic(&path, text.as_bytes()).map_err(|e| format!("cannot save {e}"))
 }
@@ -288,7 +308,8 @@ fn parse_source(input: &str) -> Result<Source, String> {
     if parts.len() > 2 {
         if !matches!(parts[2], "tree" | "blob")
             || parts.len() < 4
-            || !parts[3..].iter().all(|p| plain(p))
+            || !plain(parts[3])
+            || !parts[4..].iter().all(|p| safe_component(p))
         {
             return Err(bad());
         }
@@ -306,7 +327,11 @@ fn parse_source(input: &str) -> Result<Source, String> {
 
 /// Folders holding a SKILL.md, at most a few levels down (repos often keep them in `skills/`).
 fn find_skills(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
-    if dir.join("SKILL.md").is_file() {
+    if dir
+        .join("SKILL.md")
+        .symlink_metadata()
+        .is_ok_and(|m| m.is_file())
+    {
         out.push(dir.to_path_buf());
         return;
     }
@@ -318,7 +343,7 @@ fn find_skills(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() && entry.file_name() != ".git" {
+        if entry.file_type().is_ok_and(|t| t.is_dir()) && entry.file_name() != ".git" {
             find_skills(&path, depth - 1, out);
         }
     }
@@ -331,17 +356,33 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
         if entry.file_name() == ".git" {
             continue;
         }
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(crate::plugins::MARKER)
+        {
+            return Err(std::io::Error::other("reserved AgentDeck ownership marker"));
+        }
         let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
             copy_dir(&entry.path(), &target)?;
-        } else {
+        } else if kind.is_file() {
             std::fs::copy(entry.path(), target)?;
+        } else {
+            return Err(std::io::Error::other(format!(
+                "unsupported skill entry: {}",
+                entry.path().display()
+            )));
         }
     }
     Ok(())
 }
 
-fn install_from(source: &Source, tmp: &Path, root: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn install_into(url: &str, roots: &[PathBuf]) -> Result<Vec<String>, String> {
+    let source = parse_source(url)?;
+    let checkout = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let tmp = checkout.path().join("repo");
     let repo_url = format!("https://github.com/{}/{}.git", source.owner, source.repo);
     let tmp_str = tmp.to_string_lossy();
     let mut args = vec!["clone", "--depth", "1"];
@@ -351,16 +392,26 @@ fn install_from(source: &Source, tmp: &Path, root: &Path) -> Result<Vec<String>,
     args.extend(["--", &repo_url, &tmp_str]);
     crate::agents::git(&std::env::temp_dir(), &args)?;
 
-    let base = source
-        .subdir
-        .as_ref()
-        .map_or(tmp.to_path_buf(), |s| tmp.join(s));
+    install_checkout(&source, &tmp, roots)
+}
+
+fn install_checkout(source: &Source, tmp: &Path, roots: &[PathBuf]) -> Result<Vec<String>, String> {
+    let mut base = tmp.to_owned();
+    if let Some(folder) = &source.subdir {
+        for segment in folder.split('/') {
+            base.push(segment);
+            if !base.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+                return Err(format!("not a repository directory: {folder}"));
+            }
+        }
+    }
     let mut found = Vec::new();
     find_skills(&base, 3, &mut found);
     if found.is_empty() {
         return Err("no SKILL.md found at that link".into());
     }
     let mut names = Vec::new();
+    let mut skills = Vec::new();
     for dir in found {
         // The repo root has the temp folder's name: use the repo's instead.
         let name = if dir == tmp {
@@ -371,17 +422,53 @@ fn install_from(source: &Source, tmp: &Path, root: &Path) -> Result<Vec<String>,
                 .to_string_lossy()
                 .into_owned()
         };
-        if !plain(&name) {
-            continue;
+        if !safe_component(&name) {
+            return Err(format!("unsupported skill name: {name}"));
         }
-        let target = root.join(&name);
-        if target.exists() {
-            std::fs::remove_dir_all(&target).map_err(|e| format!("cannot update {name}: {e}"))?;
+        if names.iter().any(|n: &String| n.eq_ignore_ascii_case(&name)) {
+            return Err(format!("duplicate skill name: {name}"));
         }
-        copy_dir(&dir, &target).map_err(|e| format!("cannot install {name}: {e}"))?;
+        skills.push(dir);
         names.push(name);
     }
+    for root in roots {
+        std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+        for (name, dir) in names.iter().zip(&skills) {
+            replace_skill(&root.join(name), |stage| copy_dir(dir, stage))
+                .map_err(|e| format!("cannot install {name} in {}: {e}", root.display()))?;
+        }
+    }
     Ok(names)
+}
+
+/// Stage the whole copy on the destination volume before moving an existing installation.
+pub(crate) fn replace_skill(target: &Path, populate: impl FnOnce(&Path) -> std::io::Result<()>) -> std::io::Result<()> {
+    let root = target.parent().ok_or_else(|| std::io::Error::other("missing skill root"))?;
+    std::fs::create_dir_all(root)?;
+    let stage = tempfile::tempdir_in(root)?;
+    let new = stage.path().join("new");
+    populate(&new)?;
+    let backup = stage.path().join("previous");
+    let replacing = match target.symlink_metadata() {
+        Ok(meta) if meta.is_dir() => {
+            std::fs::rename(target, &backup)?;
+            true
+        }
+        Ok(_) => return Err(std::io::Error::other("destination is not a directory")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    if let Err(e) = std::fs::rename(new, target) {
+        if replacing && let Err(restore) = std::fs::rename(&backup, target) {
+            let _ = stage.keep();
+            return Err(std::io::Error::other(format!(
+                "{e}; previous installation kept at {}: {restore}",
+                backup.display()
+            )));
+        }
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Shallow-clones the repo and copies every skill found into the agent's folder for `scope`
@@ -392,16 +479,12 @@ pub fn skills_install(
     url: String,
     scope: String,
 ) -> Result<Vec<String>, String> {
-    let source = parse_source(&url)?;
     let root = skill_roots(agent, Path::new(&cwd))?
         .into_iter()
         .find(|(s, _)| *s == scope)
         .map(|(_, root)| root)
         .ok_or_else(|| format!("unknown skill scope: {scope}"))?;
-    let tmp = std::env::temp_dir().join(format!("agentdeck-skill-{}", uuid::Uuid::new_v4()));
-    let result = install_from(&source, &tmp, &root);
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
+    install_into(&url, &[root])
 }
 
 /// Saves a pasted image (raw request body) to the temp folder; returns its path for the agent.
@@ -439,6 +522,38 @@ mod tests {
         assert!(parse_source("--upload-pack=x/r").is_err());
         assert!(parse_source("o/r/tree/--branch").is_err());
         assert!(parse_source("nope").is_err());
+    }
+
+    #[test]
+    fn imports_one_checkout_into_multiple_roots_and_preserves_previous_copy_on_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::write(repo.join("SKILL.md"), "v1").unwrap();
+        let roots = [temp.path().join("one"), temp.path().join("two")];
+        let source = parse_source("owner/example").unwrap();
+        assert_eq!(
+            install_checkout(&source, &repo, &roots).unwrap(),
+            ["example"]
+        );
+        std::fs::write(repo.join("SKILL.md"), "v2").unwrap();
+        std::fs::write(repo.join(crate::plugins::MARKER), "{}").unwrap();
+        assert!(install_checkout(&source, &repo, &roots).is_err());
+        for root in &roots {
+            assert_eq!(
+                std::fs::read_to_string(root.join("example/SKILL.md")).unwrap(),
+                "v1"
+            );
+            assert_eq!(std::fs::read_dir(root).unwrap().count(), 1);
+        }
+        std::fs::remove_file(repo.join(crate::plugins::MARKER)).unwrap();
+        install_checkout(&source, &repo, &roots).unwrap();
+        for root in &roots {
+            assert_eq!(
+                std::fs::read_to_string(root.join("example/SKILL.md")).unwrap(),
+                "v2"
+            );
+        }
     }
 
     #[test]

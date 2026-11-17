@@ -87,6 +87,11 @@ fn mic_thread(commands: Receiver<Command>) {
                 if broken.swap(false, Ordering::SeqCst) {
                     stream = None; // device lost or reset: reopen the current default one
                 }
+                if let Ok(mut samples) = buffer.lock() {
+                    samples.clear();
+                }
+                seen = 0;
+                recording.store(true, Ordering::SeqCst);
                 if stream.is_none() {
                     // Windows often refuses the mic for a moment right after another app released it: retry once.
                     let opened = open_stream(&buffer, &recording, &broken).or_else(|_| {
@@ -96,16 +101,12 @@ fn mic_thread(commands: Receiver<Command>) {
                     match opened {
                         Ok(opened) => stream = Some(opened),
                         Err(e) => {
+                            recording.store(false, Ordering::SeqCst);
                             let _ = reply.send(Err(e));
                             continue;
                         }
                     }
                 }
-                if let Ok(mut samples) = buffer.lock() {
-                    samples.clear();
-                }
-                seen = 0;
-                recording.store(true, Ordering::SeqCst);
                 on_level = Some(level);
                 let _ = reply.send(Ok(stream.as_ref().map_or(0, |(_, rate)| *rate)));
             }
@@ -120,8 +121,10 @@ fn mic_thread(commands: Receiver<Command>) {
             Err(RecvTimeoutError::Timeout) => match &on_level {
                 Some(level) => {
                     if let Ok(samples) = buffer.lock() {
-                        level(rms(&samples[seen.min(samples.len())..]));
+                        let meter = rms(&samples[seen.min(samples.len())..]);
                         seen = samples.len();
+                        drop(samples);
+                        level(meter);
                     }
                 }
                 None => stream = None, // idle long enough: release the mic
@@ -206,6 +209,13 @@ where
                 return;
             }
             if let Ok(mut out) = buffer.lock() {
+                if !recording.load(Ordering::Relaxed) {
+                    return;
+                }
+                if channels == 1 {
+                    out.extend(data.iter().copied().map(f32::from_sample));
+                    return;
+                }
                 out.extend(data.chunks(channels).map(|frame| {
                     frame.iter().map(|&s| f32::from_sample(s)).sum::<f32>() / frame.len() as f32
                 }));
@@ -234,6 +244,9 @@ pub fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
         return input.to_vec();
     }
     let out_len = (input.len() as u64 * u64::from(to) / u64::from(from)) as usize;
+    if to > 0 && from.is_multiple_of(to) {
+        return input.iter().step_by((from / to) as usize).take(out_len).copied().collect();
+    }
     let step = f64::from(from) / f64::from(to);
     (0..out_len)
         .map(|i| {

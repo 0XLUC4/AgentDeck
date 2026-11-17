@@ -38,18 +38,22 @@ impl RingBuffer {
     }
 
     pub fn push(&mut self, data: &str) {
-        self.chunks.push_back(data.to_owned());
-        self.size += data.len();
+        if data.is_empty() {
+            return;
+        }
+        if data.len() >= self.cap {
+            self.clear();
+        }
+        let kept = tail_of(data, self.cap);
+        if kept.is_empty() {
+            return;
+        }
+        self.chunks.push_back(kept.to_owned());
+        self.size += kept.len();
         while self.size > self.cap && self.chunks.len() > 1 {
             if let Some(old) = self.chunks.pop_front() {
                 self.size -= old.len();
             }
-        }
-        if self.size > self.cap {
-            // A single chunk larger than cap: keep its tail.
-            let kept = tail_of(&self.text(), self.cap).to_owned();
-            self.size = kept.len();
-            self.chunks = VecDeque::from([kept]);
         }
     }
 
@@ -65,8 +69,15 @@ impl RingBuffer {
             from -= 1;
             length += self.chunks[from].len();
         }
-        let joined: String = self.chunks.range(from..).map(String::as_str).collect();
-        tail_of(&joined, n).to_owned()
+        let mut chunks = self.chunks.range(from..);
+        let mut result = String::with_capacity(n.min(length));
+        if let Some(first) = chunks.next() {
+            result.push_str(tail_of(first, first.len() - length.saturating_sub(n)));
+            for chunk in chunks {
+                result.push_str(chunk);
+            }
+        }
+        result
     }
 
     pub fn clear(&mut self) {
@@ -99,6 +110,20 @@ mod tests {
         assert_eq!(buf.text(), "def");
         buf.push("g");
         assert_eq!(buf.text(), "g");
+    }
+
+    #[test]
+    fn empty_chunks_and_zero_capacity_do_not_accumulate() {
+        let mut buf = RingBuffer::new(0);
+        for data in ["", "hello", ""] {
+            buf.push(data);
+        }
+        assert!(buf.chunks.is_empty());
+        let mut buf = RingBuffer::new(5);
+        buf.push("ab");
+        buf.push("\u{e9}12");
+        assert_eq!(buf.tail(3), "12");
+        assert_eq!(buf.tail(0), "");
     }
 
     #[test]

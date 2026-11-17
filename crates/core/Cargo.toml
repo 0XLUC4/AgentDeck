@@ -17,6 +17,7 @@ keyring = { version = "4.2.0", default-features = false, features = ["windows-na
 chrono = "0.4.45"
 ruzstd = "0.9.1"
 dirs = "6"
+tempfile = "3"
 # Shortcut string parsing/validation only ("Ctrl+Shift+Space"); registration lives in the app.
 global-hotkey = "0.8.0"
 regex = "1"

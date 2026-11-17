@@ -26,7 +26,9 @@ pub(super) fn init(deck: &Entity<Deck>, cx: &mut App) {
         }
     };
     // Another app may own the shortcut: keep the app usable, voice_start still works.
-    let current = match voice::voice_get_config(&backend).map(|v| v.config.shortcut) {
+    let shortcut = voice::config_snapshot(&backend).map(|v| v.shortcut);
+    let wanted = shortcut.as_ref().ok().and_then(|v| v.parse::<Shortcut>().ok());
+    let current = match shortcut {
         Ok(text) => match text.parse::<Shortcut>() {
             Ok(key) => match manager.register(key) {
                 Ok(()) => Some(key),
@@ -45,7 +47,6 @@ pub(super) fn init(deck: &Entity<Deck>, cx: &mut App) {
             None
         }
     };
-    let wanted = voice::voice_get_config(&backend).ok().and_then(|v| v.config.shortcut.parse::<Shortcut>().ok());
     cx.set_global(Hotkey { manager, current });
     // Usually another app (the old AgentDeck) holds the key: say so (a release build has no console)
     // and keep retrying, so voice works as soon as that app lets it go.

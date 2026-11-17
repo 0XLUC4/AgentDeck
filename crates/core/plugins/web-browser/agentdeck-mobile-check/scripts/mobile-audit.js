@@ -8,7 +8,11 @@
     el.tagName.toLowerCase() +
     (el.id ? '#' + el.id : '') +
     (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '');
-  const box = (el) => el.getBoundingClientRect();
+  const bounds = new WeakMap();
+  const box = (el) => {
+    if (!bounds.has(el)) bounds.set(el, el.getBoundingClientRect());
+    return bounds.get(el);
+  };
   const shown = (el) => {
     const r = box(el);
     const s = getComputedStyle(el);
@@ -20,7 +24,9 @@
 
   // Overflow: the deepest elements sticking out (their parents are listed only if they stick out by themselves).
   const out = all.filter((el) => box(el).right > width + 1);
-  const deepest = out.filter((el) => !out.some((other) => other !== el && el.contains(other)));
+  // querySelectorAll returns document order: any overflowing descendant immediately
+  // follows its ancestor before the traversal reaches the next sibling subtree.
+  const deepest = out.filter((el, i) => i + 1 === out.length || !el.contains(out[i + 1]));
 
   // Tap targets: interactive elements, ignoring links inside running text.
   const targets = [...document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [onclick], [tabindex]:not([tabindex="-1"])')]

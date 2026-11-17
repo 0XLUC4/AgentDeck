@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "agentdeck"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "agentdeck-core",
  "alacritty_terminal",
@@ -146,6 +146,7 @@ dependencies = [
  "smol",
  "stl_io",
  "tauri-winrt-notification",
+ "tempfile",
  "tobj",
  "tray-icon",
  "unicode-normalization",
@@ -158,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "agentdeck-core"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "chrono",
  "cpal",
@@ -171,6 +172,7 @@ dependencies = [
  "ruzstd",
  "serde",
  "serde_json",
+ "tempfile",
  "tiny_http",
  "toml_edit 0.25.19+spec-1.1.0",
  "unicode-normalization",

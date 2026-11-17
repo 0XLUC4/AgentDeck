@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::agents::AgentKind;
 
 /// Ownership file inside each skill folder AgentDeck copied.
-const MARKER: &str = ".agentdeck-plugin.json";
+pub(crate) const MARKER: &str = ".agentdeck-plugin.json";
 /// Prefix of every bundled skill name (and folder).
 const PREFIX: &str = "agentdeck-";
 
@@ -33,6 +33,9 @@ pub struct BundledSkill {
 impl BundledSkill {
     /// Version of the skill as shipped, compared with [`disk_digest`] of an installed copy.
     fn digest(&self) -> String {
+        if self.files.is_empty() {
+            return hash(self.text);
+        }
         digest(std::iter::once(("SKILL.md".to_owned(), self.text.to_owned())).chain(self.files.iter().map(|(p, t)| ((*p).to_owned(), (*t).to_owned()))).collect())
     }
 }
@@ -62,6 +65,15 @@ macro_rules! skill {
 }
 
 pub const CATALOG: &[Plugin] = &[
+    Plugin {
+        id: "speech-qa",
+        name: "Speech recognition testing",
+        description: "Compare dictation builds with the same recordings, word error rate and latency percentiles.",
+        category: "Quality",
+        default_on: false,
+        replaces: &[],
+        skills: &[skill!("speech-qa", "agentdeck-speech-qa", "scripts/score.mjs")],
+    },
     Plugin {
         id: "web-browser",
         name: "Web browser",
@@ -263,6 +275,9 @@ fn roots(home: &Path) -> Vec<PathBuf> {
 
 /// The marker of an AgentDeck-owned folder: (plugin id, hash written).
 fn marker(dir: &Path) -> Option<(String, String)> {
+    if !dir.symlink_metadata().ok()?.is_dir() || !dir.join(MARKER).symlink_metadata().ok()?.is_file() {
+        return None;
+    }
     let value: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(MARKER)).ok()?).ok()?;
     Some((value["plugin"].as_str()?.to_owned(), value["hash"].as_str()?.to_owned()))
 }
@@ -282,10 +297,13 @@ fn digest(mut files: Vec<(String, String)>) -> String {
 /// [`digest`] of the files in an installed skill folder (marker aside); None when one cannot be read.
 fn disk_digest(dir: &Path) -> Option<String> {
     fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) -> Option<()> {
-        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        for entry in std::fs::read_dir(dir).ok()? {
+            let entry = entry.ok()?;
             let name = entry.file_name().to_string_lossy().into_owned();
             let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
-            if entry.file_type().ok()?.is_dir() {
+            let kind = entry.file_type().ok()?;
+            if !kind.is_file() && !kind.is_dir() { return None; }
+            if kind.is_dir() {
                 walk(&entry.path(), &path, out)?;
             } else if path != MARKER {
                 out.push((path, std::fs::read_to_string(entry.path()).ok()?));
@@ -306,20 +324,19 @@ fn untouched(dir: &Path, written: &str) -> bool {
 /// Writes the skill afresh: files dropped from a newer version must not linger (only called on a
 /// new folder or an untouched copy).
 fn write(dir: &Path, plugin: &str, skill: &BundledSkill) -> std::io::Result<()> {
-    if dir.exists() {
-        std::fs::remove_dir_all(dir)?;
-    }
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join("SKILL.md"), skill.text)?;
-    for (path, text) in skill.files {
-        let file = dir.join(path);
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
+    crate::skills::replace_skill(dir, |dir| {
+        std::fs::create_dir_all(dir)?;
+        std::fs::write(dir.join("SKILL.md"), skill.text)?;
+        for (path, text) in skill.files {
+            let file = dir.join(path);
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(file, text)?;
         }
-        std::fs::write(file, text)?;
-    }
-    let marker = json!({ "plugin": plugin, "hash": skill.digest() });
-    std::fs::write(dir.join(MARKER), marker.to_string())
+        let marker = json!({ "plugin": plugin, "hash": skill.digest() });
+        std::fs::write(dir.join(MARKER), marker.to_string())
+    })
 }
 
 /// Brings every root in line with the plugins `enabled` says are on. Returns notes for the user
@@ -375,24 +392,20 @@ fn sync_roots(roots: &[PathBuf], enabled: &dyn Fn(&Plugin) -> bool) -> Vec<Strin
 /// Installs the skills of a GitHub link for every installed agent (user scope). Returns the skill names.
 pub fn install_everywhere(url: &str) -> Result<Vec<String>, String> {
     let home = home().ok_or("home folder not found")?;
-    let cwd = home.to_string_lossy().into_owned();
-    let agents: Vec<AgentKind> = [(AgentKind::Claude, ".claude"), (AgentKind::Codex, ".codex"), (AgentKind::Gemini, ".gemini")]
+    let roots = import_roots(&home);
+    if roots.is_empty() {
+        return Err("no agent configuration folder found".into());
+    }
+    crate::skills::install_into(url, &roots)
+}
+
+fn import_roots(home: &Path) -> Vec<PathBuf> {
+    [AgentKind::Claude, AgentKind::Codex, AgentKind::Gemini, AgentKind::Grok, AgentKind::OpenCode]
         .into_iter()
-        .filter(|(_, dir)| home.join(dir).is_dir())
-        .map(|(agent, _)| agent)
-        .collect();
-    if agents.is_empty() {
-        return Err("no agent installed (no ~/.claude, ~/.codex or ~/.gemini folder)".into());
-    }
-    let mut names = Vec::new();
-    for agent in agents {
-        for name in crate::skills::skills_install(agent, cwd.clone(), url.to_owned(), "user".into())? {
-            if !names.contains(&name) {
-                names.push(name);
-            }
-        }
-    }
-    Ok(names)
+        .filter_map(|agent| crate::skills::user_dir(agent, home).ok())
+        .filter(|dir| dir.is_dir())
+        .map(|dir| dir.join("skills"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -509,6 +522,10 @@ mod tests {
         std::fs::create_dir_all(home.join(".gemini")).unwrap();
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         assert_eq!(roots(&home), [home.join(".claude").join("skills"), home.join(".agents").join("skills")]);
+        std::fs::create_dir_all(home.join(".grok")).unwrap();
+        std::fs::create_dir_all(home.join(".config/opencode")).unwrap();
+        assert_eq!(import_roots(&home), [".claude", ".gemini", ".grok", ".config/opencode"]
+            .map(|path| home.join(path).join("skills")));
         assert_eq!(hash("a\r\nb"), hash("a\nb"));
         let _ = std::fs::remove_dir_all(&home);
     }

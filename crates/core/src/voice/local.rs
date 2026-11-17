@@ -202,8 +202,16 @@ fn run(
     // Hallucination filter judges the clip as recorded; whisper only sees the speech part.
     let recorded_secs = samples.len().max(MIN_SAMPLES) as f32 / 16_000.0;
     // whisper.cpp silently returns nothing for clips under 1 s: pad with silence.
-    let mut samples = speech(samples).to_vec();
-    samples.resize(samples.len().max(MIN_SAMPLES), 0.0);
+    let trimmed = speech(samples);
+    let mut padded;
+    let samples = if trimmed.len() < MIN_SAMPLES {
+        padded = Vec::with_capacity(MIN_SAMPLES);
+        padded.extend_from_slice(trimmed);
+        padded.resize(MIN_SAMPLES, 0.0);
+        padded.as_slice()
+    } else {
+        trimmed
+    };
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     // Hyperthreads slow whisper.cpp down: use about the physical cores, capped at 8.
@@ -211,14 +219,17 @@ fn run(
     params.set_n_threads(threads.clamp(2, 8) as i32);
     params.set_language(Some(language));
     // Full 30 s encoder context on purpose: stock models garble or repeat words with a shorter one.
-    params.set_single_segment(true);
+    // On long dictations Whisper needs timestamps to find a word boundary between its
+    // 30-second windows. Fixed cuts can lose the start of the next sentence.
+    let short_clip = samples.len() <= 30 * 16_000;
+    params.set_single_segment(short_clip);
     // No temperature fallback: retries can re-decode a clip up to 5 times.
     params.set_temperature_inc(0.0);
     if partial {
         // SAFETY: a plain fn reading a static; no user data pointer is involved.
         unsafe { params.set_abort_callback(Some(partial_cancelled)) };
     }
-    params.set_no_timestamps(true);
+    params.set_no_timestamps(short_clip);
     params.set_no_context(true);
     params.set_suppress_blank(true);
     params.set_suppress_nst(true);
@@ -227,16 +238,20 @@ fn run(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     state
-        .full(params, &samples)
+        .full(params, samples)
         .map_err(|e| format!("transcription failed: {e}"))?;
     if let Ok(mut last) = LAST_RUN.lock() {
         *last = Some(Instant::now());
     }
-    let text: String = state
-        .as_iter()
-        .filter_map(|segment| segment.to_str_lossy().ok().map(|s| s.into_owned()))
-        .collect();
-    Ok(clean(&text, recorded_secs))
+    let mut text = String::new();
+    let mut likely_speech = false;
+    for segment in state.as_iter() {
+        if let Ok(words) = segment.to_str_lossy() {
+            likely_speech |= segment.no_speech_probability() < 0.5;
+            text.push_str(&words);
+        }
+    }
+    Ok(clean(&text, recorded_secs, likely_speech))
 }
 
 /// Opts the process out of Windows power throttling (EcoQoS): otherwise Windows may run
@@ -290,8 +305,8 @@ pub fn speech(samples: &[f32]) -> &[f32] {
         return samples;
     }
     let mut sorted = rms.clone();
-    sorted.sort_by(f32::total_cmp);
-    let noise = sorted[sorted.len() / 10];
+    let percentile = sorted.len() / 10;
+    let noise = *sorted.select_nth_unstable_by(percentile, f32::total_cmp).1;
     let threshold = (noise * 3.0).max(0.003);
     let (Some(first), Some(last)) = (
         rms.iter().position(|&r| r > threshold),
@@ -309,29 +324,37 @@ const MIN_SAMPLES: usize = 19_200;
 
 /// Drops non-speech tags ("[Musique]", "(rires)") and the captions/politeness
 /// lines Whisper invents on silence; trims the rest.
-pub fn clean(text: &str, secs: f32) -> String {
+fn clean(text: &str, secs: f32, likely_speech: bool) -> String {
     let mut kept = String::with_capacity(text.len());
-    let mut closing = None;
-    for c in text.chars() {
-        match (closing, c) {
-            (None, '[') => closing = Some(']'),
-            (None, '(') => closing = Some(')'),
-            (Some(end), c) if c == end => closing = None,
-            (None, c) => kept.push(c),
-            _ => {}
+    let mut rest = text;
+    while let Some(start) = rest.find(['[', '(']) {
+        let (before, tag) = rest.split_at(start);
+        kept.push_str(before);
+        let close = if tag.starts_with('[') { ']' } else { ')' };
+        let Some(end) = tag.find(close) else {
+            rest = tag;
+            break;
+        };
+        let label = tag[1..end].trim().to_lowercase();
+        if matches!(label.as_str(), "musique" | "music" | "rires" | "laughter" | "inaudible" | "blank_audio" | "silence" | "applaudissements" | "applause") {
+            kept.push(' ');
+        } else {
+            kept.push_str(&tag[..=end]);
         }
+        rest = &tag[end + 1..];
     }
+    kept.push_str(rest);
     let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
     let normalized = kept
         .to_lowercase()
         .trim_matches(|c: char| !c.is_alphanumeric())
         .to_string();
     // French patterns on purpose: Whisper's typical silence hallucinations in French ("subtitles by", "subscribe").
-    let caption = ["sous-titr", "amara.org", "abonnez-vous"]
+    let caption = ["sous-titres r\u{e9}alis\u{e9}s par", "sous-titrage st' ", "sous-titres par"]
         .iter()
-        .any(|pattern| normalized.contains(pattern));
+        .any(|pattern| normalized.starts_with(pattern));
     // Short politeness fillers ("thanks", "goodbye") in French and English.
-    let filler = secs < 2.0
+    let filler = !likely_speech && secs < 2.0
         && [
             "merci",
             "merci beaucoup",
@@ -355,12 +378,15 @@ mod tests {
     #[test]
     fn clean_keeps_speech() {
         assert_eq!(
-            clean("  Bonjour, lance les tests.  ", 3.0),
+            clean("  Bonjour, lance les tests.  ", 3.0, true),
             "Bonjour, lance les tests."
         );
-        assert_eq!(clean("Merci.", 3.0), "Merci.");
+        assert_eq!(clean("Merci.", 0.8, true), "Merci.");
+        assert_eq!(clean("Merci.", 3.0, true), "Merci.");
+        assert_eq!(clean("Ajoute les sous-titres (en anglais).", 3.0, true), "Ajoute les sous-titres (en anglais).");
+        assert_eq!(clean("Compare a[0] et b[1].", 3.0, true), "Compare a[0] et b[1].");
         assert_eq!(
-            clean("Ouvre le fichier [inaudible] main.rs", 3.0),
+            clean("Ouvre le fichier [inaudible] main.rs", 3.0, true),
             "Ouvre le fichier main.rs"
         );
     }
@@ -376,10 +402,10 @@ mod tests {
             "...",
             "",
         ] {
-            assert_eq!(clean(text, 5.0), "", "{text}");
+            assert_eq!(clean(text, 5.0, false), "", "{text}");
         }
-        assert_eq!(clean(" Merci. ", 1.0), "");
-        assert_eq!(clean("Thank you.", 0.8), "");
+        assert_eq!(clean(" Merci. ", 1.0, false), "");
+        assert_eq!(clean("Thank you.", 0.8, false), "");
     }
 
     #[test]
@@ -414,7 +440,8 @@ mod tests {
             .ok()
             .and_then(|m| WhisperModel::parse(&m))
             .unwrap_or(WhisperModel::Base);
-        let dir = std::env::temp_dir().join("agentdeck-models");
+        let dir = std::env::var_os("AGENTDECK_TEST_MODELS").map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("agentdeck-models"));
         let started = std::time::Instant::now();
         let path = ensure_model(&dir, model, |_, _| {}).expect("download");
         println!("model ready {:?} in {:?}", path, started.elapsed());

@@ -76,9 +76,10 @@ fn send_answers(request: &PermissionRequest, picked: &[Vec<usize>], cx: &mut App
 /// Adds an AgentDeck rule for this request in the pane's folder (Settings > Agents), then allows it.
 pub fn auto_allow_here(request: &PermissionRequest, cx: &mut App) {
     let Some(deck) = runtime::deck(cx) else { return };
-    let Some(cwd) = deck.read(cx).state.panes.get(&request.pane_id).map(|p| p.cwd.clone()) else {
+    let cwd = request.cwd.clone();
+    if !std::path::Path::new(&cwd).is_absolute() {
         return;
-    };
+    }
     let Some(rule) = rule_for(&request.tool_name, &request.detail) else { return };
     deck.update(cx, |d, cx| {
         let known = d.settings.auto_allow.iter().any(|r| r.rule == rule && r.folder == cwd);
@@ -264,7 +265,7 @@ impl Render for PermissionCard {
                 .into_any_element()
         } else {
             let suggestions = req.suggestions.join(", ");
-            let auto_rule = rule_for(&req.tool_name, &req.detail);
+            let auto_rule = rule_for(&req.tool_name, &req.detail).filter(|_| std::path::Path::new(&req.cwd).is_absolute());
             let r = req.clone();
             div()
                 .flex()
@@ -289,7 +290,7 @@ impl Render for PermissionCard {
                 .when_some(auto_rule, |row, rule| {
                     let r = req.clone();
                     let tip: SharedString =
-                        format!("AgentDeck will answer {rule} itself in this folder from now on (Settings > Agents)").into();
+                        format!("AgentDeck will answer {rule} itself in {} from now on (Settings > Agents)", req.cwd).into();
                     row.child(
                         secondary(button("auto-allow", "Auto-allow here"))
                             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))

@@ -8,7 +8,7 @@ use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::logic::deck::{Pane, PaneSpec, activity_key, new_id};
 use agentdeck_core::logic::queue::{QUEUE_AGENTS, ready_for_next};
 use agentdeck_core::logic::orchestrator::{
-    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, assert_can_type, named_files, resolve_inside, scope_of, worker_tab,
+    DIFF_CAP_CHARS, ORCHESTRATOR_TITLE, READ_TOOLS, assert_can_type, named_files, resolve_inside, scope_of, worker_tab,
     target,
 };
 use agentdeck_core::mcp;
@@ -21,8 +21,6 @@ use serde_json::{Value, json};
 use super::runtime;
 use crate::state::{Deck, DeckEvent};
 
-/// Answered synchronously by `state::Deck`.
-const READ_TOOLS: [&str; 3] = ["get_status", "get_result", "wait_for"];
 /// list_agents names at most this many changed files per agent (the count is always given).
 const LISTED_FILES: usize = 50;
 /// Raw terminal bytes read_output cleans and tails (the model asks for at most 200 lines).
@@ -123,19 +121,23 @@ async fn run(deck: &Entity<Deck>, orchestrator_id: &str, tool: &str, args: &Valu
                 let scope = scope_of(&d.state, orchestrator_id)?;
                 Ok(scope.panes.iter().map(|(p, t)| ((*p).clone(), t.name.clone())).collect())
             })?;
+            let include_changes = args["includeChanges"] != false;
             blocking(cx, move || {
-                let panes: Vec<Pane> = agents.iter().map(|(p, _)| p.clone()).collect();
-                let by_dir = folders(&panes);
+                let by_dir = if include_changes { folders(agents.iter().map(|(p, _)| p)) } else { BTreeMap::new() };
                 let list = agents.iter().map(|(p, session)| {
                     // A worktree agent works in its own folder, not the pane's launch cwd.
                     let dir = pane_dir(p);
                     let files = by_dir.get(&dir).map_or(&[][..], |(_, f)| f.as_slice());
-                    json!({
+                    let mut entry = json!({
                         "paneId": p.id, "agent": p.agent, "title": p.title,
                         "status": activity_key(p).as_str(), "lastAction": p.last_action,
                         "session": session, "cwd": dir, "worktree": p.worktree,
-                        "changedFiles": &files[..files.len().min(LISTED_FILES)], "changedCount": files.len(),
-                    })
+                    });
+                    if include_changes {
+                        entry["changedFiles"] = json!(&files[..files.len().min(LISTED_FILES)]);
+                        entry["changedCount"] = json!(files.len());
+                    }
+                    entry
                 });
                 Ok(Value::Array(list.collect()))
             })
@@ -302,9 +304,9 @@ fn find_conflicts(panes: &[Pane]) -> Vec<Value> {
 
 /// Blocking: the live agents of `panes` by git folder, with that folder's uncommitted files
 /// (git status is cached for a second, so back-to-back tools share one run).
-fn folders(panes: &[Pane]) -> BTreeMap<String, (Vec<&Pane>, Vec<String>)> {
+fn folders<'a>(panes: impl IntoIterator<Item = &'a Pane>) -> BTreeMap<String, (Vec<&'a Pane>, Vec<String>)> {
     let mut by_dir: BTreeMap<String, (Vec<&Pane>, Vec<String>)> = BTreeMap::new();
-    for pane in panes.iter().filter(|p| !p.exited) {
+    for pane in panes.into_iter().filter(|p| !p.exited) {
         by_dir.entry(pane_dir(pane)).or_default().0.push(pane);
     }
     for (dir, (_, files)) in &mut by_dir {

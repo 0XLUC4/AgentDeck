@@ -289,7 +289,7 @@ impl PluginsView {
             .child(section_title("From GitHub", p))
             .child(div().text_xs().text_color(hsla(p.subtle)).whitespace_normal().child(
                 "Any repository or folder with SKILL.md files, installed for every agent found on this computer \
-                 (Claude Code, Codex, Gemini). See or remove them in each agent's tab.",
+                 (Claude Code, Codex, Gemini, Grok, OpenCode). See or remove them in each agent's tab.",
             ))
             .child(
                 div().flex().child(

@@ -8,16 +8,19 @@ const SHELL_TOOLS: [&str; 2] = ["Bash", "PowerShell"];
 /// Chaining, substitution, redirection, newlines: anything that could run more than the approved command.
 const SHELL_META: &[char] = &[';', '&', '|', '`', '$', '<', '>', '\r', '\n', '(', ')', '{', '}'];
 
-fn normalize(path: &str) -> String {
-    path.replace('\\', "/").trim_end_matches('/').to_lowercase()
-}
-
 pub fn inside_folder(cwd: &str, folder: &str) -> bool {
     if folder.is_empty() {
         return true;
     }
-    let (base, path) = (normalize(folder), normalize(cwd));
-    path == base || path.starts_with(&format!("{base}/"))
+    let cwd = std::path::Path::new(cwd);
+    let folder = std::path::Path::new(folder);
+    if !cwd.is_absolute() || !folder.is_absolute() {
+        return false;
+    }
+    match (cwd.canonicalize(), folder.canonicalize()) {
+        (Ok(path), Ok(base)) => path.starts_with(base),
+        _ => false,
+    }
 }
 
 /// Splits "Bash(pnpm test)" into tool + content; a bare "Read" has no content. None when malformed.
@@ -69,7 +72,7 @@ pub fn auto_allowed<'a>(
 ) -> Option<&'a AutoAllowRule> {
     rules
         .iter()
-        .find(|r| inside_folder(cwd, &r.folder) && rule_matches(&r.rule, tool_name, detail))
+        .find(|r| rule_matches(&r.rule, tool_name, detail) && inside_folder(cwd, &r.folder))
 }
 
 /// Rule the "Auto-allow here" button adds: the exact shell command, or the tool name. None if not allowed.
@@ -107,12 +110,18 @@ mod tests {
 
     #[test]
     fn folders_and_rule_for() {
-        let rules = vec![AutoAllowRule {
-            rule: "Read".into(),
-            folder: "D:\\p".into(),
-        }];
-        assert!(auto_allowed("Read", "", "d:/p/sub", &rules).is_some());
-        assert!(auto_allowed("Read", "", "D:\\px", &rules).is_none());
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("project");
+        let child = folder.join("src");
+        let sibling = temp.path().join("project-other");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::create_dir(&sibling).unwrap();
+        let rules = vec![AutoAllowRule { rule: "Read".into(), folder: folder.display().to_string() }];
+        assert!(auto_allowed("Read", "", child.to_str().unwrap(), &rules).is_some());
+        for outside in [sibling, folder.join("../project-other"), folder.join("missing")] {
+            assert!(auto_allowed("Read", "", outside.to_str().unwrap(), &rules).is_none());
+        }
+        assert!(auto_allowed("Read", "", "", &rules).is_none());
         assert_eq!(rule_for("Bash", "npm test").as_deref(), Some("Bash(npm test)"));
         assert_eq!(rule_for("Bash", "a; b"), None);
         assert_eq!(rule_for("Edit", "x").as_deref(), Some("Edit"));

@@ -95,7 +95,7 @@ starts instantly and stays light on memory.
 
 ## Install
 
-Download `agentdeck.exe` from the [releases page](https://github.com/0XLUC4/AgentDeck/releases/latest) and start it.
+Download `agentdeck.exe` for Windows, or choose `agentdeck-vulkan.exe` for GPU-accelerated local dictation on a PC with a Vulkan-capable graphics driver. Both are available on the [releases page](https://github.com/0XLUC4/AgentDeck/releases/latest).
 It is a single portable exe, no installer and no admin rights needed. Windows SmartScreen may warn the first time
 because the exe isn't code-signed yet: click "More info" then "Run anyway".
 
@@ -137,6 +137,14 @@ which transcribes about 8x faster than an MSVC build.
 ```sh
 cargo build --release -p agentdeck   # binary in target/release/agentdeck.exe
 cargo test --workspace
+```
+
+For GPU-accelerated local dictation on Windows, build with the Vulkan SDK on the build machine
+and a Vulkan-capable graphics driver on the machine running AgentDeck. The model and language
+are still selected in Settings > Voice. The GPU build checks for a matching Vulkan release asset when updating.
+
+```sh
+cargo build --release -p agentdeck --features gpu --locked
 ```
 
 - `crates/core`: backend (PTY, hooks server, permissions, git, history, MCP, voice, usage, persistence)

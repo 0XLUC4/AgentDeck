@@ -98,6 +98,9 @@ impl Voice {
 
     /// Moves `id` to the front of the recent list and saves it.
     fn touch(&mut self, id: &str, cx: &App) {
+        if self.recent.first().is_some_and(|first| first == id) {
+            return;
+        }
         self.recent.retain(|r| r != id);
         self.recent.insert(0, id.to_owned());
         self.recent.truncate(RECENT_MAX);
@@ -180,8 +183,8 @@ impl Voice {
             return;
         };
         self.touch(&pane_id, cx);
-        let submit = match agentdeck_core::voice::voice_get_config(&backend) {
-            Ok(view) => view.config.submit,
+        let submit = match agentdeck_core::voice::config_snapshot(&backend) {
+            Ok(config) => config.submit,
             Err(e) => {
                 self.deck.update(cx, |d, cx| d.toast(format!("Dictation not sent: {e}"), cx));
                 return;
