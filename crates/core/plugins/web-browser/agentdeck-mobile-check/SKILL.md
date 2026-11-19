@@ -1,6 +1,6 @@
 ---
 name: agentdeck-mobile-check
-description: Check a web page at phone width in the AgentDeck browser panel's mobile preview - measured overflow, tap targets (WCAG 2.2), input zoom, text size, viewport meta, 100vh and safe areas, menus, forms, slow network - with a ready audit script. Use for responsive or mobile work, a mobile app's web preview (Expo web, Capacitor, PWA), or when asked whether a page works on phones.
+description: Use to test responsive pages on phones in AgentDeck mobile preview. At phone width check overflow, small tap targets, input zoom, safe areas and mobile web apps (Expo, Capacitor, PWA).
 ---
 
 # Mobile check in the AgentDeck browser panel

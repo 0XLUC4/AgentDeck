@@ -1,6 +1,6 @@
 ---
 name: agentdeck-security
-description: Secure code and security review - trust boundaries, injection (SQL, shell, HTML/XSS, path, SSRF), auth, authorization (IDOR), sessions, secrets, uploads, supply chain and invented package names, fail-open errors, LLM and agent risks (prompt injection, excessive agency), scanners (semgrep, gitleaks, audit), with high-confidence findings only. Use when code handles user input, auth, payments, files, external APIs, personal data or an LLM, when adding a dependency, before a release, or when asked for a security review or hardening.
+description: Use for security review and hardening of user input, authentication, account access, authorization, payments, files, secrets, dependencies, external APIs and LLM trust boundaries. Check injection, SSRF, IDOR and supply chain risks.
 ---
 
 # Security

@@ -1,6 +1,6 @@
 ---
 name: agentdeck-engineering
-description: Senior-engineer discipline for writing, changing or reviewing code - understand before editing, the smallest complete change that fits the project, surgical diffs, no speculative code, then a self-review and fresh proof before saying done. Use on any feature, fix, refactor or code review, before the first edit and again before claiming the work is done, committed or ready; also when the user asks for simple, minimal, KISS, clean, production-grade or reviewed code, or complains about bloat.
+description: Use to implement or simplify a feature, fix or refactor. Keep edits minimal, preserve unrelated files, follow existing conventions and self-review before verifying production behavior.
 ---
 
 # Engineering discipline

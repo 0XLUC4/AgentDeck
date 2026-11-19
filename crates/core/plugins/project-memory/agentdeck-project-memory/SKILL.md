@@ -1,6 +1,6 @@
 ---
 name: agentdeck-project-memory
-description: Learn a project fast and keep its agent instructions file (AGENTS.md, CLAUDE.md or GEMINI.md) short, true and useful - exact build, test, lint and run commands, layout, conventions, gotchas found the hard way - so every agent starts right instead of rediscovering. Use at the start of work in an unfamiliar repository, when that file is missing, stale or bloated, after discovering a non-obvious command or trap, and when asked to onboard, document the project for agents or remember something about the project.
+description: Use to onboard agents to an unfamiliar repository or maintain AGENTS.md, CLAUDE.md or GEMINI.md with verified commands, conventions and project-specific traps.
 ---
 
 # Project memory

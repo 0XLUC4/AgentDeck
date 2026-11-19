@@ -1,6 +1,6 @@
 ---
 name: agentdeck-form-flow
-description: Test a user flow end to end in the AgentDeck browser panel - sign up, log in, checkout, create, edit, delete, upload, search, multi-step wizards - with a written plan, valid, invalid and edge-case input, keyboard and accessibility of errors, double submit, offline, network payload and stored data checks, and a pass/fail table. Use when a form, a multi-step flow or the API behind it changed, or when asked to test a flow, before saying it works.
+description: Use to test forms and multi-step user flows end to end in the AgentDeck browser after UI or API changes. Covers signup, login, checkout, validation, offline and double submit and stored data.
 ---
 
 # Flow test in the AgentDeck browser panel

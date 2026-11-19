@@ -20,9 +20,13 @@ function markdownFiles(dir) {
   });
 }
 
-/** Text without fenced code blocks and inline code (links and placeholders in code are examples). */
-function prose(text) {
-  return text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, (block) => block.replace(/[^\n]/g, "")).replace(/`[^`\n]*`/g, "");
+/** Remove fenced examples while retaining source line numbers. */
+function withoutFences(text) {
+  return text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, (block) => block.replace(/[^\n]/g, ""));
+}
+
+function withoutInlineCode(text) {
+  return text.replace(/`[^`\n]*`/g, "");
 }
 
 /** GitHub heading anchor: lower case, punctuation dropped, spaces to dashes. */
@@ -37,13 +41,13 @@ function slug(heading) {
 function anchors(text) {
   const found = new Set();
   const seen = new Map();
-  for (const [, title] of prose(text).matchAll(/^#{1,6}\s+(.+?)\s*#*\s*$/gm)) {
+  for (const [, title] of text.matchAll(/^#{1,6}\s+(.+?)\s*#*\s*$/gm)) {
     const base = slug(title);
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     found.add(count ? `${base}-${count}` : base);
   }
-  for (const [, id] of text.matchAll(/<a\s+(?:id|name)="([^"]+)"/g)) found.add(id);
+  for (const [, id] of withoutInlineCode(text).matchAll(/<a\s+(?:id|name)="([^"]+)"/g)) found.add(id);
   return found;
 }
 
@@ -51,7 +55,7 @@ const HTML_TAGS = new Set(["a", "b", "i", "br", "kbd", "sub", "sup", "details", 
 const VAGUE = /\b(TBD|TODO|FIXME|handle edge cases|add validation|update as needed|as appropriate|etc\.)/i;
 
 const files = markdownFiles(root);
-const texts = new Map(files.map((f) => [f, readFileSync(f, "utf8")]));
+const texts = new Map(files.map((f) => [f, withoutFences(readFileSync(f, "utf8"))]));
 const headings = new Map();
 const index = join(root, "README.md");
 const incoming = new Map(files.map((f) => [f, new Set()]));
@@ -62,7 +66,7 @@ const at = (file, line) => `${relative(root, file).replaceAll("\\", "/")}:${line
 if (!texts.has(index)) errors.push("README.md (the index) is missing");
 
 for (const [file, text] of texts) {
-  const lines = prose(text).split("\n");
+  const lines = withoutInlineCode(text).split("\n");
   lines.forEach((line, i) => {
     for (const [, target] of line.matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
       if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue; // http:, mailto:...
@@ -89,7 +93,8 @@ for (const [file, text] of texts) {
     for (const [placeholder, name] of line.matchAll(/<([a-z][a-z0-9 ,._/|-]*)>/gi)) {
       if (!HTML_TAGS.has(name.toLowerCase())) errors.push(`${at(file, i + 1)} placeholder left: ${placeholder}`);
     }
-    const vague = line.match(VAGUE);
+    const instruction = line.replace(/(\|\s*)todo(?=\s*\|)|\bstatus:\s*todo(?=\s*$)/gi, "");
+    const vague = instruction.match(VAGUE);
     if (vague) warnings.push(`${at(file, i + 1)} vague: "${vague[0]}", write the concrete thing`);
   });
 }

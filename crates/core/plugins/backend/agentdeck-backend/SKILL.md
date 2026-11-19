@@ -1,6 +1,6 @@
 ---
 name: agentdeck-backend
-description: Build backend and data code that holds under real traffic - exact API contracts, validation at the boundary, authorization per resource, idempotent writes, transactions, safe expand-and-contract database migrations, indexes for every query, no N+1, pagination, timeouts and retries, background jobs, structured errors and logs - checked with real requests and a migration run. Use when writing or changing an API endpoint, server action, database schema or migration, query, ORM model, queue job, webhook or integration with an external service.
+description: Use for API endpoints, server actions, database schema or ORM migrations, query design, queues and external integrations. Check authorization, transactions, retries and idempotent handling of duplicate webhook deliveries.
 ---
 
 # Backend and data

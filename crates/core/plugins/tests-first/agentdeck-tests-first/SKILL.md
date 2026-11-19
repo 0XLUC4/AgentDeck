@@ -1,6 +1,6 @@
 ---
 name: agentdeck-tests-first
-description: Test-driven changes - write one failing test for the behaviour or the bug, watch it fail for the right reason, make it pass with the smallest change, refactor while green, keep the suite fast and deterministic. Use when fixing a bug, adding or changing logic, or when asked for tests or TDD, before writing the implementation code.
+description: Use TDD before implementing a bug fix or behavior change, or when asked to write tests. Start with a failing regression test.
 ---
 
 # Tests first

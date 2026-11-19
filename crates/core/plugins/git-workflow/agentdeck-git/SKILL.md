@@ -1,6 +1,6 @@
 ---
 name: agentdeck-git
-description: Safe, clean git for agents - check state first, atomic Conventional Commits staged on purpose, branches, rebase or merge, conflict resolution, pull requests with gh, finishing a branch, undoing mistakes without losing work. Use when committing, branching, syncing, merging, resolving conflicts, opening or updating a PR, finishing a branch, or recovering from a git mistake.
+description: Use for Git commit and undo operations, branch management, syncing, rebase, merge conflicts, pull requests and recovery. Preserve local changes.
 ---
 
 # Git

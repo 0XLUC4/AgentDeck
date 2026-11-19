@@ -1,6 +1,6 @@
 ---
 name: agentdeck-debug
-description: Root-cause debugging from evidence - reproduce, read the full error, trace the bad value back to its origin, prove one hypothesis at a time, fix once at the source, prove the fix with a regression test. Use when hitting any bug, crash, panic, exception, failing or flaky test, wrong output, hang, regression or "it does not work", before proposing or writing any fix.
+description: Use before fixing a crash, panic, exception, hang, flaky test, regression or wrong output. Reproduce the failure and trace its cause.
 ---
 
 # Debug from evidence

@@ -1,6 +1,6 @@
 ---
 name: agentdeck-review
-description: Review another agent's or a person's changes like a senior reviewer - read the task and the whole diff, trace each change to its callers, hunt real defects (logic, edge cases, data loss, security, concurrency, missing tests), verify every finding before reporting it, rank by severity, no style nitpicks, no edits. Use when asked to review a diff, a branch, a pull request, a worktree or another agent's finished work, and for AgentDeck's cross-agent review.
+description: Use for read-only code review of a diff, branch, pull request, worktree or another agent's changes. Trace callers and rank verified defects by severity.
 ---
 
 # Review

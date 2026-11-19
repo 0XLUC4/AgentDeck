@@ -1,6 +1,6 @@
 ---
 name: agentdeck-speech-qa
-description: Measure dictation latency and transcription accuracy on a repeatable local corpus. Use when changing microphone capture, speech recognition, dictation cleanup, model selection, or GPU acceleration.
+description: Use to benchmark dictation latency and transcription accuracy, including missing words, after changes to microphone capture, speech recognition, cleanup, model or GPU.
 ---
 
 # Test dictation

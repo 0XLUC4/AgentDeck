@@ -1,6 +1,6 @@
 ---
 name: agentdeck-3d
-description: Build and debug 3D that looks right and runs smooth - Blender (bpy scripts headless or through the Blender MCP, modeling, materials, UVs, baking, rendering, glTF export), Three.js (WebGPU and WebGL), React Three Fiber, Babylon.js, Godot, Unity, Bevy, Roblox - scenes, cameras, lights, materials, models, shaders, physics, frame rate. Use for any Blender, 3D, game, shader or 3D viewer task, and when a scene or model is black, invisible, wrong or slow.
+description: Use for 3D scenes, games, shaders, modeling, rendering and glTF export in Blender, Three.js, R3F, Babylon.js, Godot, Unity, Bevy or Roblox. Diagnose invisible assets and frame-rate drops.
 ---
 
 # 3D

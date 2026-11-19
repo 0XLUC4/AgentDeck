@@ -1,6 +1,6 @@
 ---
 name: agentdeck-web-check
-description: Check a web page or web app for real in the AgentDeck browser panel with the browser MCP tools - serve it, load it, look, read console errors and DevTools issues, check failed requests, use the changed feature, run a quick accessibility audit, fix and check again. Use after any change to a web UI, page, component, style, dev server or an API a page calls, and when asked to test, check, show or debug a page, before saying the change works.
+description: Use to verify or debug a changed web page, component, style, dev server or backing API in the AgentDeck browser. Inspect console errors, failed requests, interactions and accessibility.
 ---
 
 # Web check in the AgentDeck browser panel

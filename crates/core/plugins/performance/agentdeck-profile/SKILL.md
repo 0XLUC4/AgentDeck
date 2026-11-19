@@ -1,6 +1,6 @@
 ---
 name: agentdeck-profile
-description: Make code faster or leaner with measurements, not guesses - reproducible benchmark, profiler and flamegraph to find the hot spot, biggest cost fixed first, before/after numbers beyond the noise - for Rust, Node/TypeScript/Bun, Python, Go, .NET, SQL, startup and build times. Use when something is slow, uses too much memory or CPU, freezes, or when asked to optimize, before changing any code for speed.
+description: Use to optimize slow code, CPU, memory, database queries, startup or builds. Benchmark, profile the bottleneck and compare before/after performance.
 ---
 
 # Profile before optimizing

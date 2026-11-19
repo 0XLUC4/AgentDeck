@@ -1,6 +1,6 @@
 ---
 name: agentdeck-upgrade
-description: Upgrade dependencies, frameworks, language versions and toolchains without breaking the project - inventory what is outdated, read the official changelog and migration guide for every major version crossed, upgrade in small green steps (one major at a time), run the official codemods, fix deprecations, keep the lock file consistent, check security advisories, prove it with build, tests and the running app. Use when asked to update, upgrade, bump or migrate packages, a framework (React, Next.js, Vue, Angular, Django, Rails, Spring), Node, Python, Rust or Go versions, or to fix outdated or vulnerable dependencies.
+description: Use to upgrade outdated or vulnerable dependencies, frameworks, language runtimes and toolchains. Check migration guides and codemods for each major version.
 ---
 
 # Upgrade

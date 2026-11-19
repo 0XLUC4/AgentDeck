@@ -1,6 +1,6 @@
 ---
 name: agentdeck-frontend
-description: Build frontend UI that is consistent, accessible and fast - reuse the project's components and design tokens, every state handled (loading, empty, error, long content, offline), semantic HTML and keyboard use, forms with clear validation, state kept where it belongs, server data cached, no layout shift, small bundles - then checked in the AgentDeck browser panel at desktop and phone width. Use when building or changing a page, screen, component, form, style, layout, client state or data fetching in React, Vue, Svelte, Solid, Angular, plain HTML/CSS or React Native web.
+description: Use to build or change a web UI component, form, layout, style, client state or data fetching in React, Vue, Svelte, Angular, Solid or HTML/CSS. Check accessibility and loading states.
 ---
 
 # Frontend

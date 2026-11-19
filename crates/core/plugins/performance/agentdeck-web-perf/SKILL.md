@@ -1,80 +1,28 @@
 ---
 name: agentdeck-web-perf
-description: Measure and improve web page speed in the AgentDeck browser panel - performance traces with LCP subparts, INP from real interactions, CLS culprits, field data when available, network weight, render-blocking, caching, bfcache, memory leaks, before/after numbers. Use when a page is slow, heavy or janky, before a release, or when asked about web performance or Core Web Vitals, before changing code for speed.
+description: Use to measure slow or janky pages, network weight and Core Web Vitals in the AgentDeck browser. Trace Largest Contentful Paint (LCP), INP and CLS before optimizing or releasing.
 ---
 
-# Web performance in the AgentDeck browser panel
+# Measure web performance in the AgentDeck browser
 
-Measure, change one thing, measure again. Only the `browser` MCP tools (the panel the user sees).
-`lighthouse_audit` does **not** measure performance (it covers accessibility, SEO and best
-practices): speed numbers come from traces.
+Use the panel's `browser` MCP tools against a production build (`preview` or `start`). Lighthouse audits accessibility, SEO and best practices. Collect speed metrics from traces.
 
-## Targets (Core Web Vitals, 75th percentile)
+## Baseline
 
-| Metric | Good | Poor |
-|---|---|---|
-| LCP (largest element shown) | ≤ 2.5 s | > 4 s |
-| INP (reaction to clicks and keys) | ≤ 200 ms | > 500 ms |
-| CLS (layout jumps) | ≤ 0.1 | > 0.25 |
+At the 75th percentile, good/poor thresholds are LCP ≤2.5 s/>4 s, INP ≤200 ms/>500 ms, CLS ≤0.1/>0.25. First-load compressed budgets: JS <300 KB, CSS <100 KB, fonts <100 KB, third parties <200 KB, total <1.5 MB. TBT is a lab diagnostic.
 
-Budgets on first load (compressed): JS < 300 KB, CSS < 100 KB, fonts < 100 KB, third parties
-< 200 KB, total < 1.5 MB. FID is gone; TBT is only a lab hint, not a target.
+1. Load: `navigate_page`, then `performance_start_trace` (reload and auto-stop; `ignoreCache: true` for cold runs). Repeat under identical conditions. Record LCP, CLS and available CrUX field data. Use `performance_analyze_insight` with insight set ID and name: LCPBreakdown, LCPDiscovery, DocumentLatency, RenderBlocking, NetworkDependencyTree, CLSCulprits or ThirdParties.
+2. Interaction: trace with `reload: false, autoStop: false`, reproduce the slow click, input or keypress, then `performance_stop_trace`. Inspect input, processing and presentation delay and tasks >50 ms.
+3. Network: filter `list_network_requests` by resourceTypes. Check size, chains, blocking resources and headers via `get_network_request`.
+4. Phone: one `emulate` call sets both `cpuThrottlingRate: 4` and `networkConditions: "Slow 4G"`. Each call replaces settings. Use the panel's mobile preview for viewport; reset throttling with an empty settings call.
 
-## Measure
+## Follow the trace
 
-1. **Production build** (`build` then `preview`/`start`), never the dev server: dev numbers lie.
-2. **Load trace**: `navigate_page` to the URL, then `performance_start_trace` (reload and auto stop by
-   default; `ignoreCache: true` for a cold load). It returns LCP, CLS, field data (CrUX) when the
-   site has some, and the insight list. Open the relevant ones with `performance_analyze_insight`
-   (insight set id + name): `LCPBreakdown`, `LCPDiscovery`, `DocumentLatency`, `RenderBlocking`,
-   `NetworkDependencyTree`, `CLSCulprits`, `ThirdParties`. Run twice; numbers vary.
-3. **Interaction trace (INP)**: `performance_start_trace` with `reload: false, autoStop: false`, do
-   the slow interaction (`click`, `fill`, `press_key`), then `performance_stop_trace`. Look at long
-   tasks (> 50 ms) and their input delay, processing time and presentation delay.
-4. **Network**: `list_network_requests` (`resourceTypes` to filter): total weight, biggest files,
-   render-blocking CSS/JS, chains (A loads B loads C), missing compression or cache headers
-   (`get_network_request` for headers).
-5. **Mid-range phone**: one `emulate` call with `cpuThrottlingRate: 4` and
-   `networkConditions: "Slow 4G"` (each call replaces all settings), trace again, then `emulate` with
-   neither to reset. Never pass `viewport` (it moves the page out of the panel; use the panel's
-   mobile preview).
+- LCP: identify the largest subpart. For TTFB inspect redirects, server caching, CDN and streaming. For discovery delay expose the image as HTML `<img src>`, use `fetchpriority="high"`, avoid lazy-loading; preload when HTML discovery is impossible. For transfer duration use responsive sizes, AVIF/WebP and CDN. For render delay inspect blocking CSS/JS, fonts and client fetches.
+- INP: split long tasks, yield or move heavy work to a worker. Show feedback early, batch DOM reads before writes, virtualize long lists. For React, localize state and measure memoization or deferred updates.
+- CLS: reserve dimensions for images, embeds, ads and late content; match fallback font metrics.
+- Bytes: inspect bundle composition, split by route, trim heavy imports and defer third parties. Compress text, cache hashed assets as immutable and revalidate HTML.
+- Navigation: test back/forward restoration and inspect reported blockers such as unload handlers. Evaluate speculation rules for subsequent navigations.
+- Memory: use `take_heapsnapshot` with a filePath. Repeat the suspected action 5–10 times and compare snapshots for retained listeners or detached nodes.
 
-## LCP: fix the biggest subpart
-
-Healthy split: TTFB ~40 %, resource load delay < 10 %, resource load duration ~40 %, render delay
-< 10 %.
-
-- **TTFB**: server cache, CDN, static or streamed rendering, fewer redirects.
-- **Load delay**: the LCP image must be discoverable in the HTML as a real `<img src>` (not
-  `data-src`, not a CSS background set by JS), `fetchpriority="high"`, never `loading="lazy"`;
-  `<link rel="preload">` only when it cannot be in the HTML.
-- **Load duration**: right size (`srcset`/`sizes`), AVIF/WebP, CDN.
-- **Render delay**: render-blocking CSS/JS (`defer`, critical CSS inline), fonts
-  (`font-display: swap`, preloaded woff2 subset), no client-side fetch before the main content.
-
-## INP, CLS and the rest
-
-- **INP**: break work over 50 ms (`await scheduler.yield()`, fallback `setTimeout`), show feedback
-  before heavy work, debounce input, virtualize long lists, smaller DOM, no layout thrashing
-  (read then write), heavy work in a Web Worker. React: state lower, `memo` where measured,
-  `useTransition` for non-urgent updates.
-- **CLS**: `width`/`height` or `aspect-ratio` on images and embeds, space reserved for late content
-  and ads, nothing inserted above existing content, fallback fonts with matching metrics
-  (`size-adjust`).
-- **JS weight**: split by route (`import()`), drop or replace heavy dependencies, named ESM imports,
-  inspect the bundle (`vite build` + `rollup-plugin-visualizer`, `next build` output,
-  `source-map-explorer`). Third parties after interaction or idle.
-- **Caching**: hashed assets `Cache-Control: public, max-age=31536000, immutable`; HTML short or
-  `no-cache`; Brotli or gzip on text.
-- **Back/forward cache**: navigate away and back (`navigate_page` back); blockers are
-  `Cache-Control: no-store` on HTML and `unload` handlers.
-- **Next pages**: multi-page sites gain near-instant navigations from
-  `<script type="speculationrules">` (prefetch or prerender).
-- **Memory leak** (slower over time): `take_heapsnapshot` (a `filePath` is required), repeat the
-  action 5-10 times, snapshot again; growing detached nodes or listeners mean a missing cleanup.
-
-## Report
-
-A before/after table: LCP (and its biggest subpart), CLS, INP or the slowest interaction, long tasks,
-JS KB, total KB, requests, field data if any. What changed and why. Keep a change only if the
-numbers improved. Lab numbers are not real users on real devices: say so.
+Change one measured cause, repeat the same test and compare LCP/subpart, CLS, interaction duration, long tasks, JS/total KB and request count. Report field data separately from lab results and keep improvements that exceed run-to-run variation.

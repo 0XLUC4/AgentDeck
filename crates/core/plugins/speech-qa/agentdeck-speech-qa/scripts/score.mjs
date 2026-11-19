@@ -5,6 +5,19 @@ function words(text) {
 }
 
 function edits(reference, actual) {
+  // Matching outer words contribute no edits. Score only the differing span.
+  let start = 0;
+  let refEnd = reference.length;
+  let actualEnd = actual.length;
+  while (start < refEnd && start < actualEnd && reference[start] === actual[start]) start++;
+  while (refEnd > start && actualEnd > start && reference[refEnd - 1] === actual[actualEnd - 1]) {
+    refEnd--;
+    actualEnd--;
+  }
+  if (start === refEnd) return actualEnd - start;
+  if (start === actualEnd) return refEnd - start;
+  reference = reference.slice(start, refEnd);
+  actual = actual.slice(start, actualEnd);
   let prev = Array.from({ length: actual.length + 1 }, (_, i) => i);
   for (const [i, word] of reference.entries()) {
     const next = [i + 1];
