@@ -6,17 +6,77 @@ use std::time::Duration;
 
 use gpui_kit::*;
 
-/// Port held for the app lifetime: a second instance fails to bind.
-/// shortcut: a TCP port as the instance lock; switch to a named mutex if the port ever collides.
+/// Port a second launch pings to bring the running instance to the front (the lock itself on
+/// macOS and Linux).
 const INSTANCE_PORT: u16 = 47799;
+/// Windows lock: a named mutex is never inherited. With the port as the lock, a child that
+/// inherited its handle (session host, agent) kept it after we quit, and every relaunch exited.
+#[cfg(windows)]
+const MUTEX_NAME: &str = "Local\\AgentDeck-single-instance";
 
 static LISTENER: OnceLock<TcpListener> = OnceLock::new();
-/// Passed to the new exe by the updater: the old instance still holds the port while it quits.
+/// Passed to the new exe by the updater: the old instance still holds the lock while it quits.
 pub(super) const AFTER_UPDATE: &str = "--after-update";
+
+/// Held for the whole run: while it lives, another launch only pings this one.
+pub struct InstanceLock {
+    #[cfg(windows)]
+    mutex: Option<windows_sys::Win32::Foundation::HANDLE>,
+    port: Option<TcpListener>,
+}
+
+#[cfg(windows)]
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        if let Some(mutex) = self.mutex.take() {
+            // SAFETY: our own handle from `CreateMutexW`, closed once.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(mutex) };
+        }
+    }
+}
+
+impl InstanceLock {
+    /// No lock (a run on its own data folder).
+    fn none() -> Self {
+        Self {
+            #[cfg(windows)]
+            mutex: None,
+            port: None,
+        }
+    }
+}
+
+#[cfg(windows)]
+fn try_lock() -> Option<InstanceLock> {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = MUTEX_NAME.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `name` is NUL-terminated; the handle is closed here or by `InstanceLock::drop`.
+    let mutex = unsafe {
+        let mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        if mutex.is_null() {
+            return None;
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(mutex);
+            return None;
+        }
+        mutex
+    };
+    // Only for the "show the window" ping: a port still held by a leaked handle costs just that.
+    let port = TcpListener::bind(("127.0.0.1", INSTANCE_PORT)).ok();
+    Some(InstanceLock { mutex: Some(mutex), port })
+}
+
+#[cfg(not(windows))]
+fn try_lock() -> Option<InstanceLock> {
+    let port = TcpListener::bind(("127.0.0.1", INSTANCE_PORT)).ok()?;
+    Some(InstanceLock { port: Some(port) })
+}
 
 /// Returns the lock to keep alive for the whole run, or None when AgentDeck already runs
 /// (the running instance is asked to come to the front).
-pub fn single_instance() -> Option<TcpListener> {
+pub fn single_instance() -> Option<InstanceLock> {
     // The 0.2.0 updater starts the downloaded exe from %TEMP% as an NSIS installer (`/P /R`).
     let legacy_update = std::env::args().any(|a| a == "/R");
     // Read now: the old instance is about to quit, and its path is where this exe belongs.
@@ -30,36 +90,34 @@ pub fn single_instance() -> Option<TcpListener> {
     if let Some(pid) = old {
         wait_for_exit(pid, Duration::from_secs(120));
     }
-    let mut bound = TcpListener::bind(("127.0.0.1", INSTANCE_PORT));
+    let mut lock = try_lock();
     if legacy_update || after_update || old.is_some() {
         for _ in 0..200 {
-            // Up to 20 s: the old instance stops its agents before it frees the port.
-            if bound.is_ok() {
+            // Up to 20 s: the old instance stops its agents before it frees the lock.
+            if lock.is_some() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
-            bound = TcpListener::bind(("127.0.0.1", INSTANCE_PORT));
+            lock = try_lock();
         }
     }
-    if bound.is_ok()
+    if lock.is_some()
         && let Some(old_exe) = old_exe
         && take_place_of(&old_exe)
     {
-        std::process::exit(0); // frees the port for the relaunched exe
+        std::process::exit(0); // frees the lock for the relaunched exe
     }
-    // A run on its own data folder (AGENTDECK_DATA_DIR) is another app, not a second launch: it
-    // opens next to the installed one, to try a build without closing it.
-    if bound.is_err() && std::env::var_os("AGENTDECK_DATA_DIR").is_some() {
-        bound = TcpListener::bind(("127.0.0.1", 0));
-    }
-    match bound {
-        Ok(listener) => {
-            if let Ok(clone) = listener.try_clone() {
+    match lock {
+        Some(lock) => {
+            if let Some(clone) = lock.port.as_ref().and_then(|p| p.try_clone().ok()) {
                 let _ = LISTENER.set(clone);
             }
-            Some(listener)
+            Some(lock)
         }
-        Err(_) => {
+        // A run on its own data folder (AGENTDECK_DATA_DIR) is another app, not a second launch: it
+        // opens next to the installed one, to try a build without closing it.
+        None if std::env::var_os("AGENTDECK_DATA_DIR").is_some() => Some(InstanceLock::none()),
+        None => {
             let addr = ([127, 0, 0, 1], INSTANCE_PORT).into();
             if let Err(e) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 eprintln!("cannot reach the running AgentDeck: {e}");
