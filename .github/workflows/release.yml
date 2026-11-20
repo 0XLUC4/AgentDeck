@@ -88,6 +88,12 @@ jobs:
         run: |
           flags=()
           if [[ "$BUILD_VARIANT" == windows-x86_64-vulkan ]]; then flags+=(--features gpu); fi
+          # The runner's MSVC STL can require a newer Clang than the preinstalled LLVM (STL1000 in
+          # whisper.cpp): allow the mismatch rather than depend on the image's LLVM version.
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            export CFLAGS_x86_64_pc_windows_msvc="-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"
+            export CXXFLAGS_x86_64_pc_windows_msvc="-EHsc -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"
+          fi
           cargo build --release -p agentdeck --locked "${flags[@]}"
 
       - name: Package (Windows)
