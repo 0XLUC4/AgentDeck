@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/app"]
 
 [workspace.package]
-version = "0.2.34"
+version = "0.2.35"
 edition = "2024"
 authors = ["Luca"]
 
@@ -11,6 +11,12 @@ authors = ["Luca"]
 agentdeck-core = { path = "crates/core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+
+# Dev builds: our crates stay debuggable, but dependencies (GPUI, layout, text shaping) are
+# optimized, or the unoptimized renderer stutters on heavy pages (Plugins) while scrolling or moving
+# the window. Costs one longer first build; incremental builds are unchanged.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 codegen-units = 1

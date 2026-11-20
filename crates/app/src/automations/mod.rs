@@ -24,6 +24,7 @@ use crate::layout::DeckView;
 use crate::panes::{agent_logo, icon_button};
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG, RADIUS_MD};
 
 actions!(agentdeck, [CloseAutomations]);
 
@@ -64,7 +65,10 @@ fn start(deck: Entity<Deck>, cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(TICK).await;
-            cx.update(|cx| run_due(&deck, cx));
+            cx.update(|cx| {
+                run_due(&deck, cx);
+                crate::bots::run_due(&deck, cx);
+            });
         }
     })
     .detach();
@@ -92,7 +96,7 @@ fn edit(deck: &Entity<Deck>, cx: &mut App, change: impl FnOnce(&mut Vec<Automati
 
 /// The session a run opens its agent in: one of the workspace linked to the folder (the visible
 /// session when it is there), else the visible session.
-fn session_for(state: &DeckState, cwd: &str) -> Option<String> {
+pub(crate) fn session_for(state: &DeckState, cwd: &str) -> Option<String> {
     let active = state.active_tab();
     state
         .workspace_for_path(cwd)
@@ -262,7 +266,7 @@ impl AutomationsView {
             .flex_col()
             .gap_2()
             .p_3()
-            .rounded(ui(8.0))
+            .rounded(ui(RADIUS_LG))
             .border_1()
             .border_color(hsla(p.line))
             .bg(hsla(p.base))
@@ -404,7 +408,7 @@ impl AutomationsView {
                             .gap_2()
                             .h(ui(32.0))
                             .px_3()
-                            .rounded(ui(6.0))
+                            .rounded(ui(RADIUS_MD))
                             .bg(hsla(p.accent))
                             .text_color(hsla(p.on_accent))
                             .font_weight(FontWeight::MEDIUM)
@@ -438,7 +442,7 @@ fn chip(id: impl Into<ElementId>, selected: bool, p: &Palette) -> Stateful<Div> 
         .gap_1p5()
         .h(ui(28.0))
         .px_2p5()
-        .rounded(ui(6.0))
+        .rounded(ui(RADIUS_MD))
         .border_1()
         .border_color(hsla(if selected { p.accent } else { p.line }))
         .text_xs()
@@ -490,7 +494,7 @@ impl Render for AutomationsView {
                     .child(div().text_size(ui(15.0)).font_weight(FontWeight::MEDIUM).child("Automations"))
                     .child(div().text_xs().text_color(hsla(p.subtle)).child("Prompts that start an agent on a schedule")),
             )
-            .child(icon_button("automations-close", IconName::X, "Close (Esc)").large().on_click(close));
+            .child(crate::panes::close_button("automations-close", "Close (Esc)").on_click(close));
         let count = rows.len();
         let side = div()
             .id("automations-list")

@@ -7,11 +7,13 @@
 #![allow(dead_code)]
 
 mod automations;
+mod bots;
 mod browser;
 mod chat;
 mod disk;
 mod git;
 mod history;
+mod hosts;
 mod layout;
 mod orchestrator;
 mod palette;
@@ -24,11 +26,16 @@ mod system;
 mod terminal;
 mod theme;
 mod voice;
+mod worktree;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 fn main() {
+    // `agentdeck --session-host <dir>`: the background process that keeps agents alive across quits.
+    if let Some(code) = agentdeck_core::session_host::run_from_args() {
+        std::process::exit(code);
+    }
     // GPUI's DirectComposition surface is drawn above child windows: the browser's native webview
     // would stay hidden behind it (black panel). Without it GPUI draws in the window itself.
     // shortcut: gives up transparent window backgrounds; revisit if GPUI lets children sit above.
@@ -65,8 +72,10 @@ fn main() {
             theme::apply(&appearance, None, cx);
             theme::set_zoom(deck.read(cx).settings.ui_zoom, cx);
             layout::init(cx);
+            hosts::init(deck.read(cx).data_dir.clone(), cx);
             for init in [
                 automations::init,
+                bots::init,
                 browser::init,
                 git::init,
                 history::init,

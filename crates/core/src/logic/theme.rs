@@ -75,9 +75,25 @@ impl TerminalTheme {
 
 pub const FONT_SANS: &str = "Segoe UI Variable Text";
 pub const FONT_MONO: &str = "Cascadia Code";
-pub const RADIUS_MD: f32 = 10.0;
-pub const RADIUS_LG: f32 = 12.0;
-pub const RADIUS_XL: f32 = 14.0;
+/// Corner radius scale, the same everywhere (matches gpui-kit's own `radius` 6 / `radius_lg` 8):
+/// SM chips, badges and key hints; MD buttons, fields, selects, tabs, menu rows, icon buttons;
+/// LG cards and menus; XL dialogs, panes and large panels.
+pub const RADIUS_SM: f32 = 4.0;
+pub const RADIUS_MD: f32 = 6.0;
+pub const RADIUS_LG: f32 = 8.0;
+pub const RADIUS_XL: f32 = 12.0;
+
+/// Code colors of the editor and code blocks (`app::theme::highlight_theme`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Syntax {
+    pub keyword: u32,
+    pub string: u32,
+    pub function: u32,
+    pub comment: u32,
+    pub number: u32,
+    pub type_: u32,
+    pub tag: u32,
+}
 
 /// Every color token of index.css, as 0xRRGGBB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +123,7 @@ pub struct Palette {
     pub agent_opencode: u32,
     pub agent_shell: u32,
     pub selection: u32,
+    pub syntax: Syntax,
 }
 
 /// OKLCH (L 0..1, C, H degrees) to 0xRRGGBB, gamut clipped. Ref: https://bottosson.github.io/posts/oklab/
@@ -219,7 +236,9 @@ impl Palette {
             agent_opencode: oklch(0.84, 0.0, 0.0),
             agent_shell: oklch(0.76, 0.0, 0.0),
             selection: oklch(0.4, 0.0, 0.0),
+            syntax: Syntax::default(),
         }
+        .with_ui_syntax()
     }
 
     pub fn light() -> Self {
@@ -249,23 +268,50 @@ impl Palette {
             agent_opencode: oklch(0.3, 0.0, 0.0),
             agent_shell: oklch(0.4, 0.0, 0.0),
             selection: oklch(0.85, 0.0, 0.0),
+            syntax: Syntax::default(),
         }
+        .with_ui_syntax()
+    }
+
+    /// AgentDeck's own code colors: taken from the status and agent colors.
+    fn with_ui_syntax(mut self) -> Self {
+        self.syntax = Syntax {
+            keyword: self.agent_gemini,
+            string: self.ok,
+            function: self.busy,
+            comment: self.subtle,
+            number: self.agent_claude,
+            type_: self.wait,
+            tag: self.bad,
+        };
+        self
+    }
+
+    /// Light surfaces (same test as the app's light/dark mode).
+    pub fn is_light(&self) -> bool {
+        self.base > 0x808080
     }
 
     /// Palette for the appearance settings. `system_light`: the OS uses a light theme.
+    /// A color theme (`color_theme`, a plugin theme variant) replaces the light/dark mode and the
+    /// background tint; the accent still applies.
     pub fn for_appearance(appearance: &Appearance, system_light: bool) -> Self {
-        let light = match appearance.theme {
-            ThemeMode::Light => true,
-            ThemeMode::Dark => false,
-            ThemeMode::System => system_light,
+        let themed = crate::plugins::theme_variant(&appearance.color_theme).map(|(_, variant)| variant.palette());
+        let light = match (themed, appearance.theme) {
+            (Some(p), _) => p.is_light(),
+            (None, ThemeMode::Light) => true,
+            (None, ThemeMode::Dark) => false,
+            (None, ThemeMode::System) => system_light,
         };
-        let mut p = if light { Self::light() } else { Self::dark() };
+        let mut p = themed.unwrap_or_else(|| if light { Self::light() } else { Self::dark() });
         if let Some(accent) = parse_hex(&appearance.accent) {
             p.accent = accent;
             p.accent_hover = mix(accent, if light { 0x000000 } else { 0xffffff }, 0.82);
             p.on_accent = parse_hex(on_accent(&appearance.accent)).unwrap_or(p.on_accent);
         }
-        if let Some((_, c, h)) = hex_to_oklch(&appearance.background) {
+        if themed.is_none()
+            && let Some((_, c, h)) = hex_to_oklch(&appearance.background)
+        {
             // Same as `oklch(from <bg> <lightness> min(c, max) h)` in theme.ts.
             let max = if light { 0.03 } else { 0.045 };
             let tint = |l: f64| oklch(l, c.min(max), h);
@@ -289,6 +335,8 @@ impl Palette {
             Grok => self.agent_grok,
             OpenCode => self.agent_opencode,
             Shell => self.agent_shell,
+            // Black/white brands take the OpenAI mark's neutral (light in dark themes, dark in light ones).
+            Other(spec) => spec.color.unwrap_or(self.agent_codex),
         }
     }
 }
@@ -328,12 +376,29 @@ mod tests {
                 theme: ThemeMode::Dark,
                 accent: String::new(),
                 background: "#2b4c8c".into(),
+                color_theme: String::new(),
             },
             false,
         );
         assert_ne!(tinted.base, Palette::dark().base);
         let (l, _, _) = hex_to_oklch(&format!("#{:06x}", tinted.base)).unwrap();
         assert!((l - 0.165).abs() < 0.01);
+    }
+
+    #[test]
+    fn color_theme_replaces_mode_and_tint() {
+        let appearance = |color_theme: &str| Appearance {
+            theme: ThemeMode::Light,
+            accent: String::new(),
+            background: "#2b4c8c".into(),
+            color_theme: color_theme.into(),
+        };
+        let monokai = Palette::for_appearance(&appearance("monokai"), true);
+        assert_eq!(monokai.base, 0x272822);
+        assert!(!monokai.is_light());
+        // Unknown (uninstalled build, typo): AgentDeck's own theme.
+        assert!(Palette::for_appearance(&appearance("nope"), false).is_light());
+        assert_eq!(Palette::dark().syntax.keyword, Palette::dark().agent_gemini);
     }
 
     #[test]

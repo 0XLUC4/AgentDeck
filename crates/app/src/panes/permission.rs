@@ -21,6 +21,7 @@ use super::logo::agent_logo;
 use super::runtime::{self, focus_pane};
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_SM};
 
 fn tool_icon(tool: &str) -> IconName {
     match tool {
@@ -209,7 +210,7 @@ impl Render for PermissionCard {
             .id("permission-detail")
             .max_h(ui(160.0))
             .overflow_y_scroll()
-            .rounded(ui(4.0))
+            .rounded(ui(RADIUS_SM))
             .bg(hsla(p.gutter))
             .p(ui(6.0))
             .font_family(FONT_MONO)

@@ -93,9 +93,14 @@ pub(super) struct Item {
 }
 
 /// (id, label, icon, shortcut hint). Same order and labels as the original.
-const ACTIONS: [(&str, &str, IconName, Option<&str>); 25] = [
+const ACTIONS: [(&str, &str, IconName, Option<&str>); 30] = [
+    ("quick-open", "Go to file", IconName::FileText, Some("Ctrl+P")),
+    ("jump", "Jump to session or worktree", IconName::GitBranch, Some("Ctrl+J")),
+    ("new-tab", "New tab: open tabs, files, URLs, agents", IconName::Globe, Some("Ctrl+T")),
+    ("run-command", "Run project command…", IconName::SquareTerminal, None),
     ("add-agent", "Add agent", IconName::Plus, None),
     ("new-session", "New session", IconName::SquarePlus, None),
+    ("create-worktree", "Create worktree", IconName::GitBranch, None),
     ("link-workspace", "Link project", IconName::FolderPlus, None),
     ("interrupt-all", "Interrupt all", IconName::Pause, None),
     ("stop-all", "Stop all", IconName::SquareStop, None),
@@ -439,7 +444,12 @@ impl CommandPalette {
 
 /// Runs a palette item. Actions owned by other modules go through their GPUI actions.
 fn run_item(deck: &Entity<Deck>, item: &Item, window: &mut Window, cx: &mut App) {
-    match &item.run {
+    run_target(deck, &item.run, &item.label, window, cx);
+}
+
+/// Jumps to a pane, session or project, or runs an action (also for the finders).
+pub(super) fn run_target(deck: &Entity<Deck>, run: &Run, label: &str, window: &mut Window, cx: &mut App) {
+    match run {
         Run::Pane(pane) => {
             close_wall(cx);
             crate::layout::jump_to_pane(pane, cx);
@@ -462,11 +472,11 @@ fn run_item(deck: &Entity<Deck>, item: &Item, window: &mut Window, cx: &mut App)
             d.save(cx);
             cx.notify();
         }),
-        Run::Action(id) => run_action(deck, id, &item.label, window, cx),
+        Run::Action(id) => run_action(deck, id, label, window, cx),
     }
 }
 
-fn close_wall(cx: &mut App) {
+pub(super) fn close_wall(cx: &mut App) {
     if crate::orchestrator::wall_open(cx) {
         crate::orchestrator::toggle_wall(cx);
     }
@@ -488,6 +498,11 @@ fn run_action(deck: &Entity<Deck>, id: &str, label: &str, window: &mut Window, c
             d.save(cx);
             cx.notify();
         }),
+        "create-worktree" => crate::worktree::open_create_worktree(None, window, cx),
+        "quick-open" => super::finder::open(super::finder::Mode::Files, deck.clone(), window, cx),
+        "jump" => super::finder::open(super::finder::Mode::Jump, deck.clone(), window, cx),
+        "new-tab" => super::finder::open(super::finder::Mode::NewTab, deck.clone(), window, cx),
+        "run-command" => super::finder::open(super::finder::Mode::Commands, deck.clone(), window, cx),
         "link-workspace" => crate::orchestrator::open_link_workspace(deck.clone(), window, cx),
         "interrupt-all" => runtime::interrupt_all(cx),
         "stop-all" => confirm_bulk(deck, "Stop", runtime::stop_all, window, cx),

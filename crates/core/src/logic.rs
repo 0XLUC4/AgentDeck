@@ -3,8 +3,11 @@
 pub mod automations;
 pub mod deck;
 pub mod layout;
+pub mod markdown_blocks;
+pub mod new_worktree;
 pub mod orchestrator;
 pub mod permissions;
+pub mod project_commands;
 pub mod queue;
 pub mod ring_buffer;
 pub mod settings;
@@ -12,4 +15,5 @@ pub mod tasks;
 pub mod templates;
 pub mod text;
 pub mod theme;
+pub mod themes;
 pub mod voice_route;

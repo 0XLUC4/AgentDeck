@@ -8,6 +8,7 @@ use gpui_kit::*;
 use super::updater::{UpdatePhase, updater};
 use super::{autostart_enabled, set_autostart};
 use crate::theme::{hsla, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_MD};
 
 pub struct AppControls {
     autostart: bool,
@@ -120,7 +121,7 @@ impl Render for AppControls {
             .gap_1p5()
             .h(ui(32.0))
             .px_3()
-            .rounded(ui(6.0))
+            .rounded(ui(RADIUS_MD))
             .border_1()
             .border_color(hsla(p.line_strong))
             .text_color(hsla(p.fg))

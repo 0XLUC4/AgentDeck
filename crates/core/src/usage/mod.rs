@@ -3,6 +3,7 @@
 
 mod parse;
 mod prices;
+pub mod limits;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};

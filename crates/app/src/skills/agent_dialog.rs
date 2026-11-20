@@ -17,6 +17,7 @@ use gpui_kit::*;
 
 use super::{EDITOR_CONTEXT, SaveAgentFile, close_button, confirm, modal_frame, popup, segmented};
 use crate::theme::{hsla, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_MD, RADIUS_SM};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AgentDialogKind {
@@ -456,7 +457,7 @@ impl AgentFilesDialog {
                                         .child(
                                             div()
                                                 .flex_shrink_0()
-                                                .rounded(ui(4.0))
+                                                .rounded(ui(RADIUS_SM))
                                                 .bg(hsla(p.base))
                                                 .px(ui(6.0))
                                                 .text_size(ui(11.0))
@@ -671,6 +672,9 @@ impl AgentFilesDialog {
                     ),
             );
         popup("skill-install-popup", "Install skills", body, cx)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.close_popup(cx);
+            }))
     }
 }
 
@@ -682,7 +686,7 @@ fn list_box(id: &'static str, p: &agentdeck_core::logic::theme::Palette) -> Stat
         .flex_col()
         .max_h(ui(384.0))
         .overflow_y_scroll()
-        .rounded(ui(6.0))
+        .rounded(ui(RADIUS_MD))
         .border_1()
         .border_color(hsla(p.line))
 }

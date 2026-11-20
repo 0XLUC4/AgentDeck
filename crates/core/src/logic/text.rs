@@ -260,10 +260,11 @@ pub fn agent_name(kind: AgentKind) -> &'static str {
         AgentKind::Grok => "Grok Build",
         AgentKind::OpenCode => "OpenCode",
         AgentKind::Shell => "Shell",
+        AgentKind::Other(spec) => spec.name,
     }
 }
 
-/// Every agent kind, in picker order.
+/// The built-in agent kinds, in picker order (`agents::all_agents` adds the extra CLIs).
 pub const AGENT_KINDS: [AgentKind; 6] = [
     AgentKind::Claude,
     AgentKind::Codex,

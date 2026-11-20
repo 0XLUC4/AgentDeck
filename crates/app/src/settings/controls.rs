@@ -9,6 +9,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::theme::{hsla, hsla_a, ui};
+use agentdeck_core::logic::theme::{RADIUS_MD};
 
 /// "Section title" then rows separated by a line.
 pub fn section(title: &str, rows: Vec<AnyElement>, p: &Palette) -> Div {
@@ -174,7 +175,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .h(ui(26.0))
                 .flex()
                 .items_center()
-                .rounded(ui(5.0))
+                .rounded(ui(RADIUS_MD))
                 .cursor_pointer()
                 .text_xs()
                 .when(selected, |d| d.bg(hsla(p.raised)).text_color(hsla(p.fg)))

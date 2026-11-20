@@ -28,6 +28,8 @@ pub fn agent_aliases(kind: AgentKind) -> &'static [&'static str] {
         AgentKind::Grok => &["grok", "groc", "grock", "groque", "grok build"],
         AgentKind::OpenCode => &["opencode", "open code", "open-code", "op\u{e8}ne code"],
         AgentKind::Shell => &["shell", "chell", "terminal", "le shell", "le terminal"],
+        // shortcut: no spoken aliases for the extra CLIs; they are reached by pane title.
+        AgentKind::Other(_) => &[],
     }
 }
 

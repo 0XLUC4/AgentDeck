@@ -1,9 +1,11 @@
-//! Settings > Appearance: light / dark / system theme, interface zoom, accent color and background tint.
+//! Settings > Appearance: light / dark / system theme, color themes installed from the Plugins page,
+//! interface zoom, accent color and background tint.
 
 use agentdeck_core::logic::settings::{
     Appearance, Settings, ThemeMode, UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, step_ui_zoom,
 };
 use agentdeck_core::logic::theme::{ACCENT_PRESETS, BACKGROUND_PRESETS, Palette, on_accent, parse_hex};
+use agentdeck_core::plugins::CATALOG;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
@@ -11,8 +13,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::SettingsDialog;
-use super::controls::{icon, icon_button, row, section, segmented, to_hex};
+use super::controls::{hint_text, icon, icon_button, row, section, segmented, to_hex};
 use crate::theme::{self, hsla, ui};
+use agentdeck_core::logic::theme::{RADIUS_MD, RADIUS_SM};
 
 const MODES: [(ThemeMode, &str); 3] = [
     (ThemeMode::Dark, "Dark"),
@@ -120,6 +123,56 @@ impl SettingsDialog {
             )
     }
 
+    /// Color theme picker: AgentDeck's own theme, then every installed theme plugin variant.
+    fn color_themes(&self, current: &str, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let settings = self.settings(cx);
+        let installed: Vec<_> = CATALOG
+            .iter()
+            .filter(|plugin| plugin.is_theme() && settings.plugin_on(plugin))
+            .flat_map(|plugin| plugin.themes.iter().map(|v| (v.id, v.title, v.palette())))
+            .collect();
+        let default = if p.is_light() && current.is_empty() { Palette::light() } else { Palette::dark() };
+        let options = std::iter::once(("", "AgentDeck", default)).chain(installed.iter().copied());
+        let chips = options.enumerate().map(|(i, (id, title, preview))| {
+            let selected = current == id;
+            div()
+                .id(("color-theme", i))
+                .flex()
+                .items_center()
+                .gap_2()
+                .h(ui(30.0))
+                .pl(ui(6.0))
+                .pr_3()
+                .rounded(ui(RADIUS_MD))
+                .border_1()
+                .border_color(hsla(if selected { p.accent } else { p.line }))
+                .when(selected, |d| d.bg(hsla(p.raised)))
+                .cursor_pointer()
+                .hover(|s| s.bg(hsla(p.hover)))
+                .text_xs()
+                .text_color(hsla(if selected { p.fg } else { p.muted }))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.set_appearance(window, cx, |a| a.color_theme = id.to_owned())
+                }))
+                .child(theme_swatch(&preview))
+                .child(title)
+        });
+        let hint = if installed.is_empty() {
+            "Install color themes from the Plugins page (Themes)."
+        } else {
+            "Installed from the Plugins page. A color theme replaces the light/dark mode and the background."
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .py_3()
+            .child(div().text_color(hsla(p.fg)).child("Color theme"))
+            .child(hint_text(hint, p))
+            .child(div().flex().flex_wrap().gap_1p5().children(chips))
+            .into_any_element()
+    }
+
     /// Interface zoom: saves it and rescales every window.
     fn set_ui_zoom(&mut self, zoom: u32, cx: &mut Context<Self>) {
         self.set(cx, |s| s.ui_zoom = zoom);
@@ -150,11 +203,18 @@ impl SettingsDialog {
         let modes = segmented("set-theme", &MODES, appearance.theme, &p, {
             let this = cx.entity().downgrade();
             move |mode, window, cx| {
-                let _ = this.update(cx, |this, cx| this.set_appearance(window, cx, |a| a.theme = mode));
+                // Picking a mode goes back to AgentDeck's own theme.
+                let _ = this.update(cx, |this, cx| {
+                    this.set_appearance(window, cx, |a| {
+                        a.theme = mode;
+                        a.color_theme.clear();
+                    })
+                });
             }
         });
         let rows = vec![
             row("Theme", Some("System follows Windows' light/dark setting. Terminals follow the theme."), modes, &p),
+            self.color_themes(&appearance.color_theme, &p, cx),
             row(
                 "Interface zoom",
                 Some("Scales the whole interface. Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0"),
@@ -192,6 +252,24 @@ fn ring(selected: bool, p: &Palette) -> Div {
         .rounded_full()
         .border_2()
         .border_color(if selected { hsla(p.fg) } else { transparent_black() })
+}
+
+/// A theme in miniature: its background with the accent and two code colors.
+fn theme_swatch(preview: &Palette) -> Div {
+    let dot = |color: u32| div().size(ui(6.0)).rounded_full().bg(hsla(color));
+    div()
+        .flex()
+        .items_center()
+        .gap(ui(2.0))
+        .px(ui(4.0))
+        .h(ui(18.0))
+        .rounded(ui(RADIUS_SM))
+        .border_1()
+        .border_color(hsla(preview.line_strong))
+        .bg(hsla(preview.base))
+        .child(dot(preview.accent))
+        .child(dot(preview.syntax.keyword))
+        .child(dot(preview.syntax.string))
 }
 
 /// Plain filled circle, no border.

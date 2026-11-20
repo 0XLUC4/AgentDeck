@@ -42,6 +42,7 @@ fn config_dir(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Grok => Ok(".grok"),
         AgentKind::OpenCode => Ok(".opencode"),
         AgentKind::Shell => Err("a shell has no skills or notes".into()),
+        AgentKind::Other(spec) => Err(format!("{} skills and notes are not supported", spec.name)),
     }
 }
 

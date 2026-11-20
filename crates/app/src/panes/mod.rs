@@ -11,6 +11,7 @@
 mod frame;
 mod header;
 mod logo;
+mod logos_extra;
 mod permission;
 mod picker;
 pub mod runtime;
@@ -36,7 +37,7 @@ pub use picker::{AgentPicker, last_agent, spawn_agent};
 #[allow(unused_imports)]
 pub use runtime::start;
 #[allow(unused_imports)]
-pub use widgets::{icon_button, status_badge, status_dot};
+pub use widgets::{IconButton, close_button, icon_button, status_badge, status_dot};
 
 use crate::theme::{hsla, ui};
 

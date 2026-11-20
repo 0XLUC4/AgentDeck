@@ -62,7 +62,7 @@ fn trust_folder_uncached(agent: AgentKind, cwd: &str) -> bool {
         }
         // Grok: no documented file format; pty sets GROK_FOLDER_TRUST=0 instead.
         // OpenCode has no folder trust prompt.
-        AgentKind::Grok | AgentKind::OpenCode | AgentKind::Shell => Ok(()),
+        AgentKind::Grok | AgentKind::OpenCode | AgentKind::Shell | AgentKind::Other(_) => Ok(()),
     };
     if let Err(e) = &result {
         eprintln!("trust: could not trust {cwd} for {agent:?}: {e}");

@@ -12,6 +12,7 @@ use super::chrome::icon_button;
 use super::dock::{Axis, Branch, Dock, Edge, Group, Node};
 use crate::panes::{display_title, exit_bar, pane_frame, pane_frame_border, pane_overlays, steps_bar};
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG, RADIUS_MD};
 
 /// Gap between panes (dockview theme `gap: 6`); the sash lives in it.
 const GAP: f32 = 6.0;
@@ -31,7 +32,7 @@ impl Render for PaneDrag {
         div()
             .px_3()
             .py_1()
-            .rounded(ui(8.0))
+            .rounded(ui(RADIUS_LG))
             .bg(hsla(p.raised))
             .border_1()
             .border_color(hsla(p.accent))
@@ -349,7 +350,7 @@ impl DeckView {
                         .gap(ui(6.0))
                         .px(ui(10.0))
                         .py_1()
-                        .rounded(ui(6.0))
+                        .rounded(ui(RADIUS_MD))
                         .border_1()
                         .border_color(hsla(p.line_strong))
                         .text_color(hsla(p.fg))

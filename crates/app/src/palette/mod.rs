@@ -1,5 +1,6 @@
 //! Command palette (Ctrl+K / Ctrl+Shift+P), broadcast a prompt to several agents (Ctrl+Shift+B),
-//! per-pane prompt queue and session template picker.
+//! per-pane prompt queue and session template picker. Finders (finder.rs): Quick Open (Ctrl+P),
+//! Jump (Ctrl+J), new-tab omnibox (Ctrl+T, the tab bar's "New tab"), "Run project command…".
 //! Original: src/components/{CommandPalette,Broadcast,Queue,Templates}, src/lib/recentPrompts.ts,
 //! src/store/{queue,templates}.ts. Logic: agentdeck_core::logic::{queue,templates}.
 //!
@@ -8,8 +9,11 @@
 
 mod broadcast;
 mod command;
+mod finder;
 pub mod fuzzy;
 mod queue;
+mod rank;
+mod scan;
 mod templates;
 
 use std::time::Duration;
@@ -27,7 +31,7 @@ use crate::state::Deck;
 use crate::theme::{hsla, palette, ui};
 
 pub use broadcast::{Broadcast, agent_from_issue, open_broadcast, open_race};
-pub(crate) use broadcast::race_one;
+pub(crate) use broadcast::{race_one, send_when_ready};
 pub use command::CommandPalette;
 #[allow(unused_imports)] // public API for the panes and settings modules
 pub use queue::{QUEUE_HOVER_GROUP, QueueDialog, open_queue, queue_button, send_next};
@@ -37,10 +41,18 @@ pub use templates::{
     rename_template, save_session_as_template,
 };
 
-actions!(agentdeck, [OpenPalette, OpenPaletteAlt, OpenBroadcast]);
+actions!(agentdeck, [OpenPalette, OpenPaletteAlt, OpenBroadcast, QuickOpen, JumpTo, OpenNewTab]);
 
 /// localStorage key of the web build, kept in local.json.
 const RECENT_PROMPTS_KEY: &str = "recent-prompts";
+/// Files opened from Quick Open, per searched folder (local.json).
+const RECENT_FILES_KEY: &str = "quick-open-recent";
+
+/// `ctrl-<key>`, or `cmd-<key>` on macOS (shown as ⌘ by [`ui::keys`]).
+fn primary(key: &str) -> String {
+    let modifier = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
+    format!("{modifier}-{key}")
+}
 
 /// Module state: the deck, which dialogs are open (weak: a closed dialog drops its view),
 /// recently run palette items and the queue runner's last seen statuses.
@@ -53,9 +65,22 @@ struct PaletteGlobal {
     /// Recently run palette item ids, most recent first. In memory: resets with the app.
     recent_items: Vec<String>,
     queue_runner: queue::Runner,
+    /// The open finder (Quick Open, Jump, new tab, project commands).
+    finder: Option<WeakEntity<finder::Finder>>,
+    /// Last focus time (ms) of each pane id and `tab:<id>`. In memory: resets with the app.
+    focused: std::collections::HashMap<String, i64>,
+    /// (active tab, active pane) last seen, to stamp focus changes only.
+    focus_current: (String, Option<String>),
+    /// Searched folder -> files opened from Quick Open, most recent first.
+    recent_files: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Global for PaletteGlobal {}
+
+/// Key bindings need `'static` strings: the few built at startup (platform modifier) are leaked once.
+pub(crate) fn leak(keys: String) -> &'static str {
+    Box::leak(keys.into_boxed_str())
+}
 
 /// Registers this module's key bindings and globals. Called once from `main`.
 pub fn init(cx: &mut App) {
@@ -63,13 +88,20 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-k", OpenPalette, None),
         KeyBinding::new("ctrl-shift-p", OpenPaletteAlt, None),
         KeyBinding::new("ctrl-shift-b", OpenBroadcast, None),
+        KeyBinding::new(leak(primary("p")), QuickOpen, None),
+        KeyBinding::new(leak(primary("j")), JumpTo, None),
+        KeyBinding::new(leak(primary("t")), OpenNewTab, None),
     ]);
     command::bind_keys(cx);
+    finder::bind_keys(cx);
     templates::bind_keys(cx);
     cx.set_global(PaletteGlobal::default());
     cx.on_action(|_: &OpenPalette, cx| with_window(cx, command::toggle));
     cx.on_action(|_: &OpenPaletteAlt, cx| with_window(cx, command::toggle));
     cx.on_action(|_: &OpenBroadcast, cx| with_window(cx, open_broadcast));
+    cx.on_action(|_: &QuickOpen, cx| with_window(cx, |d, w, cx| finder::open(finder::Mode::Files, d, w, cx)));
+    cx.on_action(|_: &JumpTo, cx| with_window(cx, |d, w, cx| finder::open(finder::Mode::Jump, d, w, cx)));
+    cx.on_action(|_: &OpenNewTab, cx| with_window(cx, |d, w, cx| finder::open(finder::Mode::NewTab, d, w, cx)));
     // The main window's root view carries the deck: attach to it once it exists.
     cx.observe_new::<DeckView>(|view, _, cx| attach(view.deck().clone(), cx))
         .detach();
@@ -81,7 +113,73 @@ fn attach(deck: Entity<Deck>, cx: &mut App) {
     }
     cx.global_mut::<PaletteGlobal>().deck = Some(deck.clone());
     load_recent_prompts(&deck, cx);
+    load_recent_files(&deck, cx);
     queue::start_runner(&deck, cx);
+    record_focus(&deck, cx);
+    cx.observe(&deck, |deck, cx| record_focus(&deck, cx)).detach();
+}
+
+/// Stamps the session and pane that just lost or got the focus (Jump palette recency).
+fn record_focus(deck: &Entity<Deck>, cx: &mut App) {
+    let current = {
+        let s = &deck.read(cx).state;
+        (s.active_tab_id.clone(), s.active_pane_id.clone())
+    };
+    let g = cx.global_mut::<PaletteGlobal>();
+    if g.focus_current == current {
+        return;
+    }
+    let now = agentdeck_core::logic::text::now_ms();
+    let previous = std::mem::replace(&mut g.focus_current, current.clone());
+    for (tab, pane) in [previous, current] {
+        g.focused.insert(format!("tab:{tab}"), now);
+        if let Some(pane) = pane {
+            g.focused.insert(pane, now);
+        }
+    }
+}
+
+fn focused_at(id: &str, cx: &App) -> i64 {
+    cx.try_global::<PaletteGlobal>().and_then(|g| g.focused.get(id).copied()).unwrap_or(0)
+}
+
+fn recent_files(root: &str, cx: &App) -> Vec<String> {
+    cx.try_global::<PaletteGlobal>().and_then(|g| g.recent_files.get(root).cloned()).unwrap_or_default()
+}
+
+/// Remembers a file opened from Quick Open (saved in local.json, off the UI thread).
+fn remember_file(deck: &Entity<Deck>, root: &str, path: &str, cx: &mut App) {
+    let all = {
+        let list = cx.global_mut::<PaletteGlobal>().recent_files.entry(root.to_owned()).or_default();
+        list.retain(|p| p != path);
+        list.insert(0, path.to_owned());
+        list.truncate(rank::MAX_RECENT_FILES);
+        cx.global::<PaletteGlobal>().recent_files.clone()
+    };
+    let dir = deck.read(cx).data_dir.clone();
+    cx.background_executor()
+        .spawn(async move {
+            let saved = JsonStore::load(&dir, LOCAL_FILE).and_then(|mut store| {
+                store.set(RECENT_FILES_KEY, serde_json::json!(all));
+                store.save()
+            });
+            if let Err(e) = saved {
+                eprintln!("recent files not saved: {e}");
+            }
+        })
+        .detach();
+}
+
+fn load_recent_files(deck: &Entity<Deck>, cx: &mut App) {
+    let dir = deck.read(cx).data_dir.clone();
+    let map = match JsonStore::load(&dir, LOCAL_FILE) {
+        Ok(store) => serde_json::from_value(store.get(RECENT_FILES_KEY).clone()).unwrap_or_default(),
+        Err(e) => {
+            eprintln!("recent files not loaded: {e}");
+            Default::default()
+        }
+    };
+    cx.global_mut::<PaletteGlobal>().recent_files = map;
 }
 
 fn global_deck(cx: &App) -> Option<Entity<Deck>> {
@@ -102,7 +200,7 @@ fn with_window(cx: &mut App, f: impl FnOnce(Entity<Deck>, &mut Window, &mut App)
 
 /// Opens `view` as a modal in the shared AgentDeck dialog style (`rounded-xl border bg-panel`).
 /// `top`: offset from the window top, None to center.
-fn open_modal<V: Render>(
+pub(crate) fn open_modal<V: Render>(
     view: Entity<V>,
     width: f32,
     top: Option<Pixels>,
@@ -221,9 +319,9 @@ fn load_recent_prompts(deck: &Entity<Deck>, cx: &mut App) {
 }
 
 /// Small shared pieces of the dialogs (header with close button, buttons, agent mark).
-mod ui {
+pub(crate) mod ui {
     use agentdeck_core::agents::AgentKind;
-    use agentdeck_core::logic::theme::Palette;
+    use agentdeck_core::logic::theme::{Palette, RADIUS_MD, RADIUS_SM};
     use gpui_kit::assets::IconName;
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::prelude::FluentBuilder as _;
@@ -251,7 +349,7 @@ mod ui {
                     )
                     .child(div().text_xs().text_color(hsla(p.subtle)).truncate().child(subtitle.into())),
             )
-            .child(icon_button("dialog-close", IconName::X, p).on_click(|_, window, cx| window.close_dialog(cx)))
+            .child(crate::panes::close_button("dialog-close", "Close (Esc)").on_click(|window, cx| window.close_dialog(cx)))
     }
 
     /// Square icon button (IconButton.tsx).
@@ -265,7 +363,7 @@ mod ui {
             .items_center()
             .justify_center()
             .size(ui(28.0))
-            .rounded(ui(6.0))
+            .rounded(ui(RADIUS_MD))
             .text_color(hsla(p.muted))
             .text_size(ui(15.0))
             .cursor_pointer()
@@ -284,7 +382,7 @@ mod ui {
             .gap_1p5()
             .h(ui(28.0))
             .px_2p5()
-            .rounded(ui(6.0))
+            .rounded(ui(RADIUS_MD))
             .border_1()
             .border_color(hsla(p.line))
             .text_xs()
@@ -310,7 +408,7 @@ mod ui {
             .gap_2()
             .h(ui(32.0))
             .px_3()
-            .rounded(ui(6.0))
+            .rounded(ui(RADIUS_MD))
             .bg(hsla(p.accent))
             .text_color(hsla(p.on_accent))
             .font_weight(FontWeight::MEDIUM)
@@ -339,7 +437,7 @@ mod ui {
             .gap_1p5()
             .h(ui(32.0))
             .px_3()
-            .rounded(ui(6.0))
+            .rounded(ui(RADIUS_MD))
             .border_1()
             .border_color(hsla(p.line))
             .text_color(hsla(p.muted))
@@ -358,5 +456,39 @@ mod ui {
     /// `<kbd>` hint (`font-sans text-xs text-subtle`).
     pub fn kbd(keys: &'static str, p: &Palette) -> Div {
         div().flex_shrink_0().text_xs().text_color(hsla(p.subtle)).child(keys)
+    }
+
+    /// Key name as printed on this platform: "Ctrl" is ⌘ on macOS, where the finders bind Cmd.
+    pub fn key_label(key: &'static str) -> &'static str {
+        if !cfg!(target_os = "macos") {
+            return key;
+        }
+        match key {
+            "Ctrl" => "⌘",
+            "Shift" => "⇧",
+            "Alt" => "⌥",
+            "Enter" => "↵",
+            other => other,
+        }
+    }
+
+    /// A shortcut as key chips: ["Ctrl", "P"] draws `Ctrl` `P` (`⌘` `P` on macOS).
+    pub fn keys(keys: &[&'static str], p: &Palette) -> Div {
+        div().flex().flex_shrink_0().items_center().gap_0p5().children(keys.iter().map(|key| {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .min_w(ui(18.0))
+                .h(ui(18.0))
+                .px_1()
+                .rounded(ui(RADIUS_SM))
+                .border_1()
+                .border_color(hsla(p.line))
+                .bg(hsla(p.raised))
+                .text_size(ui(11.0))
+                .text_color(hsla(p.subtle))
+                .child(key_label(key))
+        }))
     }
 }

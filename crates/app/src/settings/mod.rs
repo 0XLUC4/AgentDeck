@@ -8,6 +8,7 @@ mod agents;
 mod appearance;
 mod controls;
 mod general;
+mod hosts;
 mod mcp;
 mod notifications;
 mod speech;
@@ -25,7 +26,7 @@ use gpui_kit::*;
 
 use crate::state::{Deck, DeckEvent};
 use crate::theme::{hsla, palette, ui};
-use controls::{clamp_number, error_text, icon, icon_button};
+use controls::{clamp_number, error_text, icon};
 
 actions!(agentdeck, [OpenSettings, UiZoomIn, UiZoomOut, UiZoomReset]);
 
@@ -114,17 +115,19 @@ enum SectionId {
     Notifications,
     Voice,
     Agents,
+    Hosts,
     Mcp,
     Templates,
     About,
 }
 
-const SECTIONS: [(SectionId, &str, IconName); 8] = [
+const SECTIONS: [(SectionId, &str, IconName); 9] = [
     (SectionId::General, "General", IconName::SlidersHorizontal),
     (SectionId::Appearance, "Appearance", IconName::Palette),
     (SectionId::Notifications, "Notifications", IconName::Bell),
     (SectionId::Voice, "Voice", IconName::Mic),
     (SectionId::Agents, "Agents", IconName::Bot),
+    (SectionId::Hosts, "Hosts", IconName::Server),
     (SectionId::Mcp, "MCP hub", IconName::Network),
     (SectionId::Templates, "Templates", IconName::LayoutTemplate),
     (SectionId::About, "About", IconName::Info),
@@ -141,6 +144,7 @@ pub struct SettingsDialog {
     agents: agents::Agents,
     appearance: appearance::AppearanceUi,
     voice: voice::VoiceUi,
+    hosts: hosts::HostsUi,
     hub: mcp::Hub,
     templates: templates::Templates,
     about: about::About,
@@ -167,6 +171,7 @@ impl SettingsDialog {
         let agents = agents::Agents::new(window, cx, &s, &mut subs);
         let appearance = appearance::AppearanceUi::new(window, cx, &s, &mut subs);
         let voice = voice::VoiceUi::new(backend, window, cx, &mut subs);
+        let hosts = hosts::HostsUi::new(window, cx);
         let hub = mcp::Hub::new(window, cx, &mut subs);
         let templates = templates::Templates::new(window, cx, &mut subs);
         let about = about::About::new(data_dir, cx, &mut subs);
@@ -181,6 +186,7 @@ impl SettingsDialog {
             agents,
             appearance,
             voice,
+            hosts,
             hub,
             templates,
             about,
@@ -311,6 +317,7 @@ impl Render for SettingsDialog {
             SectionId::Notifications => self.render_notifications(cx),
             SectionId::Voice => self.render_voice(cx),
             SectionId::Agents => self.render_agents(cx),
+            SectionId::Hosts => self.render_hosts(cx),
             SectionId::Mcp => self.render_mcp(cx),
             SectionId::Templates => self.render_templates(cx),
             SectionId::About => self.render_about(cx),
@@ -337,8 +344,7 @@ impl Render for SettingsDialog {
                 )
             })
             .child(
-                icon_button("settings-close", IconName::X, false, &p)
-                    .on_click(|_, window, cx| window.close_dialog(cx)),
+                crate::panes::close_button("settings-close", "Close (Esc)").on_click(|window, cx| window.close_dialog(cx)),
             );
         div()
             .flex()

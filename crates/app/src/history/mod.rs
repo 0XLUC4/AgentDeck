@@ -12,6 +12,7 @@ mod budget;
 mod journal;
 mod search;
 mod settings;
+mod status_items;
 mod usage;
 
 use agentdeck_core::agents::AgentKind;
@@ -28,6 +29,7 @@ pub use journal::JournalDialog;
 pub use search::HistoryDialog;
 #[allow(unused_imports)]
 pub use settings::{HistorySaved, HistorySettings};
+pub use status_items::{cli_updates_item, subscription_item};
 #[allow(unused_imports)]
 pub use usage::{UsageChip, UsageDialog, context_fill, usage_details, usage_label};
 
@@ -172,7 +174,7 @@ fn modal(
                         .child(title.into()),
                 )
                 .children(actions)
-                .child(icon_button("modal-close", IconName::X, "Close", |_, _, cx| close_dialog(cx))),
+                .child(crate::panes::close_button("modal-close", "Close (Esc)").on_click(|_, cx| close_dialog(cx))),
         )
         .child(
             div()
@@ -195,7 +197,8 @@ fn modal(
                 .items_center()
                 .justify_center()
                 .bg(hsla_a(p.gutter, 0.7))
-                .child(dialog),
+                .on_mouse_down(MouseButton::Left, |_, _, cx| close_dialog(cx))
+                .child(dialog.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())),
         ),
     )
     .with_priority(2)

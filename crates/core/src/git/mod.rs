@@ -15,6 +15,10 @@ use serde::Serialize;
 
 use crate::agents::find_repo_root;
 
+pub mod branch_worktree;
+mod patch;
+pub use patch::{hunk_changes, select_patch};
+
 /// Branch prefix of the worktrees created by `agents::create_worktree`.
 const BRANCH_PREFIX: &str = "agentdeck/";
 const CHECKPOINT_REFS: &str = "refs/agentdeck/checkpoints";
@@ -117,6 +121,16 @@ pub struct GitStatus {
     pub files: Vec<FileChange>,
     /// Big folders (e.g. `node_modules`) at the root not in `.gitignore`: left out of `files`.
     pub huge_untracked: Vec<String>,
+}
+
+/// The working tree's changes split by the Git index, for the panel's two groups.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexStatus {
+    /// Index vs HEAD: what the next commit contains.
+    pub staged: Vec<FileChange>,
+    /// Working tree (untracked files included) vs index.
+    pub unstaged: Vec<FileChange>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -408,15 +422,113 @@ fn changes(root: &Path, from: &str, to: &str) -> Result<Vec<FileChange>, String>
     Ok(parse_raw_numstat(&out))
 }
 
-fn unified_diff(root: &Path, from: &str, to: &str, path: &str) -> Result<String, String> {
+/// Plain `a/` `b/` paths and 3 context lines whatever the user's config: hunks of these diffs
+/// are turned into patches for `git apply`.
+const DIFF_ARGS: [&str; 6] = [
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--unified=3",
+];
+
+/// `DIFF_ARGS` + `args` + `-- path`.
+fn file_diff(root: &Path, args: &[&str], path: &str) -> Result<String, String> {
     if path.is_empty() {
         return Err("missing file".into());
     }
-    run(
-        root,
-        &["diff", "--no-color", "--no-ext-diff", from, to, "--", path],
-        None,
-    )
+    run(root, &[&DIFF_ARGS[..], args, &["--", path]].concat(), None)
+}
+
+fn unified_diff(root: &Path, from: &str, to: &str, path: &str) -> Result<String, String> {
+    file_diff(root, &[from, to], path)
+}
+
+/// The real index written as a tree object, through a copy: the real index is not touched.
+/// Fails while it holds unmerged entries (a conflict).
+fn index_tree(root: &Path, real: &str) -> Result<String, String> {
+    let index = std::env::temp_dir().join(format!("agentdeck-index-{}", uuid::Uuid::new_v4()));
+    if Path::new(real).is_file() {
+        std::fs::copy(real, &index).map_err(|e| format!("copy index: {e}"))?;
+    }
+    let tree = run(root, &["write-tree"], Some(&index));
+    let _ = std::fs::remove_file(&index);
+    Ok(tree?.trim().to_string())
+}
+
+fn index_status(cwd: &str) -> Result<IndexStatus, String> {
+    let root = repo_root(cwd)?;
+    let info = repo_info(&root)?;
+    let from = info.head.clone().unwrap_or_else(|| EMPTY_TREE.into());
+    let staged = {
+        let _slot = HeavySlot::acquire();
+        let args = ["diff", "--cached", "--raw", "--numstat", "-z", "--no-renames", from.as_str()];
+        parse_raw_numstat(&run(&root, &args, None)?)
+    };
+    let (_, tree) = head_and_tree(&root)?;
+    let unstaged = match index_tree(&root, &info.index) {
+        Ok(index) => changes(&root, &index, &tree)?,
+        // Conflict: tracked files only.
+        Err(_) => parse_raw_numstat(&run(&root, &["diff", "--raw", "--numstat", "-z", "--no-renames"], None)?),
+    };
+    Ok(IndexStatus { staged, unstaged })
+}
+
+/// Diff of one file: HEAD vs index (`staged`), or index vs working tree (untracked included).
+fn index_diff(cwd: &str, path: &str, staged: bool) -> Result<String, String> {
+    let root = repo_root(cwd)?;
+    let info = repo_info(&root)?;
+    if staged {
+        let from = info.head.unwrap_or_else(|| EMPTY_TREE.into());
+        return file_diff(&root, &["--cached", from.as_str()], path);
+    }
+    match index_tree(&root, &info.index) {
+        Ok(index) => unified_diff(&root, &index, &head_and_tree(&root)?.1, path),
+        Err(_) => file_diff(&root, &[], path),
+    }
+}
+
+/// Stages (`git add -A`) or unstages `paths`; every change when `paths` is empty.
+fn set_staged(cwd: &str, paths: &[String], stage: bool) -> Result<(), String> {
+    let root = repo_root(cwd)?;
+    let mut args = if stage {
+        vec!["add", "-A", "--"]
+    } else if head(&root).is_some() {
+        vec!["reset", "-q", "--"]
+    } else {
+        // Unborn HEAD: nothing to reset to, empty the index instead.
+        vec!["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--"]
+    };
+    // `:(literal)`: a file name with `*` or `?` is not a glob.
+    let literal: Vec<String> = paths.iter().map(|p| format!(":(literal){p}")).collect();
+    let excludes: Vec<String> = huge_untracked(&root).iter().map(|d| format!(":(exclude){d}")).collect();
+    if literal.is_empty() {
+        args.push(".");
+        if stage {
+            // Same files as the panel lists: no unignored node_modules & co.
+            args.extend(excludes.iter().map(String::as_str));
+        }
+    } else {
+        args.extend(literal.iter().map(String::as_str));
+    }
+    run(&root, &args, None).map(drop)
+}
+
+/// `git apply --cached` of a `select_patch` patch, `--reverse` to unstage.
+fn apply_cached(cwd: &str, patch: &str, reverse: bool) -> Result<(), String> {
+    let root = repo_root(cwd)?;
+    let file = std::env::temp_dir().join(format!("agentdeck-patch-{}.diff", uuid::Uuid::new_v4()));
+    std::fs::write(&file, patch).map_err(|e| format!("write patch: {e}"))?;
+    let file_arg = file.to_string_lossy().into_owned();
+    let mut args = vec!["apply", "--cached", "--whitespace=nowarn"];
+    if reverse {
+        args.push("--reverse");
+    }
+    args.push(&file_arg);
+    let res = run(&root, &args, None).map(drop);
+    let _ = std::fs::remove_file(&file);
+    res
 }
 
 /// Cached for `STATUS_TTL`; concurrent calls for one root wait for a single computation.
@@ -517,12 +629,20 @@ fn compute_status(root: &Path) -> Result<GitStatus, String> {
 }
 
 fn commit(cwd: &str, message: &str) -> Result<String, String> {
+    if message.trim().is_empty() {
+        return Err("empty commit message".into());
+    }
+    run(&repo_root(cwd)?, &["add", "-A"], None)?;
+    commit_staged(cwd, message)
+}
+
+/// Commits the index as it is; returns the short sha.
+fn commit_staged(cwd: &str, message: &str) -> Result<String, String> {
     let root = repo_root(cwd)?;
     let message = message.trim();
     if message.is_empty() {
         return Err("empty commit message".into());
     }
-    run(&root, &["add", "-A"], None)?;
     run(&root, &["commit", "-q", "-m", message], None)?;
     run_trim(&root, &["rev-parse", "--short", "HEAD"])
 }
@@ -1078,6 +1198,38 @@ pub fn git_commit(cwd: String, message: String) -> Result<String, String> {
     res
 }
 
+/// Commits only what is staged; returns the short sha.
+pub fn git_commit_staged(cwd: String, message: String) -> Result<String, String> {
+    let res = commit_staged(&cwd, &message);
+    invalidate_status();
+    res
+}
+
+/// Changes split into staged (index vs HEAD) and unstaged (working tree vs index).
+pub fn git_index_status(cwd: String) -> Result<IndexStatus, String> {
+    index_status(&cwd)
+}
+
+/// Unified diff of one file: HEAD vs index (`staged`), or index vs working tree.
+pub fn git_diff_index(cwd: String, path: String, staged: bool) -> Result<String, String> {
+    index_diff(&cwd, &path, staged)
+}
+
+/// `git add -A` of `paths` (repo-relative); everything when empty.
+pub fn git_stage(cwd: String, paths: Vec<String>) -> Result<(), String> {
+    set_staged(&cwd, &paths, true)
+}
+
+/// Takes `paths` (repo-relative) out of the index; everything when empty.
+pub fn git_unstage(cwd: String, paths: Vec<String>) -> Result<(), String> {
+    set_staged(&cwd, &paths, false)
+}
+
+/// Applies a `select_patch` patch to the index (`reverse`: unstages it).
+pub fn git_apply_patch(cwd: String, patch: String, reverse: bool) -> Result<(), String> {
+    apply_cached(&cwd, &patch, reverse)
+}
+
 /// `check`: `settings.merge_check` ("" = guessed, "off" = none).
 pub fn git_merge_worktree(cwd: String, check: String) -> Result<String, String> {
     let res = merge_worktree(&cwd, &check);
@@ -1435,6 +1587,57 @@ mod tests {
             (st.files[0].status.as_str(), st.files[0].additions),
             ("A", Some(1))
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stages_hunks_files_and_commits_only_the_index() {
+        let Some((base, repo)) = temp_repo() else {
+            return;
+        };
+        let lines: Vec<String> = (1..=20).map(|n| format!("l{n}\n")).collect();
+        std::fs::write(repo.join("a.txt"), lines.concat()).unwrap();
+        commit(&s(&repo), "twenty lines").unwrap();
+        let mut changed = lines.clone();
+        changed[1] = "L2\n".into();
+        changed[18] = "L19\n".into();
+        std::fs::write(repo.join("a.txt"), changed.concat()).unwrap();
+        std::fs::write(repo.join("new.txt"), "x\n").unwrap();
+
+        let st = index_status(&s(&repo)).unwrap();
+        assert!(st.staged.is_empty());
+        assert_eq!(st.unstaged.len(), 2);
+
+        // Stage the first hunk only (line 2).
+        let diff = index_diff(&s(&repo), "a.txt", false).unwrap();
+        let diff_lines: Vec<&str> = diff.lines().collect();
+        let first = diff_lines.iter().position(|l| l.starts_with("@@")).unwrap();
+        let picked: std::collections::BTreeSet<usize> = hunk_changes(&diff_lines, first).into_iter().collect();
+        apply_cached(&s(&repo), &select_patch(&diff_lines, &picked, false).unwrap(), false).unwrap();
+        let staged = index_diff(&s(&repo), "a.txt", true).unwrap();
+        assert!(staged.contains("+L2") && !staged.contains("L19"));
+        let st = index_status(&s(&repo)).unwrap();
+        assert_eq!(st.staged.len(), 1);
+        assert_eq!((st.staged[0].additions, st.staged[0].deletions), (Some(1), Some(1)));
+        assert!(st.unstaged.iter().any(|f| f.path == "a.txt") && st.unstaged.iter().any(|f| f.path == "new.txt"));
+
+        // Unstage it again through the reversed patch.
+        let staged_lines: Vec<&str> = staged.lines().collect();
+        let all: std::collections::BTreeSet<usize> = (0..staged_lines.len()).collect();
+        apply_cached(&s(&repo), &select_patch(&staged_lines, &all, true).unwrap(), true).unwrap();
+        assert!(index_status(&s(&repo)).unwrap().staged.is_empty());
+
+        // File level: stage new.txt, commit it alone.
+        set_staged(&s(&repo), &["new.txt".into()], true).unwrap();
+        commit_staged(&s(&repo), "add new").unwrap();
+        let st = index_status(&s(&repo)).unwrap();
+        assert!(st.staged.is_empty());
+        assert_eq!(st.unstaged.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["a.txt"]);
+        assert!(commit_staged(&s(&repo), "nothing").is_err());
+        set_staged(&s(&repo), &[], true).unwrap();
+        assert_eq!(index_status(&s(&repo)).unwrap().staged.len(), 1);
+        set_staged(&s(&repo), &[], false).unwrap();
+        assert!(index_status(&s(&repo)).unwrap().staged.is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -7,11 +7,12 @@ use agentdeck_core::hooks_server::PaneStatus;
 use agentdeck_core::hooks_server::permissions::PermissionRequest;
 use agentdeck_core::logic::deck::{ACTIVITY_ORDER, ActivityKey, Pane, activity_key};
 use agentdeck_core::logic::queue::prompt_text;
-use agentdeck_core::logic::tasks::Task;
+use agentdeck_core::logic::tasks::{HandoffKind, HandoffSource, Task, handoff_draft, swap_instruction};
 use agentdeck_core::logic::text::{agent_name, format_elapsed, format_since, now_ms};
 use agentdeck_core::logic::theme::Palette;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
@@ -19,9 +20,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::DeckView;
-use super::chrome::icon_button;
+use super::chrome::{icon_button, key_button};
 use crate::panes::{PermissionCard, agent_logo, runtime, status_color};
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_MD};
 
 const LONG_PROMPT: usize = 400;
 const COPIED_MS: i64 = 1500;
@@ -34,6 +36,26 @@ pub(super) struct ActivityState {
     /// Expanded long prompts and previous tasks, by key.
     expanded: HashSet<String>,
     copied_at: i64,
+    /// Handoff being prepared from the open task detail.
+    handoff: Option<Handoff>,
+}
+
+/// Editable handoff of a finished task to another agent ("Prepare handoff").
+pub(super) struct Handoff {
+    /// Pane whose task is handed off.
+    source: String,
+    kind: HandoffKind,
+    /// Destination pane, and its folder once resolved.
+    target: Option<String>,
+    target_dir: Option<String>,
+    /// The draft: survives the destination closing, so another one can be picked.
+    text: Entity<TextareaState>,
+}
+
+/// Folder an agent works in (its worktree when it has one); the ssh target for a remote pane.
+/// Touches the disk: call off the UI thread.
+fn work_dir(cwd: String, pane_id: String, worktree: bool, ssh: Option<String>) -> String {
+    ssh.unwrap_or_else(|| agentdeck_core::git::git_pane_dir(cwd, pane_id, worktree))
 }
 
 fn activity_label(key: ActivityKey) -> &'static str {
@@ -75,7 +97,7 @@ fn small_button(id: impl Into<ElementId>, icon: IconName, label: impl Into<Share
         .gap(ui(6.0))
         .h(ui(28.0))
         .px_2()
-        .rounded(ui(6.0))
+        .rounded(ui(RADIUS_MD))
         .border_1()
         .border_color(hsla(p.line))
         .text_size(ui(12.0))
@@ -398,12 +420,8 @@ impl DeckView {
                             .child("Activity"),
                     )
                     .child(
-                        icon_button("activity-close", IconName::X, "Hide activity (Ctrl+Shift+A)", &p).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.activity_open = false;
-                                cx.notify();
-                            }),
-                        ),
+                        key_button("activity-close", IconName::X, "Back to projects", &["Ctrl", "Shift", "A"], &p)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_activity(cx))),
                     ),
             )
             .child(
@@ -433,7 +451,196 @@ impl DeckView {
     fn close_detail(&mut self, cx: &mut Context<Self>) {
         self.activity.detail = None;
         self.activity.expanded.clear();
+        self.activity.handoff = None;
         cx.notify();
+    }
+
+    /// Opens the handoff editor of the pane's last task: the draft names the pane's own worktree and
+    /// branch (resolved off the UI thread), whatever pane is active.
+    fn prepare_handoff(&mut self, pane_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let deck = self.deck.read(cx);
+        let Some(pane) = deck.state.panes.get(pane_id) else { return };
+        let log = deck.tasks.get(pane_id);
+        let Some(task) = log.and_then(|l| l.current.as_ref().or(l.history.first())).cloned() else { return };
+        let project = deck
+            .state
+            .tabs
+            .iter()
+            .find(|t| t.pane_ids.iter().any(|id| id == pane_id))
+            .and_then(|t| deck.state.workspaces.iter().find(|w| w.id == t.workspace_id))
+            .map(|w| w.name.clone())
+            .unwrap_or_default();
+        let agent = pane_name(pane);
+        let (source, cwd, worktree, ssh) = (pane.id.clone(), pane.cwd.clone(), pane.worktree, pane.ssh.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let id = source.clone();
+            let (dir, branch) = cx
+                .background_executor()
+                .spawn(async move {
+                    let remote = ssh.is_some();
+                    let dir = work_dir(cwd, id, worktree, ssh);
+                    let branch = if remote {
+                        None
+                    } else {
+                        agentdeck_core::workspace::inspect_folder(dir.clone()).ok().and_then(|info| info.branch)
+                    };
+                    (dir, branch)
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                let from = HandoffSource { agent: &agent, project: &project, dir: &dir, branch: branch.as_deref() };
+                let Some(draft) = handoff_draft(&task, &from, HandoffKind::Review) else { return };
+                let text = cx.new(|cx| TextareaState::new(window, cx));
+                text.update(cx, |t, cx| t.set_value(draft, window, cx));
+                this.activity.handoff =
+                    Some(Handoff { source, kind: HandoffKind::Review, target: None, target_dir: None, text });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Picks the other instruction; the user's edits elsewhere in the draft are kept.
+    fn set_handoff_kind(&mut self, kind: HandoffKind, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(handoff) = self.activity.handoff.as_mut() else { return };
+        let text = swap_instruction(&handoff.text.read(cx).value(), handoff.kind, kind);
+        handoff.kind = kind;
+        handoff.text.update(cx, |t, cx| t.set_value(text, window, cx));
+        cx.notify();
+    }
+
+    fn pick_handoff_target(&mut self, target: String, cx: &mut Context<Self>) {
+        let Some(handoff) = self.activity.handoff.as_mut() else { return };
+        let Some(pane) = self.deck.read(cx).state.panes.get(&target) else { return };
+        let (cwd, id, worktree, ssh) = (pane.cwd.clone(), pane.id.clone(), pane.worktree, pane.ssh.clone());
+        handoff.target = Some(target.clone());
+        handoff.target_dir = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let dir = cx.background_executor().spawn(async move { work_dir(cwd, id, worktree, ssh) }).await;
+            this.update(cx, |this, cx| {
+                if let Some(handoff) = this.activity.handoff.as_mut().filter(|h| h.target.as_ref() == Some(&target)) {
+                    handoff.target_dir = Some(dir);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Pastes the draft into the destination's prompt without submitting it (same paste as "Send
+    /// result to…"), then shows that terminal. Nothing happens if the destination closed meanwhile.
+    fn send_handoff(&mut self, cx: &mut Context<Self>) {
+        let Some(handoff) = &self.activity.handoff else { return };
+        let alive = |id: &String| self.deck.read(cx).state.panes.get(id).is_some_and(|p| !p.exited);
+        let Some(target) = handoff.target.clone().filter(alive) else { return };
+        let text = handoff.text.read(cx).value().trim_end().to_owned();
+        if text.trim().is_empty() {
+            return;
+        }
+        runtime::send_input(&target, &prompt_text(&format!("{text}\n\n")), cx);
+        self.activity.handoff = None;
+        self.jump(&target, cx);
+    }
+
+    /// Handoff editor, in place of the task body: instruction, destination and its folder, the
+    /// editable draft, Cancel / Paste into terminal.
+    fn handoff_editor(&self, handoff: &Handoff, targets: &[(String, String)], p: &Palette, cx: &mut Context<Self>) -> Div {
+        let target = handoff.target.as_ref().and_then(|id| targets.iter().find(|(t, _)| t == id));
+        let gone = handoff.target.is_some() && target.is_none();
+        let kinds = [HandoffKind::Review, HandoffKind::Continue].map(|kind| {
+            let pressed = handoff.kind == kind;
+            let (hover, fg) = (hsla(p.hover), hsla(p.fg));
+            div()
+                .id(SharedString::from(format!("handoff-kind-{}", kind.label())))
+                .flex()
+                .items_center()
+                .h(ui(26.0))
+                .px_2()
+                .rounded(ui(RADIUS_MD))
+                .border_1()
+                .text_size(ui(12.0))
+                .cursor_pointer()
+                .when(pressed, |d| d.border_color(hsla(p.accent)).bg(hsla_a(p.accent, 0.12)).text_color(hsla(p.fg)))
+                .when(!pressed, |d| d.border_color(hsla(p.line)).text_color(hsla(p.muted)).hover(move |s| s.bg(hover).text_color(fg)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.set_handoff_kind(kind, window, cx)))
+                .child(kind.label())
+        });
+        let weak = cx.entity().downgrade();
+        let menu_targets = targets.to_vec();
+        let picker = Button::new("handoff-target")
+            .outline()
+            .small()
+            .label(target.map_or_else(|| "Choose an agent…".to_owned(), |(_, label)| label.clone()))
+            .dropdown_caret(true)
+            .dropdown_menu(move |mut menu, _, _| {
+                for (id, label) in menu_targets.clone() {
+                    let weak = weak.clone();
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                        weak.update(cx, |this, cx| this.pick_handoff_target(id.clone(), cx)).ok();
+                    }));
+                }
+                menu
+            });
+        let destination_note = if targets.is_empty() {
+            Some("No other agent is open. Start one, then pick it here: your text is kept.".to_owned())
+        } else if gone {
+            Some("That agent closed. Pick another one: your text is kept.".to_owned())
+        } else if target.is_some() {
+            Some(handoff.target_dir.as_ref().map_or_else(|| "Folder: …".to_owned(), |dir| format!("Folder: {dir}")))
+        } else {
+            None
+        };
+        let can_send = target.is_some();
+        let paste = small_button("handoff-send", IconName::Send, "Paste into terminal", p);
+        let paste = if can_send {
+            paste.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.send_handoff(cx)))
+        } else {
+            paste.opacity(0.5).cursor_default()
+        };
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(section("Instruction".into(), p).child(div().flex().flex_wrap().gap(ui(6.0)).children(kinds)))
+            .child(
+                section("Destination".into(), p)
+                    .child(div().flex().child(picker))
+                    .children(destination_note.map(|text| note(text, p).whitespace_normal())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(ui(160.0))
+                    .gap(ui(6.0))
+                    .px_3()
+                    .py(ui(10.0))
+                    .child(div().text_size(ui(12.0)).text_color(hsla(p.subtle)).child("Draft"))
+                    .child(div().flex_1().min_h_0().text_size(ui(12.0)).child(Textarea::new(&handoff.text).h(relative(1.0)))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(ui(6.0))
+                    .border_t_1()
+                    .border_color(hsla(p.line))
+                    .px_3()
+                    .py(ui(10.0))
+                    .child(small_button("handoff-cancel", IconName::X, "Cancel", p).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.activity.handoff = None;
+                            cx.notify();
+                        },
+                    )))
+                    .child(paste)
+                    .child(note("Pasted, not sent: press Enter in the terminal when ready.", p).whitespace_normal()),
+            )
     }
 
     fn toggle_expanded(&mut self, key: String, cx: &mut Context<Self>) {
@@ -559,6 +766,10 @@ impl DeckView {
             None => body.child(note("No details available for this agent (no hooks).", &p).px_3().py_4()),
         };
         let summary = task.as_ref().and_then(|t| t.summary.clone());
+        // A task with a summary or at least its initial request can be handed off.
+        let transferable = task.as_ref().is_some_and(|t| {
+            [&t.prompt, &t.summary].iter().any(|text| text.as_deref().is_some_and(|s| !s.trim().is_empty()))
+        });
         let id = pane_id.to_owned();
         let mut buttons = div()
             .flex()
@@ -599,6 +810,7 @@ impl DeckView {
             if !targets.is_empty() {
                 let weak = cx.entity().downgrade();
                 let from = name.clone();
+                let targets = targets.clone();
                 buttons = buttons.child(
                     Button::new("task-handoff")
                         .outline()
@@ -620,6 +832,19 @@ impl DeckView {
                 );
             }
         }
+        if transferable {
+            buttons = buttons.child(
+                small_button("task-prepare-handoff", IconName::ArrowRightLeft, "Prepare handoff…", &p)
+                    .tooltip(|window, cx| {
+                        Tooltip::new("Hand this task to another agent for review or follow-up: edit the draft, then paste it")
+                            .build(window, cx)
+                    })
+                    .on_click(cx.listener({
+                        let id = id.clone();
+                        move |this, _: &ClickEvent, window, cx| this.prepare_handoff(&id, window, cx)
+                    })),
+            );
+        }
         body = body.child(buttons);
         if !previous.is_empty() {
             let mut list = section(format!("Previous tasks ({})", previous.len()), &p);
@@ -640,7 +865,7 @@ impl DeckView {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .rounded(ui(6.0))
+                        .rounded(ui(RADIUS_MD))
                         .px_1()
                         .py_1()
                         .text_size(ui(12.0))
@@ -668,6 +893,11 @@ impl DeckView {
             }
             body = body.child(list);
         }
+        // Preparing a handoff: its editor replaces the task body until sent or cancelled.
+        let content = match self.activity.handoff.as_ref().filter(|h| h.source == pane_id) {
+            Some(handoff) => self.handoff_editor(handoff, &targets, &p, cx).into_any_element(),
+            None => body.into_any_element(),
+        };
 
         div()
             .id("task-detail")
@@ -679,12 +909,17 @@ impl DeckView {
             .occlude()
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if e.keystroke.key == "escape" {
-                    this.close_detail(cx);
+                    // Esc cancels a handoff first (nothing was pasted), then closes the detail.
+                    if this.activity.handoff.take().is_some() {
+                        cx.notify();
+                    } else {
+                        this.close_detail(cx);
+                    }
                     cx.stop_propagation();
                 }
             }))
             .child(header)
-            .child(body)
+            .child(content)
             .into_any_element()
     }
 }

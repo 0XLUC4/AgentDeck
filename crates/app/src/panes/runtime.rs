@@ -138,7 +138,7 @@ fn rt_mut<'a>(id: &str, cx: &'a mut App) -> Option<&'a mut Runtime> {
     rts(cx).map.get_mut(id)
 }
 
-pub(super) fn deck(cx: &App) -> Option<Entity<Deck>> {
+pub(crate) fn deck(cx: &App) -> Option<Entity<Deck>> {
     cx.try_global::<Runtimes>()?.deck.clone()
 }
 
@@ -271,14 +271,19 @@ fn cleanup_orphan_worktrees(cx: &mut App) {
 }
 
 /// Respawns the saved sessions (active session first: its agents get the first spawn slots).
-/// Live panes (none after a fresh start) are adopted, live panes no session restores are killed.
+/// Live panes (those the session host kept running while the app was closed) are adopted, live
+/// panes no session restores are killed.
 fn restore(cx: &mut App) {
     let Some(deck) = deck(cx) else { return };
     let (sessions, active) = deck.update(cx, |d, _| {
         (std::mem::take(&mut d.pending_restore), d.state.active_tab_id.clone())
     });
+    let backend = deck.read(cx).backend.clone();
+    agentdeck_core::session_host::set_enabled(deck.read(cx).settings.keep_agents_on_quit);
+    // Only a host already running: one is started on the first spawn, off the UI thread.
+    agentdeck_core::session_host::connect_existing(&backend);
     let alive = app_state(cx)
-        .and_then(|s| pty::list_panes(&s).ok())
+        .and_then(|s| pty::list_all_panes(&s).ok())
         .unwrap_or_default();
     let (adopt, orphans) = persist::plan_restore(&sessions, &alive);
     for id in orphans {
@@ -563,16 +568,24 @@ pub fn create_pane(spec: PaneSpec, tab_id: &str, adopt: bool, cx: &mut App) {
             browser_tools: true, // adopted process: assume it has them; a spawn sets the real value
         },
     );
-    if adopt {
-        adopt_pane(&id, cx);
-    } else {
+    if !adopt {
+        spawn(&id, cx);
+    } else if let Err(e) = adopt_pane(&id, cx) {
+        // Ended between the host's list and the attach: start it again, as after a fresh start.
+        eprintln!("pane {id} not reattached: {e}");
         spawn(&id, cx);
     }
 }
 
 /// Reattaches to a live process: no spawn; the screen is repainted on the first size report.
-fn adopt_pane(id: &str, cx: &mut App) {
-    let Some(rt) = rt_mut(id, cx) else { return };
+/// A pane the session host kept running is attached first: what it printed meanwhile goes to the
+/// pane's buffer, which its terminal replays.
+fn adopt_pane(id: &str, cx: &mut App) -> Result<(), String> {
+    let output = rt_mut(id, cx).ok_or("pane closed")?.output.clone();
+    let backend = backend(cx).ok_or("backend not started")?;
+    let replay = Box::new(move |text: String| lock(&output).buffer.push(&text));
+    pty::attach_hosted(&backend, id, replay)?;
+    let Some(rt) = rt_mut(id, cx) else { return Ok(()) };
     rt.started_at = Some(now_ms());
     let nudge = rt.sized.then_some((rt.cols, rt.rows));
     rt.redraw = !rt.sized;
@@ -588,6 +601,7 @@ fn adopt_pane(id: &str, cx: &mut App) {
         p.exited = false;
         p.status_since = now;
     });
+    Ok(())
 }
 
 fn resize(id: &str, cols: u16, rows: u16, cx: &App) -> Result<(), String> {
@@ -692,6 +706,8 @@ struct SpawnJob {
     browser: (Vec<String>, Vec<(String, String)>),
     /// `settings.worktree_setup`: run once in a worktree created by this spawn.
     setup: String,
+    /// Saved host of an ssh pane (port, key, tmux session).
+    host: Option<agentdeck_core::hosts::Host>,
 }
 
 const PROMPT_FLAG: &str = "--append-system-prompt-file";
@@ -748,6 +764,10 @@ fn run_spawn(job: SpawnJob) -> Result<(), String> {
     if let Some(target) = &pane.ssh {
         args = pane.spec.args.clone();
         env = HashMap::from([(pty::SSH_ENV.to_owned(), target.clone())]);
+        if let Some(host) = &job.host {
+            let host = serde_json::to_string(host).map_err(|e| e.to_string())?;
+            env.insert(agentdeck_core::hosts::HOST_ENV.to_owned(), host);
+        }
     }
     // Creates the worktree and sets it up; spawn_pane then reuses it.
     if pane.worktree && pane.ssh.is_none() && !job.setup.is_empty() {
@@ -778,9 +798,12 @@ fn spawn(id: &str, cx: &mut App) {
     let d = deck.read(cx);
     let Some(pane) = d.state.panes.get(id).cloned() else { return };
     let backend = d.backend.clone();
+    // Read at each spawn: the setting applies to agents started after it changed.
+    agentdeck_core::session_host::set_enabled(d.settings.keep_agents_on_quit);
     let base_port = d.settings.base_port;
     let trust = d.settings.trust_agent_folders;
     let setup = d.settings.worktree_setup.clone();
+    let host = pane.ssh.as_ref().and(pane.host.as_deref()).and_then(|h| crate::hosts::get(h, cx));
     let resume = (pane.agent == agentdeck_core::agents::AgentKind::Claude && (d.settings.resume_sessions || waking))
         .then(|| pane.resume_id.clone())
         .flatten()
@@ -815,6 +838,7 @@ fn spawn(id: &str, cx: &mut App) {
         trust,
         browser: Default::default(),
         setup,
+        host,
     };
     let id = id.to_owned();
     cx.spawn(async move |cx| {
@@ -861,6 +885,13 @@ fn spawn(id: &str, cx: &mut App) {
                 cx.update(|cx| toast(format!("Setting up the worktree of {title}"), cx));
             }
         }
+        // Once per host and run: without tmux the agent stops with the connection.
+        if let Some(host) = job.host.clone().filter(|h| crate::hosts::first_tmux_check(&h.id)) {
+            let name = host.name.clone();
+            if let Ok(false) = cx.background_spawn(async move { host.has_tmux() }).await {
+                cx.update(|cx| toast(format!("tmux not found on {name}: agents there stop when the connection drops"), cx));
+            }
+        }
         let result = cx.background_spawn(async move { run_spawn(job) }).await;
         let ok = result.is_ok();
         cx.update(|cx| after_spawn(&id, token, result, resumed, (cols, rows), cx));
@@ -887,7 +918,11 @@ fn spawn(id: &str, cx: &mut App) {
 fn after_spawn(id: &str, token: u64, result: Result<(), String>, resumed: bool, size: (u16, u16), cx: &mut App) {
     match result {
         // Race with a previous run: the process is already running under this id.
-        Err(e) if e == ALREADY_RUNNING => adopt_pane(id, cx),
+        Err(e) if e == ALREADY_RUNNING => {
+            if let Err(e) = adopt_pane(id, cx) {
+                fail_pane(id, &e, cx);
+            }
+        }
         Err(e) => fail_pane(id, &e, cx),
         Ok(()) => {
             // Closed while spawning: the close's kill ran before the backend registered the pane.
@@ -1027,6 +1062,12 @@ pub fn close_pane(id: &str, cx: &mut App) {
 
 /// [`close_pane`] by the user (pane header): its agent worktree also goes when clean and merged.
 pub fn close_pane_from_ui(id: &str, cx: &mut App) {
+    // Closed for good: its tmux session on the host goes too (a restart keeps it).
+    if let Some(p) = pane(id, cx).filter(|p| p.ssh.is_some())
+        && let Some(host) = p.host.as_deref().and_then(|h| crate::hosts::get(h, cx))
+    {
+        crate::hosts::end_session(host, p.id.clone(), cx);
+    }
     let worktree = pane(id, cx)
         .filter(|p| p.worktree && p.ssh.is_none())
         .map(|p| (p.cwd.clone(), p.id.clone()));
@@ -1090,6 +1131,12 @@ fn on_exit(id: &str, cx: &mut App) {
         return;
     }
     if let Some(p) = pane(id, cx) {
+        // The agent may still run in tmux on the host: keep the pane, Restart reattaches.
+        if p.ssh.is_some() && p.host.is_some() {
+            toast(format!("{}: SSH session ended. Restart the pane to reattach.", p.title), cx);
+            update_pane(id, cx, |p| p.exited = true);
+            return;
+        }
         toast(format!("{} exited", p.title), cx);
     }
     close_pane(id, cx);

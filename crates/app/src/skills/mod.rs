@@ -10,6 +10,7 @@ mod agent_dialog;
 mod assets;
 mod files;
 mod graph;
+mod markdown_editor;
 mod model3d;
 mod viewer;
 
@@ -23,15 +24,18 @@ use gpui_kit::*;
 
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG, RADIUS_MD};
 
 pub use agent_dialog::{AgentDialogKind, AgentFilesDialog};
 pub use assets::AssetsDialog;
 pub use graph::GraphDialog;
 
-actions!(agentdeck, [SaveAgentFile, CloseSkillsDialog]);
+actions!(agentdeck, [SaveAgentFile, CloseSkillsDialog, MarkdownBold, MarkdownItalic, MarkdownStrike]);
 
 /// Key context of the file editor (Ctrl+S saves).
 const EDITOR_CONTEXT: &str = "AgentFileEditor";
+/// Key context of the visual Markdown editor (Ctrl+B, Ctrl+I, Ctrl+Shift+X).
+const MARKDOWN_CONTEXT: &str = "MarkdownEditor";
 /// Key context of every dialog of this module (Esc closes).
 const DIALOG_CONTEXT: &str = "SkillsDialog";
 
@@ -42,6 +46,9 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-s", SaveAgentFile, Some(EDITOR_CONTEXT)),
         KeyBinding::new("escape", CloseSkillsDialog, Some(DIALOG_CONTEXT)),
+        KeyBinding::new("ctrl-b", MarkdownBold, Some(MARKDOWN_CONTEXT)),
+        KeyBinding::new("ctrl-i", MarkdownItalic, Some(MARKDOWN_CONTEXT)),
+        KeyBinding::new("ctrl-shift-x", MarkdownStrike, Some(MARKDOWN_CONTEXT)),
     ]);
 }
 
@@ -126,28 +133,32 @@ fn show(view: AnyView, focus: FocusHandle, window: &mut Window, cx: &mut App) {
 pub fn close(window: &mut Window, cx: &mut App) {
     // A dialog is above the page: it closes first.
     let dialog = cx.try_global::<OpenDialog>().is_some_and(|open| open.0.is_some());
-    if !dialog {
-        cx.set_global(OpenPage(None));
+    let unsaved = if dialog {
+        cx.try_global::<OpenDialog>()
+            .and_then(|open| open.0.clone())
+            .and_then(|view| view.downcast::<AgentFilesDialog>().ok())
+            .is_some_and(|dialog| dialog.read(cx).has_unsaved(cx))
+    } else {
+        cx.try_global::<OpenPage>()
+            .and_then(|open| open.0.clone())
+            .and_then(|(view, _, _)| view.downcast::<files::FilesPage>().ok())
+            .is_some_and(|page| page.read(cx).has_unsaved(cx))
+    };
+    let dismiss = move |window: &mut Window, cx: &mut App| {
+        if dialog {
+            cx.set_global(OpenDialog(None));
+        } else {
+            cx.set_global(OpenPage(None));
+        }
         window.refresh();
-        return;
-    }
-    let unsaved = cx
-        .try_global::<OpenDialog>()
-        .and_then(|open| open.0.clone())
-        .and_then(|view| view.downcast::<AgentFilesDialog>().ok())
-        .is_some_and(|dialog| dialog.read(cx).has_unsaved(cx));
+    };
     if !unsaved {
-        cx.set_global(OpenDialog(None));
-        window.refresh();
-        return;
+        return dismiss(window, cx);
     }
     window
         .spawn(cx, async move |cx| {
             if confirm("Discard your changes?".into(), "Discard", cx).await {
-                let _ = cx.update(|window, cx| {
-                    cx.set_global(OpenDialog(None));
-                    window.refresh();
-                });
+                let _ = cx.update(dismiss);
             }
         })
         .detach();
@@ -189,6 +200,24 @@ pub fn open_files(deck: Entity<Deck>, workspace_id: &str, window: &mut Window, c
     let focus = view.read(cx).focus.clone();
     cx.observe(&view, |_, cx| cx.refresh_windows()).detach();
     show_page(&deck, "files", view.into(), focus, window, cx);
+}
+
+/// Opens `file` of the folder `root` in the code editor with the cursor on `line` (0-based), from
+/// the git review: its "Back to review" closes the page.
+pub fn open_file_at(deck: Entity<Deck>, root: std::path::PathBuf, file: std::path::PathBuf, line: u32, window: &mut Window, cx: &mut App) {
+    let view = cx.new(|cx| files::FilesPage::at(deck.clone(), String::new(), root, window, cx));
+    view.update(cx, |page, cx| page.open_at(file, line, window, cx));
+    let focus = view.read(cx).focus.clone();
+    cx.observe(&view, |_, cx| cx.refresh_windows()).detach();
+    show_page(&deck, "files", view.into(), focus, window, cx);
+}
+
+/// A file opened by [`open_file_at`] is still on screen (the git panel stays hidden meanwhile).
+pub fn review_file_open(cx: &App) -> bool {
+    cx.try_global::<OpenPage>()
+        .and_then(|open| open.0.as_ref())
+        .and_then(|(view, _, _)| view.clone().downcast::<files::FilesPage>().ok())
+        .is_some_and(|page| page.read(cx).from_review)
 }
 
 /// Pane header button (agent panes) opening the skills manager.
@@ -282,6 +311,8 @@ pub(crate) fn popup(id: &'static str, title: &'static str, body: impl IntoElemen
         .occlude()
         .child(
             div()
+                // A click inside stays inside: callers close the popup on a click on the backdrop.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .flex()
                 .flex_col()
                 .gap_3()
@@ -323,12 +354,8 @@ fn modal_header(title: String, actions: Option<AnyElement>, cx: &App) -> Div {
         .child(close_button())
 }
 
-fn close_button() -> Button {
-    Button::new("skills-dialog-close")
-        .ghost()
-        .icon(IconName::X)
-        .tooltip("Close (Esc)")
-        .on_click(|_, window, cx| close(window, cx))
+fn close_button() -> crate::panes::IconButton {
+    crate::panes::close_button("skills-dialog-close", "Close (Esc)").on_click(close)
 }
 
 /// Segmented control (one pressed button) used by the dialogs.
@@ -345,7 +372,7 @@ fn segmented<T: Copy + PartialEq + 'static>(
         .flex()
         .flex_shrink_0()
         .gap_1()
-        .rounded(ui(8.0))
+        .rounded(ui(RADIUS_LG))
         .bg(hsla(p.base))
         .p_1()
         .children(options.iter().enumerate().map(|(i, &(option, label))| {
@@ -357,7 +384,7 @@ fn segmented<T: Copy + PartialEq + 'static>(
                 .px_3()
                 .flex()
                 .items_center()
-                .rounded(ui(6.0))
+                .rounded(ui(RADIUS_MD))
                 .text_size(ui(12.0))
                 .cursor_pointer()
                 .when(pressed, |d| {

@@ -203,18 +203,24 @@ impl Permissions {
             "UserPromptSubmit" | "Stop" | "StopFailure" | "SessionStart"
         );
         let tool_done = matches!(event, "PostToolUse" | "PostToolUseFailure");
-        if !whole_turn && !tool_done {
+        // The agent started another tool: a question it was asking has been answered by then.
+        let next_tool = event == "PreToolUse";
+        if !whole_turn && !tool_done && !next_tool {
             return;
         }
+        let tool = &body["tool_name"];
         // An `AskUserQuestion` answered in the terminal comes back with `answers` added to its input.
         let mut done_input = body["tool_input"].clone();
         if let Some(input) = done_input.as_object_mut() {
             input.remove("answers");
         }
         self.lock().retain(|_, p| {
+            let question = p.tool_name == "AskUserQuestion";
             let stale = p.pane_id == pane_id
                 && (whole_turn
-                    || (p.tool_name == body["tool_name"] && p.tool_input == done_input));
+                    || (tool_done && p.tool_name == *tool && (question || p.tool_input == done_input))
+                    // Claude adds fields of its own to an answered question: match it by name only.
+                    || (next_tool && question && p.tool_name != *tool));
             if stale {
                 let _ = p.tx.send(None);
             }
@@ -426,6 +432,25 @@ mod tests {
             &json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
                 "tool_input": {"questions": questions, "answers": {"Which DB?": "SQLite"}}}),
         );
+        assert_eq!(p.len(), 0);
+        assert_eq!(rx_q.recv_timeout(Duration::from_secs(1)), Ok(None));
+        // Claude adds fields of its own to the answered input: still the same question.
+        let (_q, rx_q) = p.register(
+            "p1",
+            &json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": questions}}),
+        );
+        p.cancel_stale(
+            "p1",
+            &json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": questions, "answers": {}, "annotations": {}}}),
+        );
+        assert_eq!(rx_q.recv_timeout(Duration::from_secs(1)), Ok(None));
+        // Or the agent moved on to another tool.
+        let (_q, rx_q) = p.register(
+            "p1",
+            &json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": questions}}),
+        );
+        p.cancel_stale("p1", &json!({"hook_event_name": "PreToolUse", "tool_name": "Bash"}));
         assert_eq!(p.len(), 0);
         assert_eq!(rx_q.recv_timeout(Duration::from_secs(1)), Ok(None));
     }

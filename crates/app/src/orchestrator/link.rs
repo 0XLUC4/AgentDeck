@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::state::Deck;
 use crate::theme::{hsla, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG, RADIUS_MD, RADIUS_SM};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
@@ -368,7 +369,7 @@ impl LinkWorkspace {
             .gap_2()
             .h_9()
             .px_3()
-            .rounded(ui(6.0))
+            .rounded(ui(RADIUS_MD))
             .border_1()
             .border_color(hsla(p.line))
             .text_color(hsla(p.fg))
@@ -394,8 +395,8 @@ impl LinkWorkspace {
                         .gap(ui(6.0))
                         .h_11()
                         .px_2()
-                        .child(div().h(ui(10.0)).w_1_3().rounded(ui(4.0)).bg(hsla(p.raised)))
-                        .child(div().h_2().w_2_3().rounded(ui(4.0)).bg(hsla(p.raised)).opacity(0.6))
+                        .child(div().h(ui(10.0)).w_1_3().rounded(ui(RADIUS_SM)).bg(hsla(p.raised)))
+                        .child(div().h_2().w_2_3().rounded(ui(RADIUS_SM)).bg(hsla(p.raised)).opacity(0.6))
                 }))
                 .into_any_element(),
             Some(projects) if projects.is_empty() => div()
@@ -438,7 +439,7 @@ impl LinkWorkspace {
                                 .gap_3()
                                 .px_2()
                                 .py(ui(6.0))
-                                .rounded(ui(6.0))
+                                .rounded(ui(RADIUS_MD))
                                 .cursor_pointer()
                                 .when(pressed, |el| el.bg(hsla(p.raised)))
                                 .hover(|s| s.bg(hsla(p.hover)))
@@ -543,7 +544,7 @@ impl LinkWorkspace {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .rounded(ui(6.0))
+                    .rounded(ui(RADIUS_MD))
                     .bg(crate::theme::hsla_a(p.wait, 0.1))
                     .px_3()
                     .py(ui(10.0))
@@ -648,7 +649,7 @@ impl LinkWorkspace {
                                 .gap_2()
                                 .px_2()
                                 .py(ui(6.0))
-                                .rounded(ui(6.0))
+                                .rounded(ui(RADIUS_MD))
                                 .cursor_pointer()
                                 .when(current == name, |el| el.bg(hsla(p.raised)))
                                 .hover(|s| s.bg(hsla(p.hover)))
@@ -788,7 +789,7 @@ impl Render for LinkWorkspace {
                 .items_center()
                 .justify_center()
                 .gap(ui(6.0))
-                .rounded(ui(6.0))
+                .rounded(ui(RADIUS_MD))
                 .text_xs()
                 .cursor_pointer()
                 .when(active, |el| {
@@ -828,12 +829,7 @@ impl Render for LinkWorkspace {
                             .child("Link project"),
                     )
                     .child(
-                        Button::new("link-close")
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(IconName::X))
-                            .tooltip("Close")
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                        crate::panes::close_button("link-close", "Close (Esc)").on_click(|window, cx| window.close_dialog(cx)),
                     ),
             )
             .child(
@@ -841,7 +837,7 @@ impl Render for LinkWorkspace {
                     .grid()
                     .grid_cols(4)
                     .gap_1()
-                    .rounded(ui(8.0))
+                    .rounded(ui(RADIUS_LG))
                     .bg(hsla(p.base))
                     .p_1()
                     .children(tabs),

@@ -81,6 +81,11 @@ pub(crate) async fn race_one(deck: Entity<Deck>, spec: PaneSpec, tab_id: String,
     let id = spec.id.clone();
     // False = still queued or setting up its worktree: the loop below keeps waiting.
     runtime::create_pane(&deck, spec, tab_id, cx).await;
+    send_when_ready(deck, id, text, cx).await
+}
+
+pub(crate) async fn send_when_ready(deck: Entity<Deck>, id: String, text: String, cx: &mut AsyncApp) -> bool {
+    use crate::orchestrator::runtime;
     let mut waited = Duration::ZERO;
     while waited < RACE_START_TIMEOUT {
         if deck.read_with(cx, |d, _| d.state.panes.get(&id).is_none_or(|p| p.exited)) {

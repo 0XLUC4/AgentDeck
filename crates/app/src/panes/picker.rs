@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use agentdeck_core::agents::{AgentInfo, AgentKind, detect_agents};
+use agentdeck_core::agents::{AgentInfo, AgentKind, EXTRA_AGENTS, detect_agents};
 use agentdeck_core::logic::deck::PaneSpec;
 use agentdeck_core::logic::text::{AGENT_KINDS, agent_name, split_args};
 use agentdeck_core::logic::theme::{FONT_MONO, RADIUS_LG, RADIUS_MD, RADIUS_XL};
@@ -17,9 +17,9 @@ use gpui_kit::*;
 
 use super::logo::agent_logo;
 use super::runtime;
-use super::widgets::icon_button;
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_SM};
 
 /// local.json key (was localStorage "add-agent-last").
 const LAST_AGENT_KEY: &str = "add-agent-last";
@@ -56,11 +56,22 @@ fn remember_agent(agent: AgentKind, dir: &std::path::Path) {
 
 /// Starts an agent in the active session tab and remembers it as the quick "Add agent" choice.
 pub fn spawn_agent(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: bool, ssh: Option<String>, cx: &mut App) {
-    spawn_agent_with(agent, cwd, args, worktree, ssh, false, cx);
+    spawn_agent_with(agent, cwd, args, worktree, ssh, None, false, cx);
 }
 
-/// [`spawn_agent`], in chat mode when `chat` (Claude and Codex).
-pub fn spawn_agent_with(agent: AgentKind, cwd: &str, args: Vec<String>, worktree: bool, ssh: Option<String>, chat: bool, cx: &mut App) {
+/// [`spawn_agent`] on a saved host (`host` id, with `ssh` its target and folder), in chat mode
+/// when `chat` (Claude and Codex, local only).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_agent_with(
+    agent: AgentKind,
+    cwd: &str,
+    args: Vec<String>,
+    worktree: bool,
+    ssh: Option<String>,
+    host: Option<String>,
+    chat: bool,
+    cx: &mut App,
+) {
     let Some(deck) = runtime::deck(cx) else { return };
     let (tab, font_size, dir) = deck.update(cx, |d, cx| {
         d.state.last_cwd = cwd.to_owned();
@@ -71,6 +82,7 @@ pub fn spawn_agent_with(agent: AgentKind, cwd: &str, args: Vec<String>, worktree
     let mut spec = PaneSpec::new(agent, agent_name(agent), cwd);
     spec.args = args;
     spec.worktree = worktree;
+    spec.host = host.filter(|_| ssh.is_some());
     spec.ssh = ssh;
     spec.chat = chat;
     spec.font_size = font_size;
@@ -88,6 +100,10 @@ pub struct AgentPicker {
     args: Entity<InputState>,
     /// "user@host:/folder": run the agent on that machine.
     ssh: Entity<InputState>,
+    /// Location: None = this machine (or the free SSH field), else a saved host id.
+    host: Option<String>,
+    /// Folder on the chosen host.
+    remote_dir: Entity<InputState>,
     worktree: bool,
     /// Chat view instead of the terminal (Claude and Codex).
     chat: bool,
@@ -117,6 +133,7 @@ impl AgentPicker {
                 .default_value(defaults.args)
         });
         let ssh = cx.new(|cx| InputState::new(window, cx).placeholder("user@host:/folder/on/that/machine"));
+        let remote_dir = cx.new(|cx| InputState::new(window, cx).placeholder("~ (remote home)"));
         let detect = cx.spawn(async move |this, cx| {
             let list = cx.background_spawn(async { detect_agents() }).await;
             let infos = list.into_iter().map(|info| (info.kind, info)).collect();
@@ -134,6 +151,8 @@ impl AgentPicker {
             cwd,
             args,
             ssh,
+            host: None,
+            remote_dir,
             worktree: defaults.worktree,
             chat: false,
             error: None,
@@ -221,10 +240,76 @@ impl AgentPicker {
         .detach();
     }
 
+    /// "Location: Local | <host>…" (only when hosts are saved, Settings > Hosts).
+    fn location_switch(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let hosts = crate::hosts::list(cx);
+        if hosts.is_empty() {
+            return None;
+        }
+        let p = palette(cx);
+        let options = std::iter::once((None, "Local".to_owned()))
+            .chain(hosts.into_iter().map(|h| (Some(h.id), h.name)))
+            .enumerate()
+            .map(|(i, (id, name))| {
+                let selected = self.host == id;
+                div()
+                    .id(("location", i))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_3()
+                    .py_1()
+                    .rounded(ui(RADIUS_MD))
+                    .cursor_pointer()
+                    .when(selected, |el| el.bg(hsla(p.accent)).text_color(hsla(p.on_accent)))
+                    .when(!selected, |el| el.text_color(hsla(p.muted)).hover(|s| s.bg(hsla(p.hover))))
+                    .on_click(cx.listener(move |this, _, window, cx| this.pick_host(id.clone(), window, cx)))
+                    .when(i > 0, |el| el.child(Icon::new(IconName::Server).size(ui(12.0))))
+                    .child(name)
+            })
+            .collect::<Vec<_>>();
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(label("Location", &p))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .p(ui(2.0))
+                        .rounded(ui(RADIUS_MD))
+                        .border_1()
+                        .border_color(hsla(p.line))
+                        .children(options),
+                ),
+        )
+    }
+
+    fn pick_host(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let folder = id.as_deref().and_then(|id| crate::hosts::get(id, cx)).map(|h| h.folder).unwrap_or_default();
+        self.remote_dir.update(cx, |s, cx| s.set_value(folder, window, cx));
+        self.host = id;
+        self.error = None;
+        cx.notify();
+    }
+
     fn submit(&mut self, cx: &mut Context<Self>) {
         let cwd = self.cwd.read(cx).value().trim().to_owned();
-        let ssh = self.ssh.read(cx).value().trim().to_owned();
-        if cwd.is_empty() {
+        let host = self.host.as_deref().and_then(|id| crate::hosts::get(id, cx));
+        let remote_dir = self.remote_dir.read(cx).value().trim().to_owned();
+        // A saved host fills the same `ssh` target as the free field, plus its id (port, key, tmux).
+        let ssh = match &host {
+            Some(h) => h.ssh_spec(&remote_dir),
+            None => self.ssh.read(cx).value().trim().to_owned(),
+        };
+        if self.host.is_some() && host.is_none() {
+            self.error = Some("This host was removed: pick another location.".into());
+        } else if host.is_some() && !agentdeck_core::hosts::valid_folder(&remote_dir) {
+            self.error = Some("Remote folder: letters, digits and / . _ - ~ only.".into());
+        } else if cwd.is_empty() {
             self.error = Some("Choose a working folder.".into());
         } else if !ssh.is_empty() && agentdeck_core::pty::ssh_target(&ssh).is_none() {
             self.error = Some("SSH: user@host:/folder, without spaces or quotes.".into());
@@ -235,7 +320,8 @@ impl AgentPicker {
         } else {
             let args = split_args(&self.args.read(cx).value());
             let chat = self.chat_mode();
-            spawn_agent_with(self.agent, &cwd, args, self.worktree, (!ssh.is_empty()).then_some(ssh), chat, cx);
+            let host = host.map(|h| h.id);
+            spawn_agent_with(self.agent, &cwd, args, self.worktree, (!ssh.is_empty()).then_some(ssh), host, chat, cx);
             cx.emit(DismissEvent);
         }
         cx.notify();
@@ -325,6 +411,47 @@ impl AgentPicker {
     }
 }
 
+impl AgentPicker {
+    /// "Install…" links of the extra agent CLIs not found on PATH (once detection is done).
+    fn install_more(&self, missing: &[AgentKind], cx: &mut Context<Self>) -> Option<Div> {
+        if self.infos.is_none() || missing.is_empty() {
+            return None;
+        }
+        let p = palette(cx);
+        let links = missing.iter().enumerate().filter_map(|(i, kind)| {
+            let url = self.infos.as_ref()?.get(kind)?.install_url?;
+            Some(
+                div()
+                    .id(("install-extra", i))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py(ui(2.0))
+                    .rounded(ui(RADIUS_MD - 4.0))
+                    .border_1()
+                    .border_color(hsla(p.line))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
+                    .on_click(move |_, _, cx| cx.open_url(url))
+                    .child(agent_logo(*kind, 12.0, None, &p))
+                    .child(agent_name(*kind)),
+            )
+        });
+        Some(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .text_color(hsla(p.muted))
+                .child(div().mr_1().text_color(hsla(p.subtle)).child("Install more:"))
+                .children(links),
+        )
+    }
+}
+
 fn label(text: &'static str, p: &agentdeck_core::logic::theme::Palette) -> Div {
     div().text_xs().font_weight(FontWeight::MEDIUM).text_color(hsla(p.muted)).child(text)
 }
@@ -333,7 +460,14 @@ impl Render for AgentPicker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
         let workspace = self.deck.read(cx).state.active_workspace().name.clone();
-        let rows: Vec<Div> = AGENT_KINDS
+        // Extra CLIs: a card once found on PATH, else an "Install" link under the cards.
+        let (found, missing): (Vec<AgentKind>, Vec<AgentKind>) = EXTRA_AGENTS
+            .iter()
+            .map(AgentKind::Other)
+            .partition(|kind| self.infos.as_ref().and_then(|i| i.get(kind)).is_some_and(|info| info.installed));
+        let kinds: Vec<AgentKind> = AGENT_KINDS.into_iter().chain(found).collect();
+        let install_more = self.install_more(&missing, cx);
+        let rows: Vec<Div> = kinds
             .chunks(2)
             .map(|pair| {
                 div()
@@ -388,7 +522,7 @@ impl Render for AgentPicker {
                                     .child(div().text_size(ui(15.0)).font_weight(FontWeight::MEDIUM).child("Add agent"))
                                     .child(div().text_xs().text_color(hsla(p.subtle)).child(format!("In {workspace}"))),
                             )
-                            .child(icon_button("picker-close", IconName::X, "Close").large().on_click({
+                            .child(crate::panes::close_button("picker-close", "Close").on_click({
                                 let weak = cx.entity().downgrade();
                                 move |_, cx| {
                                     let _ = weak.update(cx, |_, cx| cx.emit(DismissEvent));
@@ -402,8 +536,9 @@ impl Render for AgentPicker {
                             .gap_5()
                             .p_5()
                             // Agent
-                            .child(div().flex().flex_col().gap_2().child(label("Agent", &p)).children(rows))
+                            .child(div().flex().flex_col().gap_2().child(label("Agent", &p)).children(rows).children(install_more))
                             .children(self.mode_switch(cx))
+                            .children(self.location_switch(cx))
                             // Working folder
                             .child(
                                 div()
@@ -471,7 +606,7 @@ impl Render for AgentPicker {
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(hsla(p.muted))
                                             .child(Icon::new(IconName::Globe).size(ui(13.0)))
-                                            .child("Run over SSH")
+                                            .child(if self.host.is_some() { "Folder on the host" } else { "Run over SSH" })
                                             .child(
                                                 div()
                                                     .font_weight(FontWeight::NORMAL)
@@ -479,7 +614,7 @@ impl Render for AgentPicker {
                                                     .child("(optional; no status hooks, Git panel or worktree there)"),
                                             ),
                                     )
-                                    .child(div().font_family(FONT_MONO).text_xs().child(field(&self.ssh))),
+                                    .child(div().font_family(FONT_MONO).text_xs().child(field(if self.host.is_some() { &self.remote_dir } else { &self.ssh }))),
                             )
                             // Worktree
                             .child(
@@ -506,7 +641,7 @@ impl Render for AgentPicker {
                                             .items_center()
                                             .justify_center()
                                             .size(ui(16.0))
-                                            .rounded(ui(4.0))
+                                            .rounded(ui(RADIUS_SM))
                                             .border_1()
                                             .border_color(hsla(if checked { p.accent } else { p.line_strong }))
                                             .when(checked, |b| {

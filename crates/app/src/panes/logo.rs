@@ -1,6 +1,8 @@
 //! Agent brand marks (AgentLogo.tsx, lib/agents.ts): simple-icons paths in a 24x24 viewBox, drawn as
-//! SVG data in the agent color. The shell uses the Lucide SquareTerminal icon.
+//! SVG data in the agent color. The shell uses the Lucide SquareTerminal icon. The extra CLIs use their
+//! mark from `logos_extra`, else the Lucide Bot icon.
 
+use super::logos_extra::extra_mark;
 use agentdeck_core::agents::AgentKind;
 use agentdeck_core::logic::theme::Palette;
 use gpui_kit::assets::IconName;
@@ -28,7 +30,7 @@ fn mark(kind: AgentKind) -> Option<&'static str> {
         AgentKind::Gemini => Some(GEMINI_MARK),
         AgentKind::Grok => Some(GROK_MARK),
         AgentKind::OpenCode => Some(OPENCODE_MARK),
-        AgentKind::Shell => None,
+        AgentKind::Shell | AgentKind::Other(_) => None,
     }
 }
 
@@ -39,9 +41,16 @@ fn svg_data(path: &str) -> String {
 /// Brand mark of an agent in its brand color. `color` overrides it (e.g. on a colored button).
 pub fn agent_logo(kind: AgentKind, size: f32, color: Option<Hsla>, p: &Palette) -> Icon {
     let color = color.unwrap_or_else(|| hsla(p.agent(kind)));
-    let icon = match mark(kind) {
-        Some(path) => Icon::default().data(svg_data(path).as_bytes()),
-        None => Icon::new(IconName::SquareTerminal),
+    let icon = match kind {
+        AgentKind::Other(spec) => match extra_mark(spec.id) {
+            Some(svg) => Icon::default().data(svg.as_bytes()),
+            // Extra CLIs without a bundled mark: a generic bot in their brand color.
+            None => Icon::new(IconName::Bot),
+        },
+        _ => match mark(kind) {
+            Some(path) => Icon::default().data(svg_data(path).as_bytes()),
+            None => Icon::new(IconName::SquareTerminal),
+        },
     };
     icon.size(ui(size)).text_color(color)
 }

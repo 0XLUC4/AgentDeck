@@ -209,7 +209,7 @@ impl DeckView {
         });
         let settings = &deck.read(cx).settings;
         let (sidebar_open, activity_open) = (settings.sidebar_open, settings.activity_open);
-        // The rail shows one panel at a time.
+        // The left panel shows one of them at a time.
         let activity_open = activity_open && !sidebar_open;
         let permission_banner = cx.new(|cx| PermissionBanner::new(deck.clone(), cx));
         let update_button = cx.new(UpdateButton::new);
@@ -329,7 +329,7 @@ impl DeckView {
         }
     }
 
-    /// Opens the Git panel of a pane (its header button, or the rail for the active pane).
+    /// Opens the Git panel of a pane (its header button, or a project's menu in the sidebar).
     pub(super) fn open_git(&mut self, pane_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let deck = self.deck.clone();
         let pane_id = pane_id.to_owned();
@@ -342,18 +342,30 @@ impl DeckView {
         cx.notify();
     }
 
-    /// Projects and Activity share the panel next to the rail: opening one closes the other.
+    /// Projects and Activity share the left panel: opening one closes the other.
+    /// The title bar toggle hides whichever shows, or brings the projects back.
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        // Behind a page the panel is hidden: asking for it closes the page and shows it.
-        self.sidebar_open = crate::skills::close_page(cx) || !self.sidebar_open;
-        self.activity_open &= !self.sidebar_open;
+        let shown = self.left_panel_shown(cx);
+        // Behind a page's own side column the panel is hidden: asking for it closes the page.
+        if side_page_open(cx) {
+            crate::skills::close_page(cx);
+        }
+        self.sidebar_open = !shown;
+        self.activity_open = false;
         cx.notify();
     }
 
+    /// Activity takes the projects' place; closing it brings the projects back.
     pub(super) fn toggle_activity(&mut self, cx: &mut Context<Self>) {
-        self.activity_open = crate::skills::close_page(cx) || !self.activity_open;
-        self.sidebar_open &= !self.activity_open;
+        let covered = side_page_open(cx) && crate::skills::close_page(cx);
+        self.activity_open = covered || !self.activity_open;
+        self.sidebar_open = !self.activity_open;
         cx.notify();
+    }
+
+    /// The projects or activity panel is on screen (not hidden behind a page's side column).
+    pub(super) fn left_panel_shown(&self, cx: &App) -> bool {
+        (self.sidebar_open || self.activity_open) && !side_page_open(cx)
     }
 
     /// Deck.tsx sync: every tab gets a dock holding its panes (and their browsers); panels of
@@ -648,6 +660,11 @@ impl DeckView {
     }
 }
 
+/// The open page brings its own side column (files tree, notes list), shown in the left panel's place.
+fn side_page_open(cx: &App) -> bool {
+    matches!(crate::skills::page_kind(cx), Some("files" | "notes"))
+}
+
 /// Title of a panel (dockview `title`), kept in the saved layout.
 fn panel_title(deck: &Deck, id: &str) -> String {
     if id.starts_with("browser:") {
@@ -732,7 +749,7 @@ impl Render for DeckView {
         let page = crate::skills::page(&active_tab, cx);
         // A page brings its own side column: the Projects or Activity panel steps aside for it.
         let page_side = crate::skills::page_side(cx);
-        let page_open = crate::skills::page_kind(cx).is_some();
+        let side_covered = page_side.is_some();
         let dock = (wall.is_none() && page.is_none()).then(|| self.render_dock(&active_tab, window, cx));
         let pane_area = div()
             .relative()
@@ -743,7 +760,16 @@ impl Render for DeckView {
             .children(dock)
             .when(empty && page.is_none(), |el| el.child(self.empty_session(cx)))
             .when_some(wall, |el, wall| el.child(div().absolute().inset_0().child(wall)))
-            .when_some(page, |el, page| el.child(div().absolute().inset_0().child(page)));
+            .when_some(page, |el, page| {
+                // The Plugins page is heavy (card grid, theme previews) and observes the deck itself:
+                // reuse its last frame while nothing changed, or moving the window stutters on it.
+                let page = if crate::skills::page_kind(cx) == Some("plugins") {
+                    page.cached(StyleRefinement::default().size_full()).into_any_element()
+                } else {
+                    page.into_any_element()
+                };
+                el.child(div().absolute().inset_0().child(page))
+            });
         let main = div()
             .flex()
             .flex_col()
@@ -813,9 +839,8 @@ impl Render for DeckView {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .child(self.rail(cx))
-                    .when(self.sidebar_open && !page_open, |el| el.child(self.sidebar(cx)))
-                    .when(self.activity_open && !page_open, |el| el.child(self.activity_panel(cx)))
+                    .when(self.sidebar_open && !side_covered, |el| el.child(self.sidebar(cx)))
+                    .when(self.activity_open && !side_covered, |el| el.child(self.activity_panel(cx)))
                     .children(page_side)
                     .child(main),
             )

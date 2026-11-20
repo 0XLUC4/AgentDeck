@@ -13,6 +13,7 @@ use gpui_kit::*;
 use super::panel::GitPanel;
 use crate::state::Deck;
 use crate::theme::{hsla, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_SM};
 
 /// One git status costs about ten git processes: refresh once things settle, not on every tool call.
 const REFRESH_DELAY: Duration = Duration::from_millis(2500);
@@ -169,7 +170,7 @@ impl Render for DiffChip {
                 .flex_shrink_0()
                 .items_center()
                 .gap_1()
-                .rounded(ui(4.0))
+                .rounded(ui(RADIUS_SM))
                 .px_1()
                 .font_family(agentdeck_core::logic::theme::FONT_MONO)
                 .text_size(ui(11.0))
@@ -195,7 +196,7 @@ impl Render for DiffChip {
                 .flex_shrink_0()
                 .items_center()
                 .gap_1()
-                .rounded(ui(4.0))
+                .rounded(ui(RADIUS_SM))
                 .px_1()
                 .text_size(ui(11.0))
                 .text_color(hsla(p.subtle))

@@ -70,9 +70,33 @@ pub struct AgentStatusEvent {
     pub edited_file: Option<String>,
 }
 
+/// The hook token, kept across runs in the data folder: agents left running in the session host
+/// carry it in their env, and their hooks must keep working once the app is back.
+const TOKEN_FILE: &str = "hook-token";
+
+fn valid_token(token: &str) -> bool {
+    (32..=64).contains(&token.len()) && token.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// Reads the saved token, else makes and saves a new one (a write failure only costs the reattach).
+fn persistent_token(app: &AppHandle) -> String {
+    let path = app.app_data_dir().map(|dir| dir.join(TOKEN_FILE));
+    if let Ok(path) = &path
+        && let Ok(text) = std::fs::read_to_string(path)
+        && valid_token(text.trim())
+    {
+        return text.trim().to_owned();
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    if let Err(e) = path.and_then(|path| std::fs::write(&path, &token).map_err(|e| format!("{}: {e}", path.display()))) {
+        eprintln!("hook token not saved: {e}");
+    }
+    token
+}
+
 /// Starts the hook server on a background thread.
 pub fn start(app: AppHandle) -> HookServer {
-    let token = uuid::Uuid::new_v4().to_string();
+    let token = persistent_token(&app);
     // Note: a second AgentDeck instance falls back to a random port and rewrites the Claude settings.
     let server =
         Server::http(("127.0.0.1", PREFERRED_PORT)).or_else(|_| Server::http("127.0.0.1:0"));
@@ -400,8 +424,8 @@ fn resolved_event(hook: &Hook) -> AgentStatusEvent {
 
 /// Events for unknown panes (stale or forged ids) are dropped.
 fn pane_exists(app: &AppHandle, pane_id: &str) -> bool {
-    app.try_state::<AppState>()
-        .is_some_and(|s| s.panes.0.lock().is_ok_and(|p| p.contains_key(pane_id)))
+    crate::chat::is_live(pane_id)
+        || app.try_state::<AppState>().is_some_and(|s| s.panes.0.lock().is_ok_and(|p| p.contains_key(pane_id)))
 }
 
 pub(crate) fn header<'a>(req: &'a Request, name: &'static str) -> Option<&'a str> {
@@ -927,6 +951,21 @@ fn describe_tool(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hook_token_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("agentdeck-hook-token-{}", std::process::id()));
+        let app = AppHandle::new(dir.clone());
+        let first = persistent_token(&app);
+        assert!(valid_token(&first));
+        assert_eq!(persistent_token(&app), first);
+        // A damaged file is replaced, never trusted.
+        std::fs::write(dir.join(TOKEN_FILE), "short").unwrap();
+        let second = persistent_token(&app);
+        assert!(valid_token(&second) && second != first);
+        assert!(!valid_token("not a token at all, has spaces and is long enough"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn viewport_calls_switch_the_mobile_preview() {

@@ -190,6 +190,13 @@ impl Voice {
                 return;
             }
         };
+        // Chat panes have no terminal: the text goes into their message box (or straight out).
+        if self.deck.read(cx).state.panes.get(&pane_id).is_some_and(|p| p.chat) {
+            if submit || !crate::chat::dictate(&pane_id, &routed.text, cx) {
+                crate::panes::runtime::send_prompt(&pane_id, &routed.text, cx);
+            }
+            return;
+        }
         let send = send_prompt(&backend, pane_id, &routed.text, submit, cx);
         let deck = self.deck.clone();
         cx.spawn(async move |_, cx| {

@@ -16,6 +16,7 @@ use gpui_kit::component::text::TextView;
 use super::{modal_header, page_frame, segmented};
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG, RADIUS_MD, RADIUS_XL};
 
 // Small force-directed layout: links pull, every pair repels, a weak pull to the center.
 const LINK_LENGTH: f32 = 60.0;
@@ -423,7 +424,7 @@ impl GraphDialog {
                             .id(("linked-note", i))
                             .max_w_full()
                             .truncate()
-                            .rounded(ui(8.0))
+                            .rounded(ui(RADIUS_LG))
                             .border_1()
                             .border_color(hsla(p.line))
                             .px_2()
@@ -442,7 +443,7 @@ impl GraphDialog {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .rounded(ui(12.0))
+                    .rounded(ui(RADIUS_XL))
                     .border_1()
                     .border_color(hsla(p.line))
                     .bg(hsla(p.base))
@@ -462,7 +463,7 @@ impl GraphDialog {
                 .id(("note-row", i))
                 .flex()
                 .flex_col()
-                .rounded(ui(6.0))
+                .rounded(ui(RADIUS_MD))
                 .px_3()
                 .py(ui(6.0))
                 .cursor_pointer()
@@ -531,7 +532,7 @@ impl GraphDialog {
                         div()
                             .id("notes-side-close")
                             .p_1()
-                            .rounded(ui(6.0))
+                            .rounded(ui(RADIUS_MD))
                             .text_color(hsla(p.muted))
                             .cursor_pointer()
                             .hover(move |s| s.bg(hover))
@@ -601,7 +602,7 @@ impl Render for GraphDialog {
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
-                        .rounded(ui(12.0))
+                        .rounded(ui(RADIUS_XL))
                         .border_1()
                         .border_color(hsla(p.line))
                         .bg(hsla(p.base))

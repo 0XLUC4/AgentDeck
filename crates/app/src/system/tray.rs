@@ -1,5 +1,5 @@
-//! System tray icon: "Show AgentDeck" / "Quit" menu, left click toggles the window, tooltip shows
-//! how many agents wait for an answer.
+//! System tray icon: "Show AgentDeck" / "Quit" / "Quit and stop all agents" menu, left click toggles
+//! the window, tooltip shows how many agents wait for an answer.
 
 use gpui_kit::*;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -15,6 +15,7 @@ impl Global for Tray {}
 enum TrayAction {
     Show,
     Quit,
+    QuitAndStop,
     Toggle,
 }
 
@@ -38,6 +39,7 @@ pub(super) fn init(cx: &mut App) {
         let action = match event.id.as_ref() {
             "show" => TrayAction::Show,
             "quit" => TrayAction::Quit,
+            "quit-stop" => TrayAction::QuitAndStop,
             _ => return,
         };
         let _ = menu_tx.send_blocking(action);
@@ -57,6 +59,7 @@ pub(super) fn init(cx: &mut App) {
             cx.update(|cx| match action {
                 TrayAction::Show => super::show_main(cx),
                 TrayAction::Quit => super::quit(cx),
+                TrayAction::QuitAndStop => super::window::quit_and_stop(cx),
                 TrayAction::Toggle => super::window::toggle_main(cx),
             });
         }
@@ -67,7 +70,9 @@ pub(super) fn init(cx: &mut App) {
 fn build() -> Result<TrayIcon, String> {
     let show = MenuItem::with_id("show", "Show AgentDeck", true, None);
     let quit = MenuItem::with_id("quit", "Quit", true, None);
-    let menu = Menu::with_items(&[&show, &PredefinedMenuItem::separator(), &quit]).map_err(|e| e.to_string())?;
+    let quit_stop = MenuItem::with_id("quit-stop", "Quit and stop all agents", true, None);
+    let menu = Menu::with_items(&[&show, &PredefinedMenuItem::separator(), &quit, &quit_stop])
+        .map_err(|e| e.to_string())?;
     let image = image::load_from_memory(ICON_PNG).map_err(|e| e.to_string())?.to_rgba8();
     let (width, height) = image.dimensions();
     let icon = Icon::from_rgba(image.into_raw(), width, height).map_err(|e| e.to_string())?;

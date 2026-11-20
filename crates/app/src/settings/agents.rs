@@ -1,16 +1,17 @@
 //! Settings > Agents: folder trust, resume, ports, rate-limit retry, budget, auto-allowed
 //! permissions and the defaults prefilled in "Add agent".
 
-use agentdeck_core::agents::AgentKind;
-use agentdeck_core::logic::settings::{AutoAllowRule, BudgetSettings, Settings};
-use agentdeck_core::logic::text::{AGENT_KINDS, agent_name};
+use agentdeck_core::agents::{AgentKind, all_agents};
+use agentdeck_core::logic::settings::{AgentPermissions, AutoAllowRule, BudgetSettings, Settings};
+use agentdeck_core::logic::text::agent_name;
 use agentdeck_core::logic::theme::FONT_MONO;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::SettingsDialog;
-use super::controls::{button, field, hint_text, icon_button, row, section, toggle};
+use super::controls::{button, field, hint_text, icon_button, row, section, segmented, toggle};
 use crate::theme::{hsla, ui};
 
 pub(super) struct Agents {
@@ -100,15 +101,21 @@ impl Agents {
             }
         }));
 
-        let args = AGENT_KINDS
-            .into_iter()
+        // Shows the args the agent launches with; the shipped ones are saved as "" so they follow
+        // the permissions switch, anything else is the user's own (left alone by the switch).
+        let args = all_agents()
             .map(|kind| {
                 let state = super::input(window, cx, "Default arguments", &s.agent(kind).args);
                 subs.push(cx.subscribe(&state, move |this, state, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        let args = state.read(cx).value().to_string();
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+                    let typed = state.read(cx).value().trim().to_owned();
+                    let settings = this.settings(cx);
+                    let args = if typed == settings.default_args(kind) { String::new() } else { typed };
+                    if args != settings.stored_agent(kind).args {
                         this.set(cx, |s| {
-                            let mut defaults = s.agent(kind);
+                            let mut defaults = s.stored_agent(kind);
                             defaults.args = args;
                             s.agents.insert(kind, defaults);
                         });
@@ -131,7 +138,36 @@ impl Agents {
     }
 }
 
+const PERMISSIONS: [(AgentPermissions, &str); 2] = [(AgentPermissions::Yolo, "Yolo"), (AgentPermissions::Manual, "Manual")];
+
 impl SettingsDialog {
+    /// Switches the global permissions; agents without custom args show their new shipped flags.
+    fn set_permissions(&mut self, permissions: AgentPermissions, window: &mut Window, cx: &mut Context<Self>) {
+        self.set(cx, |s| s.agent_permissions = permissions);
+        self.refresh_default_args(window, cx);
+    }
+
+    /// Back to the shipped args (the permissions switch applies again).
+    fn reset_args(&mut self, kind: AgentKind, window: &mut Window, cx: &mut Context<Self>) {
+        self.set(cx, |s| {
+            let mut defaults = s.stored_agent(kind);
+            defaults.args.clear();
+            s.agents.insert(kind, defaults);
+        });
+        self.refresh_default_args(window, cx);
+    }
+
+    fn refresh_default_args(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let s = self.settings(cx).clone();
+        for (kind, state) in &self.agents.args {
+            if s.stored_agent(*kind).args.is_empty() {
+                let args = s.default_args(*kind);
+                state.update(cx, |state, cx| state.set_value(args, window, cx));
+            }
+        }
+        cx.notify();
+    }
+
     fn add_rule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let rule = self.agents.rule.read(cx).value().trim().to_owned();
         if rule.is_empty() {
@@ -208,7 +244,33 @@ impl SettingsDialog {
         let p = crate::theme::palette(cx);
         let s = self.settings(cx).clone();
         let a = &self.agents;
+        let permissions = segmented("set-permissions", &PERMISSIONS, s.agent_permissions, &p, {
+            let this = cx.entity().downgrade();
+            move |permissions, window, cx| {
+                let _ = this.update(cx, |this, cx| this.set_permissions(permissions, window, cx));
+            }
+        });
         let mut rows = vec![
+            row(
+                "Agent permissions",
+                Some(
+                    "Yolo starts each agent with its own flag for skipping approval prompts; Manual adds none. Agents whose default arguments you changed below keep them",
+                ),
+                permissions,
+                &p,
+            ),
+        ];
+        if s.agent_permissions == AgentPermissions::Yolo {
+            rows.push(
+                div()
+                    .pb_2()
+                    .text_xs()
+                    .text_color(hsla(p.wait))
+                    .child("Agents run commands and edit files without asking. Use worktrees to keep your checkout safe.")
+                    .into_any_element(),
+            );
+        }
+        rows.extend([
             row(
                 "Trust agent folders automatically",
                 Some(
@@ -289,12 +351,13 @@ impl SettingsDialog {
                 .pt_3()
                 .text_xs()
                 .text_color(hsla(p.subtle))
-                .child("Values prefilled in \"Add agent\".")
+                .child("Values prefilled in \"Add agent\". Reset restores the shipped arguments.")
                 .into_any_element(),
-        ];
-        for (kind, args) in &self.agents.args {
+        ]);
+        for (i, (kind, args)) in self.agents.args.iter().enumerate() {
             let kind = *kind;
             let worktree = s.agent(kind).worktree;
+            let custom = !s.stored_agent(kind).args.is_empty();
             rows.push(
                 div()
                     .flex()
@@ -313,6 +376,9 @@ impl SettingsDialog {
                             .child(div().truncate().text_color(hsla(p.fg)).child(agent_name(kind))),
                     )
                     .child(field(args, None, true))
+                    .child(button(("set-args-reset", i), Some(IconName::RotateCcw), "Reset", !custom, &p).when(custom, |b| {
+                        b.on_click(cx.listener(move |this, _, window, cx| this.reset_args(kind, window, cx)))
+                    }))
                     .child(
                         div()
                             .flex()
@@ -321,10 +387,10 @@ impl SettingsDialog {
                             .gap_2()
                             .text_xs()
                             .text_color(hsla(p.muted))
-                            .child(toggle(("set-worktree", kind as usize), worktree, &p).on_click(cx.listener(
+                            .child(toggle(("set-worktree", i), worktree, &p).on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     this.set(cx, |s| {
-                                        let mut defaults = s.agent(kind);
+                                        let mut defaults = s.stored_agent(kind);
                                         defaults.worktree = !worktree;
                                         s.agents.insert(kind, defaults);
                                     })

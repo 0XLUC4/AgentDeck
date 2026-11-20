@@ -1,4 +1,5 @@
-//! AgentDeck plugins: skills bundled with the app, installed for every agent at once.
+//! AgentDeck plugins: skills bundled with the app, installed for every agent at once, and color
+//! themes (category [`THEMES`]: installing one adds it to Settings > Appearance, using it is apart).
 //!
 //! A plugin is a set of skills (`plugins/<plugin>/<skill>/SKILL.md`, compiled in). Turned on, its
 //! skills are copied into each agent's user skill folder; turned off, they are removed.
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::agents::AgentKind;
+use crate::logic::themes::{self, ThemeVariant};
 
 /// Ownership file inside each skill folder AgentDeck copied.
 pub(crate) const MARKER: &str = ".agentdeck-plugin.json";
@@ -51,6 +53,17 @@ pub struct Plugin {
     /// Ids of older plugins merged into this one: on when one of them was on, until the user picks.
     pub replaces: &'static [&'static str],
     pub skills: &'static [BundledSkill],
+    /// Color theme variants (theme plugins only; they have no skills).
+    pub themes: &'static [ThemeVariant],
+}
+
+/// Category of the theme plugins.
+pub const THEMES: &str = "Themes";
+
+impl Plugin {
+    pub fn is_theme(&self) -> bool {
+        !self.themes.is_empty()
+    }
 }
 
 /// `skill!("plugin", "agentdeck-x", "scripts/y.js", ...)`: the skill's SKILL.md and the other files named.
@@ -66,12 +79,113 @@ macro_rules! skill {
 
 pub const CATALOG: &[Plugin] = &[
     Plugin {
+        id: "theme-tokyo-night",
+        name: "Tokyo Night",
+        description: "Night, Storm and Light: deep blues with neon accents, celebrating the lights of downtown Tokyo.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::TOKYO_NIGHT,
+    },
+    Plugin {
+        id: "theme-catppuccin",
+        name: "Catppuccin",
+        description: "Mocha and Latte: soothing pastels for the night owl and the early bird.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::CATPPUCCIN,
+    },
+    Plugin {
+        id: "theme-dracula",
+        name: "Dracula",
+        description: "Dark theme with vivid pinks, purples and greens, made for long nights.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::DRACULA,
+    },
+    Plugin {
+        id: "theme-nord",
+        name: "Nord",
+        description: "Arctic, north-bluish colors: calm frost blues over polar night greys.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::NORD,
+    },
+    Plugin {
+        id: "theme-one-dark",
+        name: "One Dark",
+        description: "Atom's iconic dark theme: balanced contrast and soft, familiar syntax colors.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::ONE_DARK,
+    },
+    Plugin {
+        id: "theme-gruvbox",
+        name: "Gruvbox",
+        description: "Retro groove: warm earthy colors with high readability, dark medium contrast.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::GRUVBOX,
+    },
+    Plugin {
+        id: "theme-monokai",
+        name: "Monokai",
+        description: "The classic: vivid pink, green and yellow syntax on a warm charcoal background.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::MONOKAI,
+    },
+    Plugin {
+        id: "theme-solarized",
+        name: "Solarized",
+        description: "Dark and Light: precision colors with carefully tuned contrast, by Ethan Schoonover.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::SOLARIZED,
+    },
+    Plugin {
+        id: "theme-github",
+        name: "GitHub",
+        description: "Dark and Light: the colors of github.com, crisp and familiar.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::GITHUB,
+    },
+    Plugin {
+        id: "theme-mono",
+        name: "Mono",
+        description: "Dark and Light: pure grayscale, nothing but contrast. Minimal and distraction free.",
+        category: THEMES,
+        default_on: false,
+        replaces: &[],
+        skills: &[],
+        themes: themes::MONO,
+    },
+    Plugin {
         id: "speech-qa",
         name: "Speech recognition testing",
         description: "Compare dictation builds with the same recordings, word error rate and latency percentiles.",
         category: "Quality",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("speech-qa", "agentdeck-speech-qa", "scripts/score.mjs")],
     },
     Plugin {
@@ -83,6 +197,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Browser",
         default_on: true,
         replaces: &[],
+        themes: &[],
         skills: &[
             skill!("web-browser", "agentdeck-web-check"),
             skill!("web-browser", "agentdeck-mobile-check", "scripts/mobile-audit.js"),
@@ -97,6 +212,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Engineering",
         default_on: false,
         replaces: &["senior-dev", "lean-code", "code-review"],
+        themes: &[],
         skills: &[skill!("engineering", "agentdeck-engineering")],
     },
     Plugin {
@@ -107,6 +223,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Quality",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("debugging", "agentdeck-debug")],
     },
     Plugin {
@@ -117,6 +234,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Quality",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("tests-first", "agentdeck-tests-first")],
     },
     Plugin {
@@ -128,6 +246,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Engineering",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("plan-first", "agentdeck-plan-first", "reference/templates.md", "scripts/check-plan.mjs")],
     },
     Plugin {
@@ -138,6 +257,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Quality",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("security", "agentdeck-security")],
     },
     Plugin {
@@ -148,6 +268,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Performance",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("performance", "agentdeck-web-perf"), skill!("performance", "agentdeck-profile")],
     },
     Plugin {
@@ -158,6 +279,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Engineering",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("git-workflow", "agentdeck-git")],
     },
     Plugin {
@@ -168,6 +290,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Quality",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("review", "agentdeck-review")],
     },
     Plugin {
@@ -178,6 +301,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Engineering",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("project-memory", "agentdeck-project-memory")],
     },
     Plugin {
@@ -188,6 +312,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Engineering",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("backend", "agentdeck-backend")],
     },
     Plugin {
@@ -198,6 +323,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Engineering",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("frontend", "agentdeck-frontend")],
     },
     Plugin {
@@ -208,6 +334,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Engineering",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("upgrade", "agentdeck-upgrade")],
     },
     Plugin {
@@ -218,6 +345,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Research",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("web-research", "agentdeck-web-research")],
     },
     Plugin {
@@ -228,6 +356,7 @@ pub const CATALOG: &[Plugin] = &[
         category: "Style",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("terse", "agentdeck-terse")],
     },
     Plugin {
@@ -238,9 +367,18 @@ pub const CATALOG: &[Plugin] = &[
         category: "3D",
         default_on: false,
         replaces: &[],
+        themes: &[],
         skills: &[skill!("3d", "agentdeck-3d", "reference/blender.md", "reference/realtime.md")],
     },
 ];
+
+/// The theme variant with this id and its plugin (None for "" or an unknown id).
+pub fn theme_variant(id: &str) -> Option<(&'static Plugin, &'static ThemeVariant)> {
+    if id.is_empty() {
+        return None;
+    }
+    CATALOG.iter().find_map(|plugin| plugin.themes.iter().find(|v| v.id == id).map(|v| (plugin, v)))
+}
 
 /// FNV-1a: stable across builds (unlike `DefaultHasher`), enough to spot an edited file.
 fn hash(text: &str) -> String {
@@ -513,6 +651,20 @@ mod tests {
         // A lone SKILL.md keeps the old hash: copies installed by older versions stay untouched.
         assert_eq!(BundledSkill { name: "agentdeck-y", text: "t", files: &[] }.digest(), hash("t"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn theme_plugins_come_first_and_resolve() {
+        assert_eq!(CATALOG[0].category, THEMES, "the Themes chip comes first");
+        for plugin in CATALOG {
+            assert_eq!(plugin.is_theme(), plugin.category == THEMES, "{}", plugin.id);
+            assert!(!plugin.is_theme() || (plugin.skills.is_empty() && !plugin.default_on), "{}", plugin.id);
+            for variant in plugin.themes {
+                assert_eq!(theme_variant(variant.id).map(|(p, _)| p.id), Some(plugin.id));
+            }
+        }
+        assert!(theme_variant("").is_none() && theme_variant("nope").is_none());
+        assert_eq!(theme_variant("tokyo-night-storm").map(|(_, v)| v.name), Some("Storm"));
     }
 
     #[test]

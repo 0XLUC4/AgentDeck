@@ -19,7 +19,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::base::Selectable as _;
-use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::{Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_webview::WebView;
@@ -68,7 +68,8 @@ its phone button. NEVER call `resize_page`, or `emulate` with a viewport: they r
 then leaves the panel. Claude agents: such a call is blocked and switches the mobile preview on (phone \
 width) or off (wider) instead. Other agents: ask the user to click the phone button. `emulate` without a \
 viewport (network, CPU throttling) is fine.
-- The user may send you notes about elements of the page: each one names the element by its CSS selector.
+- The user may send you notes about elements of the page: each one names the element by its CSS selector \
+and is either a Change to make or a Question to answer (answer it, change nothing for it).
 
 # Side tasks: stay inside AgentDeck
 
@@ -98,17 +99,52 @@ const PHONE_HEIGHT: f32 = 844.0;
 const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 \
 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
 
-/// Run in the page: turns annotating on, or off when it is already on. Hovering outlines an
-/// element; a click asks for a note and keeps it in `window.__agentdeckNotes` with the element's
-/// selector, text and HTML. Notes are lost when the page reloads.
-const ANNOTATE_JS: &str = r#"(() => {
-  if (window.__agentdeckAnnotate) { window.__agentdeckAnnotate.stop(); return; }
+/// Run in the page: turns annotating on (nothing when it is already on). Hovering outlines an element; a
+/// click outlines it and opens a popover under it to write a note, marked as a change to make or a
+/// question. Added notes are kept in `window.__agentdeckNotes` with the element's selector, text and
+/// HTML. The popover lives in a closed shadow root, out of reach of the page's styles. Notes are lost
+/// when the page reloads. Icons are Lucide's (crosshair, message-square-plus, pencil, circle-question-mark).
+const ANNOTATE_JS: &str = r##"(() => {
+  if (window.__agentdeckAnnotate) return;
   const notes = window.__agentdeckNotes = window.__agentdeckNotes || [];
-  const box = document.createElement('div');
-  box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #3b82f6;background:rgba(59,130,246,.12);border-radius:3px;';
-  const badge = document.createElement('div');
-  badge.style.cssText = 'position:fixed;z-index:2147483647;right:12px;bottom:12px;padding:6px 10px;border-radius:8px;background:#111;color:#fff;font:12px system-ui;pointer-events:none;';
-  const label = () => { badge.textContent = 'Annotating: click an element (' + notes.length + (notes.length === 1 ? ' note)' : ' notes)'); };
+  const icon = (body) => `<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>${body}</svg>`;
+  const addIcon = icon("<path d='M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z'/><path d='M12 8v6'/><path d='M9 11h6'/>");
+  const changeIcon = icon("<path d='M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z'/><path d='m15 5 4 4'/>");
+  const questionIcon = icon("<circle cx='12' cy='12' r='10'/><path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'/><path d='M12 17h.01'/>");
+  const host = document.createElement('agentdeck-annotate');
+  host.style.cssText = 'all:initial;position:fixed;top:0;left:0;z-index:2147483647;';
+  const root = host.attachShadow({ mode: 'closed' });
+  root.innerHTML = `<style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .box { position: fixed; display: none; pointer-events: none; border: 2px solid #3b82f6; border-radius: 6px; background: rgba(59,130,246,.1); }
+    .pop { position: fixed; display: none; width: 340px; padding: 12px; border-radius: 10px; background: #2b2b2b; border: 1px solid rgba(255,255,255,.1); box-shadow: 0 12px 32px rgba(0,0,0,.45); color: #ececec; font-size: 13px; }
+    .head { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 10px; }
+    .tag { flex: none; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.08); color: #bdbdbd; font: 11px ui-monospace, Consolas, monospace; }
+    .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    textarea { display: block; width: 100%; height: 100px; resize: none; padding: 8px 10px; border-radius: 8px; border: 1px solid #5c5c5c; background: #161616; color: #ececec; font-size: 13px; line-height: 1.4; outline: none; }
+    textarea:focus { border-color: #8c8c8c; }
+    button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: 6px; background: none; color: #a8a8a8; font-size: 13px; cursor: pointer; }
+    button:hover { color: #fff; }
+    .seg { display: flex; margin-top: 10px; padding: 2px; border-radius: 8px; background: #1f1f1f; border: 1px solid rgba(255,255,255,.08); }
+    .seg button { flex: 1; }
+    .seg button.on { background: #404040; color: #fff; }
+    .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .add { background: #ececec; color: #111; font-weight: 500; }
+    .add:hover { color: #111; background: #fff; }
+    .add:disabled { opacity: .5; cursor: default; }
+    .kbd { padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.08); color: #555; font-size: 11px; }
+  </style>
+  <div class='box'></div>
+  <div class='pop'>
+    <div class='head'><span class='tag'></span><span class='title'></span></div>
+    <textarea placeholder='Add feedback for the agent…'></textarea>
+    <div class='seg'><button data-kind='change'>${changeIcon}Change</button><button data-kind='question'>${questionIcon}Question</button></div>
+    <div class='foot'><button class='cancel'>Cancel</button><button class='add'>${addIcon}Add<span class='kbd'>Ctrl ↵</span></button></div>
+  </div>`;
+  const $ = (s) => root.querySelector(s);
+  const box = $('.box'), pop = $('.pop'), text = $('textarea'), add = $('.add'), kinds = root.querySelectorAll('.seg button');
+  let hovered = null, target = null, kind = 'change';
+  const clip = (s, n) => (s || '').replace(/\s+/g, ' ').trim().slice(0, n);
   const selector = (el) => {
     const parts = [];
     while (el && el.nodeType === 1 && parts.length < 5) {
@@ -123,32 +159,79 @@ const ANNOTATE_JS: &str = r#"(() => {
     }
     return parts.join(' > ');
   };
-  const move = (e) => {
-    const r = e.target.getBoundingClientRect();
-    Object.assign(box.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  // What the user sees of the element: its label, then its value or text, e.g. ZIP / Postal "94105".
+  const describe = (el) => {
+    const field = /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+    const attr = (a) => el.getAttribute(a);
+    const label = clip((el.labels && el.labels[0] && el.labels[0].innerText) || attr('aria-label') || attr('placeholder') || attr('name') || attr('alt') || attr('title'), 40);
+    const value = clip(field ? el.value : el.innerText, 40);
+    return [label, value && '"' + value + '"'].filter(Boolean).join(' ');
   };
-  const click = (e) => {
-    e.preventDefault();
+  const outline = (el) => {
+    if (!el || !el.isConnected) { box.style.display = 'none'; return; }
+    const r = el.getBoundingClientRect();
+    Object.assign(box.style, { display: 'block', left: r.left - 3 + 'px', top: r.top - 3 + 'px', width: r.width + 6 + 'px', height: r.height + 6 + 'px' });
+  };
+  // Under the element, or above it when there is no room below; always inside the viewport.
+  const place = () => {
+    outline(target || hovered);
+    if (!target) return;
+    const r = target.getBoundingClientRect(), h = pop.offsetHeight, gap = 8;
+    let top = r.bottom + gap;
+    if (top + h > innerHeight - gap && r.top - gap - h >= gap) top = r.top - gap - h;
+    top = Math.max(gap, Math.min(top, innerHeight - h - gap));
+    const left = Math.max(gap, Math.min(r.left, innerWidth - pop.offsetWidth - gap));
+    Object.assign(pop.style, { top: top + 'px', left: left + 'px' });
+  };
+  const setKind = (k) => { kind = k; kinds.forEach(b => b.classList.toggle('on', b.dataset.kind === k)); };
+  const open = (el) => {
+    target = el;
+    setKind('change');
+    text.value = '';
+    add.disabled = true;
+    $('.tag').textContent = el.tagName.toLowerCase();
+    $('.title').textContent = describe(el);
+    pop.style.display = 'block';
+    place();
+    text.focus();
+  };
+  const close = () => { target = null; pop.style.display = 'none'; place(); };
+  const submit = () => {
+    const note = text.value.trim();
+    if (!note || !target) return;
+    notes.push({ selector: selector(target), text: (target.innerText || target.value || '').trim().slice(0, 120), html: target.outerHTML.slice(0, 400), note: note.slice(0, 1000), kind, url: location.href });
+    close();
+  };
+  kinds.forEach(b => b.addEventListener('click', () => { setKind(b.dataset.kind); text.focus(); }));
+  $('.cancel').addEventListener('click', close);
+  add.addEventListener('click', submit);
+  text.addEventListener('input', () => { add.disabled = !text.value.trim(); });
+  text.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    const el = e.target;
-    const note = window.prompt('Note for the agent about this element');
-    if (note && note.trim()) {
-      notes.push({ selector: selector(el), text: (el.innerText || el.value || '').trim().slice(0, 120), html: el.outerHTML.slice(0, 400), note: note.trim().slice(0, 1000), url: location.href });
-      label();
-    }
-  };
-  document.addEventListener('mousemove', move, true);
-  document.addEventListener('click', click, true);
-  document.body.append(box, badge);
-  label();
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+  });
+  // The page gets no press or click while annotating; the popover gets its own.
+  const ours = (e) => e.composedPath().includes(host);
+  const block = (e) => { if (!ours(e)) { e.preventDefault(); e.stopPropagation(); } };
+  const click = (e) => { if (!ours(e)) { block(e); open(e.target); } };
+  const move = (e) => { if (!ours(e)) { hovered = e.target; if (!target) outline(hovered); } };
+  const events = [['mousemove', move], ['pointerdown', block], ['mousedown', block], ['click', click]];
+  events.forEach(([name, f]) => document.addEventListener(name, f, true));
+  addEventListener('scroll', place, true);
+  addEventListener('resize', place);
+  document.documentElement.append(host);
   window.__agentdeckAnnotate = { stop() {
-    document.removeEventListener('mousemove', move, true);
-    document.removeEventListener('click', click, true);
-    box.remove();
-    badge.remove();
+    events.forEach(([name, f]) => document.removeEventListener(name, f, true));
+    removeEventListener('scroll', place, true);
+    removeEventListener('resize', place);
+    host.remove();
     delete window.__agentdeckAnnotate;
   } };
-})()"#;
+})()"##;
+
+/// Run in the page: turns annotating off, keeping the notes.
+const STOP_ANNOTATE_JS: &str = "window.__agentdeckAnnotate && window.__agentdeckAnnotate.stop()";
 
 /// Reads the notes and empties the list.
 const TAKE_NOTES_JS: &str = "(() => { const n = window.__agentdeckNotes || []; window.__agentdeckNotes = []; return JSON.stringify(n); })()";
@@ -174,9 +257,11 @@ fn notes_prompt(json: &str) -> Option<String> {
         .enumerate()
         .filter_map(|(i, n)| {
             let note = clean(&n["note"], 1000);
+            // A question asks for an answer only; anything else is a change to make.
+            let kind = if n["kind"] == "question" { "Question" } else { "Change" };
             (!note.is_empty()).then(|| {
                 format!(
-                    "{}. {}\n   Element: `{}` (\"{}\")\n   HTML: `{}`\n   Note: {note}",
+                    "{}. {}\n   Element: `{}` (\"{}\")\n   HTML: `{}`\n   {kind}: {note}",
                     i + 1,
                     clean(&n["url"], 300),
                     clean(&n["selector"], 300),
@@ -187,7 +272,12 @@ fn notes_prompt(json: &str) -> Option<String> {
         })
         .collect();
     (!notes.is_empty())
-        .then(|| format!("Changes asked on the page, from notes made in the browser:\n\n{}\n", notes.join("\n\n")))
+        .then(|| {
+            format!(
+                "Notes made on the page in the browser. Make each Change; answer each Question without changing anything:\n\n{}\n",
+                notes.join("\n\n")
+            )
+        })
 }
 
 thread_local! {
@@ -603,14 +693,14 @@ impl BrowserPanel {
     }
 
     /// Turns annotating on or off in the page.
-    fn annotate(&mut self, cx: &mut Context<Self>) {
-        let run = browser_view(&self.pane_id, cx).and_then(|view| {
-            view.read(cx).raw().evaluate_script(ANNOTATE_JS).map_err(|e| e.to_string())
-        });
-        match run {
-            Ok(()) => self.annotating = !self.annotating,
-            Err(e) => self.deck.update(cx, |d, cx| d.toast(format!("Browser: {e}"), cx)),
+    fn set_annotating(&mut self, on: bool, cx: &mut Context<Self>) {
+        let script = if on { ANNOTATE_JS } else { STOP_ANNOTATE_JS };
+        let run = browser_view(&self.pane_id, cx)
+            .and_then(|view| view.read(cx).raw().evaluate_script(script).map_err(|e| e.to_string()));
+        if let Err(e) = &run {
+            self.deck.update(cx, |d, cx| d.toast(format!("Browser: {e}"), cx));
         }
+        self.annotating = on && run.is_ok();
         cx.notify();
     }
 
@@ -768,11 +858,10 @@ impl BrowserPanel {
             .child(
                 Button::new("browser-annotate")
                     .ghost()
-                    
-                    .icon(IconName::Pencil)
+                    .icon(IconName::MessageSquarePlus)
                     .selected(self.annotating)
-                    .tooltip("Annotate: click an element of the page and write a note for the agent")
-                    .on_click(cx.listener(|this, _, _, cx| this.annotate(cx))),
+                    .tooltip("Annotate: click an element of the page and add feedback for the agent")
+                    .on_click(cx.listener(|this, _, _, cx| this.set_annotating(!this.annotating, cx))),
             )
             .child(
                 Button::new("browser-send-notes")
@@ -784,14 +873,40 @@ impl BrowserPanel {
             )
             .when(title.is_some(), |el| {
                 el.child(
-                    Button::new("browser-close")
-                        .ghost()
-                        
-                        .icon(IconName::X)
-                        .tooltip("Close browser")
-                        .on_click(cx.listener(|this, _, window, cx| this.remove(window, cx))),
+                    crate::panes::close_button("browser-close", "Close browser").on_click({
+                        let this = cx.entity().downgrade();
+                        move |window, cx| {
+                            let _ = this.update(cx, |this, cx| this.remove(window, cx));
+                        }
+                    }),
                 )
             })
+    }
+
+    /// Shown under the header while annotating: what to do, and a way out.
+    fn annotate_bar(&self, cx: &mut Context<Self>) -> Div {
+        let p = palette(cx);
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(ui(8.0))
+            .h(ui(34.0))
+            .px(ui(12.0))
+            .bg(hsla(p.panel))
+            .border_b_1()
+            .border_color(hsla(p.line))
+            .text_size(ui(13.0))
+            .text_color(hsla(p.subtle))
+            .child(IconName::Crosshair)
+            .child(div().flex_1().min_w_0().truncate().child("Click an element to add feedback for the agent."))
+            .child(
+                Button::new("browser-annotate-cancel")
+                    .ghost()
+                    .small()
+                    .label("Cancel")
+                    .on_click(cx.listener(|this, _, _, cx| this.set_annotating(false, cx))),
+            )
     }
 }
 
@@ -845,6 +960,7 @@ impl Render for BrowserPanel {
             .size_full()
             .bg(hsla(p.base))
             .child(self.header(cx))
+            .when(self.annotating, |el| el.child(self.annotate_bar(cx)))
             .child(body)
     }
 }
@@ -855,12 +971,13 @@ mod tests {
 
     #[test]
     fn page_notes_become_a_prompt() {
-        let notes = r##"[{"selector": "form > input#zip", "text": "94105", "html": "<input id=\"zip\">", "note": "Accept Canadian\ncodes", "url": "http://localhost:3000/checkout"}, {"note": "  "}]"##;
+        let notes = r##"[{"selector": "form > input#zip", "text": "94105", "html": "<input id=\"zip\">", "note": "Accept Canadian\ncodes", "url": "http://localhost:3000/checkout"}, {"note": "  "}, {"note": "Why is this required?", "kind": "question"}]"##;
         let prompt = notes_prompt(notes).unwrap();
         assert!(prompt.contains("1. http://localhost:3000/checkout"));
         assert!(prompt.contains("Element: `form > input#zip` (\"94105\")"));
-        // A line break in a note cannot start a line of its own.
-        assert!(prompt.contains("Note: Accept Canadian codes"));
+        // A line break in a note cannot start a line of its own; no kind is a change.
+        assert!(prompt.contains("Change: Accept Canadian codes"));
+        assert!(prompt.contains("Question: Why is this required?"));
         // The webview hands the JSON back as a JSON string.
         let wrapped = serde_json::to_string(notes).unwrap();
         assert_eq!(notes_prompt(&wrapped), Some(prompt));

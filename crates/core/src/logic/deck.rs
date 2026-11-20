@@ -58,6 +58,10 @@ pub struct PaneSpec {
     /// "user@host:/dir": the agent runs on that machine through ssh (no hooks, no worktree).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<String>,
+    /// Saved host (`hosts::Host::id`) of an ssh pane: its port, key and tmux session. A deleted
+    /// host leaves `ssh` working as a plain target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     /// Chat view instead of the terminal: the agent runs headless (JSONL) behind a message list.
     #[serde(default, skip_serializing_if = "is_false")]
     pub chat: bool,
@@ -92,6 +96,7 @@ impl PaneSpec {
             color: None,
             port: None,
             ssh: None,
+            host: None,
             chat: false,
             worker: false,
         }

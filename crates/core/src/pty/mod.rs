@@ -84,7 +84,7 @@ fn send_output(pane_id: &str, text: &str) {
 /// Starts the thread that writes a pane's input in order. A child slow to read its input (large
 /// paste, busy agent) blocks this thread, never the caller. It ends when the sender is dropped
 /// with the pane, so input queued for an old process never reaches a restarted one.
-fn spawn_writer(
+pub(crate) fn spawn_writer(
     pane_id: &str,
     mut writer: Box<dyn Write + Send>,
 ) -> std::io::Result<mpsc::Sender<Vec<u8>>> {
@@ -103,15 +103,33 @@ fn spawn_writer(
     Ok(tx)
 }
 
-pub struct Pane {
+/// A pseudoconsole owned by this process: it dies with the app.
+struct Local {
     master: Box<dyn MasterPty + Send>,
     /// Input queue drained by the pane's writer thread (`spawn_writer`).
     writer: mpsc::Sender<Vec<u8>>,
     child: Box<dyn Child + Send + Sync>,
-    run: u64,
     /// Dropped last: closing it kills the agent's whole process tree (MCP servers, dev servers...).
     #[cfg(windows)]
     _job: Option<job::Job>,
+}
+
+/// A pseudoconsole owned by the session host: it outlives the app.
+struct Hosted {
+    /// The host's run number: output and exit events of an older process are ignored.
+    host_run: u64,
+    /// Feeds `stream_output` (through [`ChannelReader`]); dropped on exit, which ends the stream.
+    output: Option<mpsc::Sender<Vec<u8>>>,
+}
+
+enum Proc {
+    Local(Local),
+    Hosted(Hosted),
+}
+
+pub struct Pane {
+    proc: Proc,
+    run: u64,
 }
 
 #[derive(Default)]
@@ -119,18 +137,171 @@ pub struct Panes(pub Mutex<HashMap<String, Pane>>);
 
 impl Panes {
     /// Writes raw bytes to a pane's PTY. Used by commands and by the voice module.
-    /// Never blocks on the child: the bytes are queued for the pane's writer thread, which logs
-    /// write errors.
+    /// Never blocks on the child: the bytes are queued for the pane's writer thread (or the session
+    /// host's connection), which logs write errors.
     pub fn write(&self, pane_id: &str, data: &[u8]) -> Result<(), String> {
-        self.0
-            .lock()
-            .map_err(|e| e.to_string())?
-            .get(pane_id)
-            .ok_or("pane not found")?
-            .writer
-            .send(data.to_vec())
-            .map_err(|_| "pane input closed".to_string())
+        {
+            let panes = self.0.lock().map_err(|e| e.to_string())?;
+            if let Proc::Local(local) = &panes.get(pane_id).ok_or("pane not found")?.proc {
+                return local
+                    .writer
+                    .send(data.to_vec())
+                    .map_err(|_| "pane input closed".to_string());
+            }
+        }
+        let client = crate::session_host::client().ok_or("session host disconnected")?;
+        let data = String::from_utf8_lossy(data).into_owned();
+        client.send(&crate::session_host::Request::Write { pane: pane_id.to_owned(), data })
     }
+}
+
+/// `Read` over the chunks a hosted pane receives: lets `stream_output` batch, record and report the
+/// exit of hosted panes exactly as it does for local ones. EOF once the sender is dropped.
+struct ChannelReader {
+    rx: mpsc::Receiver<Vec<u8>>,
+    chunk: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for ChannelReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        while self.pos >= self.chunk.len() {
+            match self.rx.recv() {
+                Ok(chunk) => {
+                    self.chunk = chunk;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = buf.len().min(self.chunk.len() - self.pos);
+        buf[..n].copy_from_slice(&self.chunk[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+/// Registers a hosted pane and starts its output stream. `first_output` (what the host printed
+/// before the reply) goes out as normal output.
+fn start_hosted(
+    app: &AppHandle,
+    pane_id: &str,
+    host_run: u64,
+    first_output: String,
+    recorder: Option<crate::history::Recorder>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    if !first_output.is_empty() {
+        let _ = tx.send(first_output.into_bytes());
+    }
+    let run = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut panes = state.panes.0.lock().map_err(|e| e.to_string())?;
+        if panes.contains_key(pane_id) {
+            return Err(crate::session_host::ALREADY_RUNNING.into());
+        }
+        let proc = Proc::Hosted(Hosted { host_run, output: Some(tx) });
+        panes.insert(pane_id.to_owned(), Pane { proc, run });
+    }
+    let reader = ChannelReader { rx, chunk: Vec::new(), pos: 0 };
+    stream_output(app.clone(), pane_id.to_owned(), run, Box::new(reader), recorder);
+    Ok(())
+}
+
+/// The output sender of a hosted pane whose host run is `host_run`.
+fn hosted_sender(app: &AppHandle, pane_id: &str, host_run: u64) -> Option<mpsc::Sender<Vec<u8>>> {
+    let state = app.try_state::<AppState>()?;
+    let panes = state.panes.0.lock().ok()?;
+    match &panes.get(pane_id)?.proc {
+        Proc::Hosted(h) if h.host_run == host_run => h.output.clone(),
+        _ => None,
+    }
+}
+
+/// Session host output for a pane (dropped when the pane is not, or no longer, ours).
+pub(crate) fn hosted_output(app: &AppHandle, pane_id: &str, host_run: u64, data: Vec<u8>) {
+    if let Some(tx) = hosted_sender(app, pane_id, host_run) {
+        let _ = tx.send(data);
+    }
+}
+
+/// The hosted process ended: ends its stream, which flushes and emits `pane-exit` as usual.
+pub(crate) fn hosted_exit(app: &AppHandle, pane_id: &str, host_run: u64) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let Ok(mut panes) = state.panes.0.lock() else { return };
+    if let Some(Pane { proc: Proc::Hosted(h), .. }) = panes.get_mut(pane_id)
+        && h.host_run == host_run
+    {
+        h.output = None;
+    }
+}
+
+/// The host connection dropped: its processes are gone (they die with it), every hosted pane ends.
+pub(crate) fn hosted_lost(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let Ok(mut panes) = state.panes.0.lock() else { return };
+    for pane in panes.values_mut() {
+        if let Proc::Hosted(h) = &mut pane.proc {
+            h.output = None;
+        }
+    }
+}
+
+/// Reattaches to a pane the session host still runs (app restarted). `on_replay` gets the output
+/// it kept, before any live output reaches the pane's subscribers. Ok without doing anything when
+/// the pane is already ours.
+pub fn attach_hosted(
+    app: &AppHandle,
+    pane_id: &str,
+    on_replay: Box<dyn FnOnce(String) + Send>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.panes.0.lock().map_err(|e| e.to_string())?.contains_key(pane_id) {
+        return Ok(());
+    }
+    let client = crate::session_host::client().ok_or("session host not connected")?;
+    let (app, id) = (app.clone(), pane_id.to_owned());
+    let pane = id.clone();
+    client
+        .call(
+            move |req| crate::session_host::Request::Attach { id: req, pane },
+            move |reply| {
+                let reply = reply.into_result()?;
+                let meta = &reply.meta;
+                let recorder = crate::history::Recorder::start(&id, &meta.agent, &meta.cwd, meta.title.clone());
+                on_replay(reply.scrollback);
+                start_hosted(&app, &id, reply.run, String::new(), recorder)
+            },
+        )
+        .unwrap_or_else(|| Err("session host did not answer".into()))
+}
+
+/// Live panes: ours and those the session host runs without us (after a restart).
+pub fn list_all_panes(state: &AppState) -> Result<Vec<String>, String> {
+    let mut ids = list_panes(state)?;
+    if let Some(hosted) = crate::session_host::client().and_then(|c| c.list()) {
+        for info in hosted {
+            if !ids.contains(&info.pane) {
+                ids.push(info.pane);
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// Panes whose process lives in this app (not in the session host): they end when the app quits.
+pub fn local_pane_ids(state: &AppState) -> Vec<String> {
+    state.panes.0.lock().map_or_else(
+        |_| Vec::new(),
+        |panes| {
+            panes
+                .iter()
+                .filter(|(_, p)| matches!(p.proc, Proc::Local(_)))
+                .map(|(id, _)| id.clone())
+                .collect()
+        },
+    )
 }
 
 /// Spawns an agent (or a plain shell) in a new PTY under `pane_id`.
@@ -166,6 +337,10 @@ pub fn spawn_pane(
     }
     let mut env = env;
     let ssh = env.remove(SSH_ENV);
+    // Validated by `validate_extra_env`: a saved host (port, key, tmux) for this ssh pane.
+    let host = env
+        .remove(crate::hosts::HOST_ENV)
+        .and_then(|v| serde_json::from_str::<crate::hosts::Host>(&v).ok());
     let cwd = if worktree && ssh.is_none() {
         agents::create_worktree(&cwd, &pane_id)?
     } else {
@@ -181,21 +356,16 @@ pub fn spawn_pane(
 
     #[cfg(all(windows, target_arch = "x86_64"))]
     conpty::preload();
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
 
     let mut cmd: CommandBuilder = match ssh.as_deref().map(ssh_target) {
-        Some(Some((host, dir))) => {
-            let mut cmd = CommandBuilder::new("ssh");
-            cmd.args(["-t", host, &ssh_command(agent, dir, &args)]);
-            cmd
-        }
+        Some(Some((target, dir))) => match &host {
+            Some(host) => host.agent_command(agent, dir, &args, &pane_id),
+            None => {
+                let mut cmd = CommandBuilder::new("ssh");
+                cmd.args(["-t", target, &ssh_command(agent, dir, &args)]);
+                cmd
+            }
+        },
         Some(None) => return Err("SSH target: user@host:/folder".into()),
         None => {
             let args = [
@@ -209,7 +379,28 @@ pub fn spawn_pane(
     };
     cmd.cwd(&cwd);
     set_agent_env(&mut cmd, &app, &state, &pane_id, agent, &env, trust, &cwd);
+    let agent_name = serde_json::to_value(agent).ok();
+    let agent_name = agent_name.as_ref().and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    let meta = crate::session_host::Meta { agent: agent_name, cwd: cwd.clone(), title };
 
+    // In the session host when possible: the agent then survives quitting the app.
+    if crate::session_host::enabled()
+        && let Some(client) = crate::session_host::connect_or_start(&app)
+    {
+        match spawn_hosted(&app, &client, &pane_id, &cmd, &cwd, (cols, rows), meta.clone()) {
+            Some(result) => return result,
+            None => eprintln!("pane {pane_id}: session host did not answer, starting in process"),
+        }
+    }
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     #[cfg(windows)]
     let job = child.process_id().and_then(job::Job::adopt);
@@ -223,20 +414,55 @@ pub fn spawn_pane(
     state.panes.0.lock().map_err(|e| e.to_string())?.insert(
         pane_id.clone(),
         Pane {
-            master: pair.master,
-            writer,
-            child,
+            proc: Proc::Local(Local {
+                master: pair.master,
+                writer,
+                child,
+                #[cfg(windows)]
+                _job: job,
+            }),
             run,
-            #[cfg(windows)]
-            _job: job,
         },
     );
     watch_exit(app.clone(), pane_id.clone(), run);
-    let agent_name = serde_json::to_value(agent).ok();
-    let agent_name = agent_name.as_ref().and_then(|v| v.as_str()).unwrap_or("");
-    let recorder = crate::history::Recorder::start(&pane_id, agent_name, &cwd, title);
+    let recorder = crate::history::Recorder::start(&pane_id, &meta.agent, &cwd, meta.title);
     stream_output(app, pane_id, run, reader, recorder);
     Ok(())
+}
+
+/// Spawns the prepared command in the session host and registers the pane. None: the host did not
+/// answer (the caller falls back to an in-process pane); Some(Err): the spawn itself failed.
+fn spawn_hosted(
+    app: &AppHandle,
+    client: &crate::session_host::client::Client,
+    pane_id: &str,
+    cmd: &CommandBuilder,
+    cwd: &str,
+    (cols, rows): (u16, u16),
+    meta: crate::session_host::Meta,
+) -> Option<Result<(), String>> {
+    let argv: Vec<String> = cmd.get_argv().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let env: Vec<(String, String)> = cmd
+        .iter_full_env_as_str()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    let (app, id) = (app.clone(), pane_id.to_owned());
+    let request = |req| crate::session_host::Request::Spawn {
+        id: req,
+        pane: pane_id.to_owned(),
+        argv,
+        cwd: cwd.to_owned(),
+        env,
+        cols,
+        rows,
+        meta,
+    };
+    client.call(request, move |reply| {
+        let reply = reply.into_result()?;
+        let meta = &reply.meta;
+        let recorder = crate::history::Recorder::start(&id, &meta.agent, &meta.cwd, meta.title.clone());
+        start_hosted(&app, &id, reply.run, reply.scrollback, recorder)
+    })
 }
 
 /// Env of every agent process: AgentDeck's pane id and hook server, minus a parent Claude's session.
@@ -338,16 +564,22 @@ pub fn resize_pane(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let panes = state.panes.0.lock().map_err(|e| e.to_string())?;
-    let pane = panes.get(&pane_id).ok_or("pane not found")?;
-    pane.master
-        .resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())
+    {
+        let panes = state.panes.0.lock().map_err(|e| e.to_string())?;
+        if let Proc::Local(local) = &panes.get(&pane_id).ok_or("pane not found")?.proc {
+            return local
+                .master
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| e.to_string());
+        }
+    }
+    let client = crate::session_host::client().ok_or("session host disconnected")?;
+    client.send(&crate::session_host::Request::Resize { pane: pane_id, cols, rows })
 }
 
 pub fn kill_pane(state: &AppState, pane_id: String) -> Result<(), String> {
@@ -358,9 +590,17 @@ pub fn kill_pane(state: &AppState, pane_id: String) -> Result<(), String> {
         .lock()
         .map_err(|e| e.to_string())?
         .remove(&pane_id);
-    if let Some(mut pane) = pane {
+    match pane {
         // Already-exited children return an error here; that's fine.
-        let _ = pane.child.kill();
+        Some(Pane { proc: Proc::Local(mut local), .. }) => {
+            let _ = local.child.kill();
+        }
+        // Hosted, or a host pane not attached (orphan after a restart): the host kills it.
+        _ => {
+            if let Some(client) = crate::session_host::client() {
+                client.send(&crate::session_host::Request::Kill { pane: pane_id })?;
+            }
+        }
     }
     Ok(())
 }
@@ -394,7 +634,9 @@ fn watch_exit(app: AppHandle, pane_id: String, run: u64) {
                 return;
             };
             let exited = match panes.get_mut(&pane_id) {
-                Some(pane) if pane.run == run => !matches!(pane.child.try_wait(), Ok(None)),
+                Some(Pane { proc: Proc::Local(local), run: r }) if *r == run => {
+                    !matches!(local.child.try_wait(), Ok(None))
+                }
                 _ => return, // killed, EOF already handled, or replaced by a newer run
             };
             if exited {
@@ -506,18 +748,27 @@ pub fn ssh_target(target: &str) -> Option<(&str, &str)> {
     (host_ok && plain(dir, "/._-~")).then_some((host, dir))
 }
 
-/// The remote command: the agent in `dir`, through a login shell so its PATH is the user's.
-fn ssh_command(agent: AgentKind, dir: &str, args: &[String]) -> String {
+/// `s` as one single-quoted POSIX shell word.
+pub(crate) fn sh_quote(s: &str) -> String {
     const QUOTE: char = '\x27';
     // 'it'\''s': the only way to put a quote inside single quotes.
-    let quote = |s: &str| format!("{QUOTE}{}{QUOTE}", s.replace(QUOTE, "\x27\\\x27\x27"));
+    format!("{QUOTE}{}{QUOTE}", s.replace(QUOTE, "\x27\\\x27\x27"))
+}
+
+/// The agent with its arguments, through a login shell so its PATH is the user's.
+pub(crate) fn login_run(agent: AgentKind, args: &[String]) -> String {
     let mut run = format!("exec {}", agent.binary().unwrap_or("\"$SHELL\" -l"));
     for arg in args {
         run.push(' ');
-        run.push_str(&quote(arg));
+        run.push_str(&sh_quote(arg));
     }
+    format!("exec \"$SHELL\" -lc {}", sh_quote(&run))
+}
+
+/// The remote command: the agent in `dir`, through a login shell so its PATH is the user's.
+fn ssh_command(agent: AgentKind, dir: &str, args: &[String]) -> String {
     let cd = if dir.is_empty() { String::new() } else { format!("cd {dir} && ") };
-    format!("{cd}exec \"$SHELL\" -lc {}", quote(&run))
+    format!("{cd}{}", login_run(agent, args))
 }
 
 fn validate_spawn_input(pane_id: &str, args: &[String]) -> Result<(), String> {
@@ -552,6 +803,9 @@ fn validate_extra_env(env: &HashMap<String, String>) -> Result<(), String> {
         // OpenCode's browser MCP server and role, as inline JSON config.
         "OPENCODE_CONFIG_CONTENT" => serde_json::from_str::<serde_json::Value>(v).is_ok_and(|c| c.is_object()),
         SSH_ENV => ssh_target(v).is_some(),
+        crate::hosts::HOST_ENV => {
+            serde_json::from_str::<crate::hosts::Host>(v).is_ok_and(|host| host.validate().is_ok())
+        }
         _ => false,
     });
     ok.then_some(())
@@ -579,7 +833,7 @@ fn is_current_run(app: &AppHandle, pane_id: &str, run: u64) -> bool {
 
 /// Drains the longest valid UTF-8 prefix of at most `max` bytes, keeping an
 /// incomplete trailing multi-byte sequence for the next chunk (unless `flush_all`).
-fn take_valid_utf8(pending: &mut Vec<u8>, max: usize, flush_all: bool) -> String {
+pub(crate) fn take_valid_utf8(pending: &mut Vec<u8>, max: usize, flush_all: bool) -> String {
     let mut limit = pending.len().min(max);
     if limit < pending.len() {
         // Don't split a multi-byte char at the size cap (continuation bytes are 10xxxxxx).
@@ -668,6 +922,26 @@ mod tests {
         // The iterator ends when the thread exits and drops the writer.
         let written: Vec<u8> = out_rx.iter().flatten().collect();
         assert_eq!(written, b"abcdef");
+    }
+
+    /// Hosted panes read their output through a channel: chunks come out whole or split to fit the
+    /// buffer, in order, and EOF follows the sender's drop.
+    #[test]
+    fn channel_reader_streams_chunks_then_eof() {
+        use std::io::Read;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut reader = super::ChannelReader { rx, chunk: Vec::new(), pos: 0 };
+        tx.send(b"hello".to_vec()).unwrap();
+        tx.send(Vec::new()).unwrap(); // an empty chunk is skipped, not read as EOF
+        tx.send(b"!".to_vec()).unwrap();
+        drop(tx);
+        let mut buf = [0u8; 3];
+        assert_eq!(reader.read(&mut buf).unwrap(), 3);
+        assert_eq!(&buf, b"hel");
+        let mut rest = Vec::new();
+        reader.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, b"lo!");
+        assert_eq!(reader.read(&mut buf).unwrap(), 0);
     }
 
     #[test]

@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::deck::{FONT_SIZE_DEFAULT, clamp_font_size};
-use super::text::AGENT_KINDS;
-use crate::agents::AgentKind;
+use crate::agents::{AgentKind, all_agents};
 
 pub const DEFAULT_FONT_FAMILY: &str = "Cascadia Code, Consolas, monospace";
 /// Interface zoom in percent: 80..=150 in steps of 10.
@@ -35,6 +34,16 @@ pub fn step_ui_zoom(current: u32, delta: i32) -> u32 {
 pub struct AgentDefaults {
     pub args: String,
     pub worktree: bool,
+}
+
+/// What agents may do without asking, applied at launch to agents whose arguments were not customized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentPermissions {
+    /// Each agent's bypass flag (`AgentKind::yolo_args`): worktrees are the sandbox.
+    Yolo,
+    /// No flag: agents ask before running commands or editing files.
+    Manual,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,12 +93,16 @@ pub enum ThemeMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Appearance {
     pub theme: ThemeMode,
     /// "#rrggbb", or "" for the theme's neutral accent.
     pub accent: String,
     /// "#rrggbb" tinting the app's surfaces, or "" for neutral grey.
     pub background: String,
+    /// Id of the theme plugin variant in use (`plugins::theme_variant`); "" = AgentDeck's own theme.
+    #[serde(default)]
+    pub color_theme: String,
 }
 
 /// Phone page on the local network (`core::remote`): off until the user turns it on.
@@ -112,10 +125,17 @@ pub struct Settings {
     pub activity_open: bool,
     /// Closing the main window hides it in the system tray instead of quitting.
     pub close_to_tray: bool,
+    /// Agents run in the session host: quitting the app leaves them working, the next start reattaches.
+    #[serde(default = "default_true")]
+    pub keep_agents_on_quit: bool,
     /// Re-arranges a session's panes in a grid whenever one is added or removed.
     pub auto_grid: bool,
     pub notify: NotifySettings,
+    /// Per agent: `args` "" = the shipped defaults (see [`Settings::default_args`]), else the user's own.
     pub agents: BTreeMap<AgentKind, AgentDefaults>,
+    /// New installs: Yolo. A settings file saved before this option keeps Manual (its old behavior).
+    #[serde(default = "manual")]
+    pub agent_permissions: AgentPermissions,
     pub trust_agent_folders: bool,
     pub resume_sessions: bool,
     pub stuck_minutes: u32,
@@ -155,6 +175,10 @@ fn default_true() -> bool {
     true
 }
 
+fn manual() -> AgentPermissions {
+    AgentPermissions::Manual
+}
+
 fn default_ui_zoom() -> u32 {
     UI_ZOOM_DEFAULT
 }
@@ -169,11 +193,29 @@ impl Settings {
             .unwrap_or(plugin.default_on)
     }
 
+    /// Launch defaults of `kind`: its custom args, or the shipped ones when none were set.
     pub fn agent(&self, kind: AgentKind) -> AgentDefaults {
+        let mut defaults = self.stored_agent(kind);
+        if defaults.args.trim().is_empty() {
+            defaults.args = self.default_args(kind);
+        }
+        defaults
+    }
+
+    /// What the user saved for `kind` (`args` "" = shipped defaults). Edit this one, not [`Self::agent`].
+    pub fn stored_agent(&self, kind: AgentKind) -> AgentDefaults {
         self.agents.get(&kind).cloned().unwrap_or(AgentDefaults {
             args: String::new(),
             worktree: false,
         })
+    }
+
+    /// The args `kind` ships with: its bypass flags under Yolo, none under Manual.
+    pub fn default_args(&self, kind: AgentKind) -> String {
+        match self.agent_permissions {
+            AgentPermissions::Yolo => kind.yolo_args().join(" "),
+            AgentPermissions::Manual => String::new(),
+        }
     }
 }
 
@@ -186,6 +228,7 @@ impl Default for Settings {
             sidebar_open: true,
             activity_open: false,
             close_to_tray: false,
+            keep_agents_on_quit: true,
             auto_grid: true,
             notify: NotifySettings {
                 enabled: true,
@@ -200,6 +243,7 @@ impl Default for Settings {
                 voice: String::new(),
                 rate: 1.0,
             },
+            agent_permissions: AgentPermissions::Yolo,
             trust_agent_folders: true,
             resume_sessions: true,
             stuck_minutes: 10,
@@ -223,10 +267,10 @@ impl Default for Settings {
                 theme: ThemeMode::Dark,
                 accent: String::new(),
                 background: String::new(),
+                color_theme: String::new(),
             },
             ui_zoom: UI_ZOOM_DEFAULT,
-            agents: AGENT_KINDS
-                .into_iter()
+            agents: all_agents()
                 .map(|k| {
                     (
                         k,
@@ -298,7 +342,10 @@ pub fn merge_settings(raw: &Value) -> Settings {
         sidebar_open: boolean(&raw["sidebarOpen"], d.sidebar_open),
         activity_open: boolean(&raw["activityOpen"], d.activity_open),
         close_to_tray: boolean(&raw["closeToTray"], d.close_to_tray),
+        keep_agents_on_quit: boolean(&raw["keepAgentsOnQuit"], d.keep_agents_on_quit),
         auto_grid: boolean(&raw["autoGrid"], d.auto_grid),
+        // Absent from a saved file: it predates the option, keep its behavior (no bypass flags).
+        agent_permissions: serde_json::from_value(raw["agentPermissions"].clone()).unwrap_or(AgentPermissions::Manual),
         trust_agent_folders: boolean(&raw["trustAgentFolders"], d.trust_agent_folders),
         resume_sessions: boolean(&raw["resumeSessions"], d.resume_sessions),
         stuck_minutes: minutes(&raw["stuckMinutes"], d.stuck_minutes),
@@ -355,16 +402,12 @@ pub fn merge_settings(raw: &Value) -> Settings {
             theme: serde_json::from_value(ap["theme"].clone()).unwrap_or(d.appearance.theme),
             accent: hex_color(&ap["accent"]),
             background: hex_color(&ap["background"]),
+            color_theme: ap["colorTheme"].as_str().unwrap_or("").trim().to_owned(),
         },
         ui_zoom: raw["uiZoom"].as_f64().filter(|z| z.is_finite()).map_or(d.ui_zoom, clamp_ui_zoom),
-        agents: AGENT_KINDS
-            .into_iter()
+        agents: all_agents()
             .map(|k| {
-                let key = serde_json::to_value(k).ok();
-                let a = key
-                    .as_ref()
-                    .and_then(Value::as_str)
-                    .map_or(&Value::Null, |name| &raw["agents"][name]);
+                let a = &raw["agents"][k.id()];
                 (
                     k,
                     AgentDefaults {
@@ -386,7 +429,41 @@ mod tests {
     fn defaults_for_garbage() {
         assert_eq!(merge_settings(&Value::Null), Settings::default());
         assert_eq!(merge_settings(&json!("nope")), Settings::default());
-        assert_eq!(merge_settings(&json!({ "notify": 3, "agents": [] })), Settings::default());
+        // A saved file without the permissions key predates it: Manual, all else default.
+        let old = Settings { agent_permissions: AgentPermissions::Manual, ..Settings::default() };
+        assert_eq!(merge_settings(&json!({ "notify": 3, "agents": [] })), old);
+    }
+
+    #[test]
+    fn permissions_new_install_yolo_old_file_manual() {
+        assert_eq!(Settings::default().agent_permissions, AgentPermissions::Yolo);
+        assert_eq!(merge_settings(&Value::Null).agent_permissions, AgentPermissions::Yolo);
+        assert_eq!(merge_settings(&json!({ "fontSize": 14 })).agent_permissions, AgentPermissions::Manual);
+        assert_eq!(merge_settings(&json!({ "agentPermissions": "yolo" })).agent_permissions, AgentPermissions::Yolo);
+        assert_eq!(merge_settings(&json!({ "agentPermissions": "nope" })).agent_permissions, AgentPermissions::Manual);
+        // A derived load of an old file (no key) also keeps Manual.
+        let mut raw = serde_json::to_value(Settings::default()).unwrap();
+        raw.as_object_mut().unwrap().remove("agentPermissions");
+        let old: Settings = serde_json::from_value(raw).unwrap();
+        assert_eq!(old.agent_permissions, AgentPermissions::Manual);
+    }
+
+    #[test]
+    fn yolo_fills_only_uncustomized_args() {
+        let mut s = merge_settings(&json!({
+            "agentPermissions": "yolo",
+            "agents": { "claude": { "args": "--model opus", "worktree": true }, "gemini": { "worktree": true } },
+        }));
+        // Custom args are an explicit override: left alone.
+        assert_eq!(s.agent(AgentKind::Claude).args, "--model opus");
+        assert_eq!(s.agent(AgentKind::Codex).args, "--dangerously-bypass-approvals-and-sandbox");
+        let gemini = s.agent(AgentKind::Gemini);
+        assert_eq!((gemini.args.as_str(), gemini.worktree), ("--yolo", true));
+        assert_eq!(s.stored_agent(AgentKind::Gemini).args, "");
+        assert_eq!(s.agent(AgentKind::Shell).args, "");
+        s.agent_permissions = AgentPermissions::Manual;
+        assert_eq!(s.agent(AgentKind::Codex).args, "");
+        assert_eq!(s.agent(AgentKind::Claude).args, "--model opus");
     }
 
     #[test]
@@ -405,7 +482,7 @@ mod tests {
         assert_eq!(s.agent(AgentKind::Claude).args, "--model opus");
         assert!(s.agent(AgentKind::Claude).worktree);
         assert_eq!(s.agent(AgentKind::Codex).args, "");
-        assert_eq!(s.agents.len(), 6);
+        assert_eq!(s.agents.len(), all_agents().count());
     }
 
     #[test]
@@ -432,6 +509,11 @@ mod tests {
         assert_eq!(s.appearance.accent, "#4f8ff7");
         let bad = merge_settings(&json!({ "appearance": { "theme": "neon", "accent": "red", "background": 3 } }));
         assert_eq!(bad.appearance, Settings::default().appearance);
+        // The color theme survives a save (camelCase key) and old files without it load.
+        let mut themed = Settings::default();
+        themed.appearance.color_theme = "nord".into();
+        assert_eq!(merge_settings(&serde_json::to_value(&themed).unwrap()).appearance.color_theme, "nord");
+        assert_eq!(s.appearance.color_theme, "");
     }
 
     #[test]

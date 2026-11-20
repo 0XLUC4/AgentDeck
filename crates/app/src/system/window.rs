@@ -77,8 +77,20 @@ pub(super) fn toggle_main(cx: &mut App) {
     }
 }
 
-/// Kills every agent process, then exits.
+/// Exits. Agents in the session host keep running (Settings "Keep agents running after quit"):
+/// the next start reattaches to them. With that setting off, it is [`quit_and_stop`].
 pub fn quit(cx: &mut App) {
+    let keep = main_deck(cx).is_some_and(|d| d.read(cx).settings.keep_agents_on_quit);
+    if keep {
+        detach_agents(cx);
+    } else {
+        stop_agents(cx);
+    }
+    cx.quit();
+}
+
+/// Kills every agent process, hosted ones included, then exits.
+pub fn quit_and_stop(cx: &mut App) {
     stop_agents(cx);
     cx.quit();
 }
@@ -144,11 +156,29 @@ fn stop_agents(cx: &mut App) {
         let backend = deck.read(cx).backend.clone();
         if let Some(state) = backend.try_state::<AppState>() {
             let ids = agentdeck_core::pty::list_panes(&state).unwrap_or_default();
-            for id in ids {
-                if let Err(e) = agentdeck_core::pty::kill_pane(&state, id) {
-                    eprintln!("quit: kill pane: {e}");
-                }
-            }
+            kill_panes(&state, ids);
+        }
+    }
+    // Hosted agents not attached to any pane too; the host then exits (an update needs its exe free).
+    agentdeck_core::session_host::shutdown();
+}
+
+/// Quit that leaves hosted agents running: saves the deck (their panes come back from it) and stops
+/// only the agents that live in this process.
+fn detach_agents(cx: &mut App) {
+    if let Some(deck) = main_deck(cx) {
+        deck.update(cx, |d, cx| d.save_now(cx));
+        let backend = deck.read(cx).backend.clone();
+        if let Some(state) = backend.try_state::<AppState>() {
+            kill_panes(&state, agentdeck_core::pty::local_pane_ids(&state));
+        }
+    }
+}
+
+fn kill_panes(state: &AppState, ids: Vec<String>) {
+    for id in ids {
+        if let Err(e) = agentdeck_core::pty::kill_pane(state, id) {
+            eprintln!("quit: kill pane: {e}");
         }
     }
 }

@@ -16,7 +16,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::logo::agent_logo;
-use super::picker::spawn_agent;
+use super::picker::spawn_agent_with;
 use super::runtime::{self, is_busy};
 use super::widgets::icon_button;
 use crate::state::Deck;
@@ -239,7 +239,9 @@ impl PaneHeader {
         let Some(pane) = self.deck.read(cx).state.panes.get(&id).cloned() else { return };
         match action {
             MenuAction::Rename => self.start_rename(window, cx),
-            MenuAction::Duplicate => spawn_agent(pane.agent, &pane.cwd, pane.spec.args.clone(), pane.worktree, pane.ssh.clone(), cx),
+            MenuAction::Duplicate => {
+                spawn_agent_with(pane.agent, &pane.cwd, pane.spec.args.clone(), pane.worktree, pane.ssh.clone(), pane.host.clone(), false, cx)
+            }
             MenuAction::Restart => confirm_restart(&id, window, cx),
             MenuAction::ZoomIn | MenuAction::ZoomOut => {
                 let delta = if matches!(action, MenuAction::ZoomIn) { 1.0 } else { -1.0 };
@@ -628,7 +630,7 @@ impl PaneHeader {
                 .disabled(pane.exited)
                 .on_click(move |_, cx| runtime::interrupt_pane(&interrupt_id, cx)),
             )
-            .when(pane.agent != AgentKind::Shell, |t| {
+            .when(!matches!(pane.agent, AgentKind::Shell | AgentKind::Other(_)), |t| {
                 t.child(
                     icon_button("skills", IconName::Puzzle, "Skills: see, edit, install (GitHub link), uninstall")
                         .on_click(emit(PaneHeaderEvent::OpenSkills)),

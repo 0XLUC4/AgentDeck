@@ -159,9 +159,8 @@ impl rpc::Host for AppHost<'_> {
     }
 
     fn alive(&self, pane_id: &str) -> bool {
-        self.app
-            .try_state::<AppState>()
-            .is_some_and(|s| s.panes.0.lock().is_ok_and(|p| p.contains_key(pane_id)))
+        crate::chat::is_live(pane_id)
+            || self.app.try_state::<AppState>().is_some_and(|s| s.panes.0.lock().is_ok_and(|p| p.contains_key(pane_id)))
     }
 
     fn statuses(&self) -> &status::Statuses {

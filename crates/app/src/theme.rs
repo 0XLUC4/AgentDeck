@@ -3,6 +3,9 @@
 
 use agentdeck_core::logic::settings::Appearance;
 use agentdeck_core::logic::theme::Palette;
+use std::sync::Arc;
+
+use gpui_kit::component::highlighter::{HighlightTheme, ThemeStyle};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::*;
 
@@ -111,5 +114,62 @@ pub fn apply(appearance: &Appearance, window: Option<&mut Window>, cx: &mut App)
         c.info = hsla(p.busy);
         c.scrollbar_thumb = hsla(p.line_strong);
         c.window_border = hsla(p.line);
+        t.highlight_theme = Arc::new(highlight_theme(&p, &t.highlight_theme));
     });
+}
+
+/// Code editor and code block colors from our palette, so syntax follows light/dark like the rest.
+fn highlight_theme(p: &Palette, base: &HighlightTheme) -> HighlightTheme {
+    // ThemeStyle cannot be built outside its crate: it comes from the same JSON as the kit's themes.
+    let style = |hex: u32, italic: bool| -> Option<ThemeStyle> {
+        let font_style = if italic { "italic" } else { "normal" };
+        serde_json::from_value(serde_json::json!({ "color": format!("#{hex:06x}"), "font_style": font_style })).ok()
+    };
+    let color = |hex: u32| style(hex, false);
+    let mut theme = base.clone();
+    let editor = &mut theme.style;
+    editor.editor_background = Some(hsla(p.base));
+    editor.editor_foreground = Some(hsla(p.fg));
+    editor.editor_gutter_background = Some(hsla(p.base));
+    editor.editor_active_line = Some(hsla(p.panel));
+    editor.editor_line_number = Some(hsla(p.subtle));
+    editor.editor_active_line_number = Some(hsla(p.fg));
+    editor.editor_invisible = Some(hsla(p.line_strong));
+    let (code, s) = (&p.syntax, &mut editor.syntax);
+    (s.comment, s.comment_doc) = (style(code.comment, true), style(code.comment, true));
+    (s.keyword, s.preproc) = (color(code.keyword), color(code.keyword));
+    (s.string, s.string_special, s.text_literal, s.text_code_span) =
+        (color(code.string), color(code.string), color(code.string), color(code.string));
+    (s.string_escape, s.string_regex) = (color(code.type_), color(code.type_));
+    (s.number, s.boolean, s.constant, s.string_special_symbol) =
+        (color(code.number), color(code.number), color(code.number), color(code.number));
+    (s.type_, s.enum_, s.constructor, s.variant) = (color(code.type_), color(code.type_), color(code.type_), color(code.type_));
+    (s.attribute, s.label) = (color(code.type_), color(code.type_));
+    (s.function, s.title, s.link_uri) = (color(code.function), color(code.function), color(code.function));
+    (s.tag, s.variable_special) = (color(code.tag), color(code.tag));
+    (s.variable, s.property, s.emphasis_strong) = (color(p.fg), color(p.fg), color(p.fg));
+    s.emphasis = style(p.fg, true);
+    s.link_text = color(code.string);
+    (s.operator, s.punctuation, s.punctuation_bracket, s.punctuation_delimiter) =
+        (color(p.muted), color(p.muted), color(p.muted), color(p.muted));
+    (s.punctuation_special, s.punctuation_list_marker) = (color(p.muted), color(p.muted));
+    theme
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HighlightTheme, Palette, highlight_theme, hsla};
+
+    #[test]
+    fn syntax_colors_come_from_the_palette() {
+        let monokai = agentdeck_core::plugins::theme_variant("monokai").unwrap().1.palette();
+        for p in [Palette::dark(), Palette::light(), monokai] {
+            let theme = highlight_theme(&p, &HighlightTheme::default_dark());
+            assert_eq!(theme.style.syntax.style("keyword").and_then(|s| s.color), Some(hsla(p.syntax.keyword)));
+            assert_eq!(theme.style.syntax.style("string").and_then(|s| s.color), Some(hsla(p.syntax.string)));
+            let comment = theme.style.syntax.style("comment").unwrap();
+            assert_eq!(comment.font_style, Some(gpui_kit::FontStyle::Italic));
+            assert_eq!(theme.style.editor_background, Some(hsla(p.base)));
+        }
+    }
 }

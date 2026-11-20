@@ -13,6 +13,7 @@ use gpui_kit::*;
 use serde_json::Value;
 
 use crate::theme::{hsla, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG, RADIUS_MD};
 
 const ENDPOINT: &str = "https://github.com/0XLUC4/AgentDeck/releases/latest/download/latest.json";
 /// `plugins.updater.pubkey` of tauri.conf.json (base64 of the minisign.pub file).
@@ -391,7 +392,7 @@ impl Render for UpdateButton {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .rounded(ui(6.0))
+            .rounded(ui(RADIUS_MD))
             .text_size(ui(16.0)) // same icon size as the other title bar buttons (icon_button)
             .text_color(hsla(if self.open { p.fg } else { p.muted }))
             .when(self.open, |d| d.bg(hsla(p.raised)))
@@ -423,7 +424,7 @@ impl Render for UpdateButton {
             .mt(ui(34.0))
             .w(ui(288.0))
             .p_3()
-            .rounded(ui(8.0))
+            .rounded(ui(RADIUS_LG))
             .border_1()
             .border_color(hsla(p.line))
             .bg(hsla(p.panel))
@@ -483,7 +484,7 @@ impl Render for UpdateButton {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(ui(6.0))
+                            .rounded(ui(RADIUS_MD))
                             .bg(hsla(p.busy))
                             .text_color(hsla(p.on_accent))
                             .font_weight(FontWeight::MEDIUM)
@@ -519,7 +520,7 @@ impl Render for UpdateButton {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(ui(6.0))
+                                .rounded(ui(RADIUS_MD))
                                 .text_color(hsla(p.muted))
                                 .when(checking, |d| d.opacity(0.5))
                                 .when(!checking, |d| d.hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg))))

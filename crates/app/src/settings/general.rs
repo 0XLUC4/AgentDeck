@@ -14,6 +14,7 @@ use super::SettingsDialog;
 use super::controls::{button, confirm, error_text, field, hint_text, row, section, toggle};
 use crate::system::{autostart_enabled, set_autostart};
 use crate::theme::{hsla, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG};
 
 pub(super) struct General {
     font_size: Entity<SliderState>,
@@ -84,7 +85,7 @@ fn qr(text: &str) -> AnyElement {
         .flex_shrink_0()
         .size(ui(176.0))
         .p(ui(10.0))
-        .rounded(ui(8.0))
+        .rounded(ui(RADIUS_LG))
         .bg(white())
         .child(
             canvas(
@@ -251,8 +252,14 @@ impl SettingsDialog {
         ));
         rows.push(row(
             "Close to system tray",
-            Some("Closing the window hides it; Quit from the tray icon stops everything"),
+            Some("Closing the window hides it in the tray icon"),
             flag("set-close-tray", s.close_to_tray, |s, v| s.close_to_tray = v, cx),
+            &p,
+        ));
+        rows.push(row(
+            "Keep agents running after quit",
+            Some("Agents keep working when AgentDeck quits and reattach when it reopens. \"Quit and stop all agents\" in the tray stops them. Applies to agents started after the change"),
+            flag("set-keep-agents", s.keep_agents_on_quit, |s, v| s.keep_agents_on_quit = v, cx),
             &p,
         ));
         rows.push(row(

@@ -88,6 +88,75 @@ fn list_models(root: &Path) -> Vec<AssetFile> {
     files
 }
 
+/// Markdown reports, listed among the changed deliverables only.
+const MARKDOWN_EXTS: &[&str] = &["md", "markdown"];
+
+/// Deliverables changed in a Git worktree, for the "Changed deliverables" view.
+#[derive(Debug)]
+pub struct ChangedAssets {
+    /// Root of the worktree: the files' `rel` are relative to it, previews read under it.
+    pub root: String,
+    pub files: Vec<AssetFile>,
+}
+
+/// Paths `git status --porcelain -z --no-renames` reports as modified, added or untracked; deleted
+/// ones (in the index or the working tree) are left out.
+fn changed_paths(porcelain: &str) -> Vec<&str> {
+    porcelain
+        .split('\0')
+        .filter(|record| record.len() > 3)
+        .filter(|record| !record[..2].contains('D'))
+        .map(|record| &record[3..])
+        .collect()
+}
+
+/// Images, 3D models and Markdown files modified or untracked in the Git worktree holding `dir`
+/// (ignored and deleted files left out). Git only tells which worktree a file changed in, not
+/// which agent wrote it. Blocking: call off the UI thread.
+pub fn changed_deliverables(dir: String) -> Result<ChangedAssets, String> {
+    let start = Path::new(&dir);
+    if !start.is_dir() {
+        return Err(format!("{dir} is not a folder"));
+    }
+    let root = crate::agents::find_repo_root(start).ok_or_else(|| format!("not a Git repository: {dir}"))?;
+    let mut cmd = Command::new("git");
+    cmd.arg("-c")
+        .arg(format!("safe.directory={}", root.to_string_lossy().replace('\\', "/")))
+        .arg("-C")
+        .arg(&root)
+        .args(["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"])
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git status: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let porcelain = String::from_utf8_lossy(&out.stdout);
+    let exts: Vec<&str> = MODEL_EXTS.iter().chain(IMAGE_EXTS).chain(MARKDOWN_EXTS).copied().collect();
+    let mut files: Vec<AssetFile> = changed_paths(&porcelain)
+        .into_iter()
+        .filter_map(|rel| {
+            let rel = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
+            let path = root.join(&rel);
+            let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+            // Deleted since git looked, or a folder (submodule): not a deliverable.
+            let meta = std::fs::metadata(&path).ok().filter(std::fs::Metadata::is_file)?;
+            exts.contains(&ext.as_str()).then(|| AssetFile {
+                path: path.to_string_lossy().into_owned(),
+                rel,
+                ext,
+                size: meta.len(),
+            })
+        })
+        .collect();
+    files.sort_by_key(|f| f.rel.to_lowercase());
+    Ok(ChangedAssets { root: root.to_string_lossy().into_owned(), files })
+}
+
 /// The file must sit inside the workspace: the webview only reads model files of the folder it shows.
 pub(crate) fn inside(cwd: &str, path: &str) -> Result<PathBuf, String> {
     let root = std::fs::canonicalize(cwd).map_err(|e| format!("cannot open {cwd}: {e}"))?;
@@ -247,5 +316,81 @@ mod tests {
             .is_err()
         );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn changed_paths_skip_deletions() {
+        let out = " M models/ship.glb\0?? shots/a.png\0D  old.png\0 D gone.md\0AD tmp.md\0A  docs/r.md\0";
+        assert_eq!(changed_paths(out), ["models/ship.glb", "shots/a.png", "docs/r.md"]);
+        assert!(changed_paths("").is_empty());
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> bool {
+        Command::new("git").arg("-C").arg(dir).args(args).output().is_ok_and(|o| o.status.success())
+    }
+
+    /// A repo with one commit: a tracked model, a tracked image to delete, a tracked source file.
+    /// None when git cannot be run.
+    fn temp_repo(base: &Path, name: &str) -> Option<PathBuf> {
+        let repo = base.join(name);
+        std::fs::create_dir_all(repo.join("models")).unwrap();
+        std::fs::write(repo.join("models/ship.obj"), "v 0 0 0\n").unwrap();
+        std::fs::write(repo.join("old.png"), b"x").unwrap();
+        std::fs::write(repo.join("main.rs"), "fn main() {}\n").unwrap();
+        let ok = git(&repo, &["init", "-q"])
+            && git(&repo, &["config", "user.name", "t"])
+            && git(&repo, &["config", "user.email", "t@t"])
+            && git(&repo, &["add", "."])
+            && git(&repo, &["commit", "-q", "-m", "init"]);
+        ok.then_some(repo)
+    }
+
+    /// Brief scenario: same file names in two worktrees, a modified tracked model, an untracked
+    /// capture and report; deleted files and other formats left out; each list points to its own copy.
+    #[test]
+    fn lists_changed_deliverables_per_worktree() {
+        let base = std::env::temp_dir().join(format!("agentdeck-changed-{}", uuid::Uuid::new_v4()));
+        let Some(one) = temp_repo(&base, "one") else {
+            eprintln!("git not available: skipped");
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        };
+        // A linked worktree of the same repo, as AgentDeck creates for an agent.
+        let two = base.join("two");
+        assert!(git(&one, &["worktree", "add", "-q", "-b", "agentdeck/two", &two.to_string_lossy()]));
+        for repo in [&one, &two] {
+            std::fs::write(repo.join("models/ship.obj"), "v 1 1 1\n").unwrap(); // modified, tracked
+            std::fs::create_dir_all(repo.join("out")).unwrap();
+            std::fs::write(repo.join("out/capture.png"), b"png").unwrap(); // untracked
+            std::fs::write(repo.join("out/report.md"), "# Report\n").unwrap(); // untracked
+            std::fs::write(repo.join("main.rs"), "fn main() { }\n").unwrap(); // not a deliverable
+            std::fs::remove_file(repo.join("old.png")).unwrap(); // deleted
+        }
+        std::fs::write(two.join("out/report.md"), "# Second\n").unwrap();
+        let sep = std::path::MAIN_SEPARATOR;
+        // Asked from a subfolder: the whole worktree is listed, relative to its root.
+        let listed = changed_deliverables(one.join("out").to_string_lossy().into_owned()).unwrap();
+        let rels: Vec<&str> = listed.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, [format!("models{sep}ship.obj"), format!("out{sep}capture.png"), format!("out{sep}report.md")]);
+        assert_eq!(Path::new(&listed.root), one.as_path());
+        let other = changed_deliverables(two.to_string_lossy().into_owned()).unwrap();
+        let report = other.files.iter().find(|f| f.ext == "md").unwrap();
+        assert!(report.path.starts_with(&*two.to_string_lossy()));
+        assert_eq!(std::fs::read_to_string(&report.path).unwrap(), "# Second\n");
+        assert!(inside(&other.root, &report.path).is_ok());
+
+        // No changes: an empty list, not an error.
+        assert!(git(&one, &["add", "-A"]) && git(&one, &["commit", "-q", "-m", "work"]));
+        assert!(changed_deliverables(one.to_string_lossy().into_owned()).unwrap().files.is_empty());
+        // Outside Git: an error the view shows; the usual gallery still lists the folder.
+        let plain = base.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("a.png"), b"x").unwrap();
+        // A temp dir inside a repo would be found as one: only check when it is not.
+        if crate::agents::find_repo_root(&plain).is_none() {
+            assert!(changed_deliverables(plain.to_string_lossy().into_owned()).unwrap_err().contains("not a Git repository"));
+        }
+        assert_eq!(assets_list(plain.to_string_lossy().into_owned()).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

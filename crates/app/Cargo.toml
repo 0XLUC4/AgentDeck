@@ -9,7 +9,8 @@ gpu = ["agentdeck-core/gpu"]
 
 [dependencies]
 agentdeck-core.workspace = true
-gpui-kit = "0.9"
+# syntect: the kit's light syntax highlighter (code editor of the Files page, code blocks).
+gpui-kit = { version = "0.9", features = ["syntect"] }
 serde.workspace = true
 serde_json.workspace = true
 smol = "2"

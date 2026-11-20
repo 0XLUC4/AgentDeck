@@ -126,6 +126,12 @@ impl Deck {
         match event.name.as_str() {
             "agent-status" => {
                 if let Ok(e) = serde_json::from_value::<AgentStatusEvent>(event.payload.clone()) {
+                    if e.status == agentdeck_core::hooks_server::PaneStatus::Done
+                        && let Some(summary) = e.summary.as_deref().filter(|s| !s.trim().is_empty())
+                        && let Err(error) = crate::bots::record_result(&self.data_dir, &e.pane_id, summary, cx)
+                    {
+                        self.toast(format!("Bot result could not be saved: {error}"), cx);
+                    }
                     let started = self.state.panes.get(&e.pane_id).and_then(|p| p.task_started_at);
                     self.tasks.entry(e.pane_id.clone()).or_default().apply(&TaskEvent::from(&e), now, started.unwrap_or(now));
                     // A terminal notification is no hook: output keeps driving the status of such panes.

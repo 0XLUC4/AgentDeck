@@ -14,6 +14,7 @@ use gpui_kit::*;
 use super::controls::{Opt, button, field, icon, row, section, toggle};
 use super::{SettingsDialog, speech};
 use crate::theme::{hsla, ui};
+use agentdeck_core::logic::theme::{RADIUS_SM};
 
 type VoiceSelect = SelectState<Vec<Opt>>;
 
@@ -139,7 +140,7 @@ impl SettingsDialog {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(ui(3.0))
+                        .rounded(ui(RADIUS_SM))
                         .border_1()
                         .border_color(hsla(if on { p.accent } else { p.line_strong }))
                         .when(on, |d| d.bg(hsla(p.accent)).child(icon(IconName::Check, 12.0, p.on_accent))),

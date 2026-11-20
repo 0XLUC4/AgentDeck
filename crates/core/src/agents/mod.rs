@@ -1,5 +1,5 @@
-//! Agent definitions (Claude Code, Codex, Gemini CLI, Grok, OpenCode), install detection,
-//! git worktrees and hook configuration.
+//! Agent definitions (Claude Code, Codex, Gemini CLI, Grok, OpenCode, plus the data-driven `EXTRA_AGENTS`),
+//! install detection, git worktrees and hook configuration.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,23 +11,118 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub mod browser_guard;
+pub mod cli_update;
 pub mod worktree_prep;
 
 use crate::hooks_server::{BROWSER_PORT_ENV, HookServer, TOKEN_HEADER, browser_server};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// The built-in agents have their own variant (hooks, chat, skills...); every other CLI is one
+/// `Other` row of [`EXTRA_AGENTS`]: a plain terminal agent with output-based status.
+/// Serialized as its id ("claude", "aider"...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AgentKind {
     Claude,
     Codex,
     Gemini,
     Grok,
-    #[serde(rename = "opencode")]
     OpenCode,
     Shell,
+    Other(&'static AgentSpec),
+}
+
+/// A terminal agent CLI described by data. Facts come from each vendor's docs (`install_url`).
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AgentSpec {
+    /// Saved id: never change it once shipped.
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Executable looked up on PATH (Windows: .exe/.cmd/.ps1 through PATHEXT).
+    pub binary: &'static str,
+    pub install_url: &'static str,
+    /// npm package, for the update check.
+    pub npm: Option<&'static str>,
+    /// Flags that run the interactive TUI without approval prompts ("Yolo" permissions).
+    pub yolo: &'static [&'static str],
+    /// Brand color 0xRRGGBB (logo tint, color dot). `None` ([`MONO`]): a black/white brand, drawn in
+    /// the theme's neutral agent color (the OpenAI mark's) so it reads in light and dark themes.
+    pub color: Option<u32>,
+}
+
+/// Color of a black/white brand: see [`AgentSpec::color`].
+pub const MONO: Option<u32> = None;
+
+/// Extra agent CLIs, in picker order. Only agents whose binary, install and bypass flag were
+/// checked against official docs belong here.
+/// `yolo` empty: no documented interactive flag (or the CLI never asks), so Yolo adds nothing.
+/// Colors are each brand's primary color (lobehub icon metadata, simple-icons or the official site,
+/// see `panes/logos_extra.rs` in the app); black/white brands are [`MONO`]. Cosmetic only.
+pub static EXTRA_AGENTS: &[AgentSpec] = &[
+    spec("copilot", "GitHub Copilot", "copilot", "https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli", Some("@github/copilot"), &["--yolo"], MONO),
+    // The installer's command is `agent` (docs: cursor.com/docs/cli/reference/parameters).
+    spec("cursor", "Cursor CLI", "agent", "https://cursor.com/docs/cli/installation", None, &["--yolo"], MONO),
+    spec("aider", "Aider", "aider", "https://aider.chat/docs/install.html", None, &["--yes-always"], Some(0x14b014)),
+    spec("goose", "Goose", "goose", "https://goose-docs.ai/docs/getting-started/installation", None, &[], MONO),
+    spec("amp", "Amp", "amp", "https://ampcode.com/docs/cli", Some("@sourcegraph/amp"), &[], Some(0xf34e3f)),
+    spec("kilo", "Kilo Code", "kilo", "https://kilo.ai/docs/cli", Some("@kilocode/cli"), &[], Some(0xf8f676)),
+    spec("kiro", "Kiro CLI", "kiro-cli", "https://kiro.dev/docs/getting-started/installation/", None, &["chat", "--trust-all-tools"], Some(0x9046ff)),
+    spec("crush", "Crush", "crush", "https://github.com/charmbracelet/crush#installation", Some("@charmland/crush"), &["--yolo"], Some(0xff5fd2)),
+    spec("auggie", "Auggie", "auggie", "https://docs.augmentcode.com/cli", Some("@augmentcode/auggie"), &[], MONO),
+    spec("cline", "Cline", "cline", "https://docs.cline.bot/cline-cli/overview", Some("cline"), &[], MONO),
+    spec("codebuddy", "CodeBuddy Code", "codebuddy", "https://www.codebuddy.ai/docs/cli/installation", Some("@tencent-ai/codebuddy-code"), &["--dangerously-skip-permissions"], Some(0x6c4dff)),
+    spec("codebuff", "Codebuff", "codebuff", "https://www.npmjs.com/package/codebuff", Some("codebuff"), &[], Some(0x22d3ee)),
+    spec("freebuff", "Freebuff", "freebuff", "https://freebuff.com/cli", Some("freebuff"), &[], Some(0x34d399)),
+    spec("continue", "Continue", "cn", "https://docs.continue.dev/cli/quickstart", Some("@continuedev/cli"), &["--auto"], Some(0x5b5bd6)),
+    spec("devin", "Devin CLI", "devin", "https://docs.devin.ai/cli", None, &["--permission-mode", "dangerous"], MONO),
+    spec("droid", "Droid", "droid", "https://docs.factory.com/reference/cli-reference", Some("droid"), &[], MONO),
+    spec("kimi", "Kimi Code", "kimi", "https://moonshotai.github.io/kimi-code/en/guides/getting-started", Some("@moonshot-ai/kimi-code"), &["--auto"], MONO),
+    spec("vibe", "Mistral Vibe", "vibe", "https://docs.mistral.ai/vibe/code/cli/work-with-cli", None, &["--agent", "auto-approve"], Some(0xfa520f)),
+    spec("minimax", "MiniMax Code", "mcode", "https://code.minimax.io/docs/cli/quick-start", Some("@minimax-ai/code"), &[], Some(0xf23f5d)),
+    spec("qoder", "Qoder CLI", "qoder", "https://docs.qoder.com/cli/installation", Some("@qoder-ai/qodercli"), &["--yolo"], Some(0x2adb5c)),
+    spec("qwen", "Qwen Code", "qwen", "https://github.com/QwenLM/qwen-code#installation", Some("@qwen-code/qwen-code"), &["--yolo"], Some(0x6950ef)),
+    spec("hermes", "Hermes Agent", "hermes", "https://hermes-agent.nousresearch.com/docs", None, &["--yolo"], MONO),
+    spec("antigravity", "Antigravity CLI", "agy", "https://antigravity.google/docs/cli/overview", None, &["--dangerously-skip-permissions"], MONO),
+    spec("muse", "Muse Code", "muse", "https://dev.meta.ai/docs/muse-code/", None, &["--yolo"], Some(0x0467df)),
+    spec("pi", "Pi", "pi", "https://pi.dev", Some("@earendil-works/pi-coding-agent"), &[], MONO),
+    spec("omp", "Oh My Pi", "omp", "https://omp.sh/docs", None, &["--yolo"], Some(0x9b4dff)),
+    spec("prime", "Prime Agent", "prime-agent", "https://github.com/PrimeIntellect-ai/prime-agent#install", None, &[], Some(0x3b82f6)),
+    spec("ante", "Ante", "ante", "https://docs.antigma.ai", None, &["--yolo"], Some(0xea5518)),
+    // No npm package on purpose: Socket.dev flagged autohand-cli 0.9.0 as possible malware, so
+    // AgentDeck never installs or updates it by itself.
+    spec("autohand", "Autohand Code", "autohand", "https://docs.autohand.ai/working-with-autohand-code/cli", None, &["--unrestricted"], MONO),
+    // `cmd` is cmd.exe on Windows: the package's `commandcode` alias works everywhere.
+    spec("commandcode", "Command Code", "commandcode", "https://commandcode.ai/docs", Some("command-code"), &["--yolo"], MONO),
+];
+
+const fn spec(
+    id: &'static str,
+    name: &'static str,
+    binary: &'static str,
+    install_url: &'static str,
+    npm: Option<&'static str>,
+    yolo: &'static [&'static str],
+    color: Option<u32>,
+) -> AgentSpec {
+    AgentSpec { id, name, binary, install_url, npm, yolo, color }
 }
 
 impl AgentKind {
+    /// Saved id ("claude", "opencode", or the spec id).
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Gemini => "gemini",
+            Self::Grok => "grok",
+            Self::OpenCode => "opencode",
+            Self::Shell => "shell",
+            Self::Other(spec) => spec.id,
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        all_agents().find(|kind| kind.id() == id)
+    }
+
     /// CLI binary name; `None` for a plain shell.
     pub fn binary(self) -> Option<&'static str> {
         match self {
@@ -37,6 +132,7 @@ impl AgentKind {
             Self::Grok => Some("grok"),
             Self::OpenCode => Some("opencode"),
             Self::Shell => None,
+            Self::Other(spec) => Some(spec.binary),
         }
     }
 
@@ -48,7 +144,40 @@ impl AgentKind {
             Self::Grok => Some("https://docs.x.ai/build/overview"),
             Self::OpenCode => Some("https://opencode.ai/docs/"),
             Self::Shell => None,
+            Self::Other(spec) => Some(spec.install_url),
         }
+    }
+
+    /// Flags that skip the agent's approval prompts in its interactive TUI ("Yolo" permissions).
+    /// Empty when it has no such flag (OpenCode: config only; Shell).
+    pub fn yolo_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &["--dangerously-skip-permissions"],
+            Self::Codex => &["--dangerously-bypass-approvals-and-sandbox"],
+            Self::Gemini => &["--yolo"],
+            // https://docs.x.ai/build/cli/reference ("Auto-approve all tool executions").
+            Self::Grok => &["--always-approve"],
+            Self::OpenCode | Self::Shell => &[],
+            Self::Other(spec) => spec.yolo,
+        }
+    }
+}
+
+/// Every agent: the built-ins (`AGENT_KINDS`, picker order) then [`EXTRA_AGENTS`].
+pub fn all_agents() -> impl Iterator<Item = AgentKind> {
+    crate::logic::text::AGENT_KINDS.into_iter().chain(EXTRA_AGENTS.iter().map(AgentKind::Other))
+}
+
+impl Serialize for AgentKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let id = std::borrow::Cow::<str>::deserialize(deserializer)?;
+        Self::from_id(&id).ok_or_else(|| serde::de::Error::custom(format!("unknown agent `{id}`")))
     }
 }
 
@@ -63,16 +192,7 @@ pub struct AgentInfo {
 
 /// Reports which agent CLIs are available on PATH.
 pub fn detect_agents() -> Vec<AgentInfo> {
-    [
-        AgentKind::Claude,
-        AgentKind::Codex,
-        AgentKind::Gemini,
-        AgentKind::Grok,
-        AgentKind::OpenCode,
-        AgentKind::Shell,
-    ]
-    .into_iter()
-    .map(|kind| {
+    all_agents().map(|kind| {
         let path = kind.binary().and_then(resolve_binary);
         AgentInfo {
             kind,
@@ -92,12 +212,8 @@ pub fn detect_agents() -> Vec<AgentInfo> {
 fn resolve_binary(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
-            .split(';')
-            .filter(|e| !e.is_empty())
-            .map(str::to_owned)
-            .collect()
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        windows_exts(&pathext)
     } else {
         vec![String::new()]
     };
@@ -110,6 +226,15 @@ fn resolve_binary(bin: &str) -> Option<PathBuf> {
             .into_os_string()
     });
     find_in_path(bin, &path, &exts).or_else(|| find_in_path(bin, &fallback?, &exts))
+}
+
+/// PATHEXT's extensions, plus `.PS1` last: npm also writes PowerShell shims, which `command_for` runs.
+fn windows_exts(pathext: &str) -> Vec<String> {
+    let mut exts: Vec<String> = pathext.split(';').filter(|e| !e.is_empty()).map(str::to_owned).collect();
+    if !exts.iter().any(|e| e.eq_ignore_ascii_case(".ps1")) {
+        exts.push(".PS1".into());
+    }
+    exts
 }
 
 /// First `dir/bin+ext` that is a file, dirs in PATH order then exts in order.
@@ -229,7 +354,7 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// Nearest ancestor of `cwd` containing `.git` (dir, or file for worktrees/submodules).
-pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
+pub fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
         .find(|d| d.join(".git").exists())
         .map(Path::to_path_buf)
@@ -270,7 +395,7 @@ pub(crate) fn shell(command: &str) -> Command {
     }
 }
 
-fn run_setup(command: &str, dir: &Path, root: &Path) -> Result<(), String> {
+pub(crate) fn run_setup(command: &str, dir: &Path, root: &Path) -> Result<(), String> {
     let out = shell(command)
         .current_dir(dir)
         .env("AGENTDECK_ROOT", root)
@@ -927,6 +1052,35 @@ mod tests {
             let base = gemini_system_defaults(ours).unwrap();
             assert!(base.ends_with("system-defaults.json") && base != ours);
         }
+    }
+
+    #[test]
+    fn agent_ids_roundtrip_and_stay_unique() {
+        // Saved names of the built-ins never change.
+        assert_eq!(serde_json::to_value(AgentKind::OpenCode).unwrap(), json!("opencode"));
+        assert_eq!(serde_json::from_value::<AgentKind>(json!("claude")).unwrap(), AgentKind::Claude);
+        assert!(serde_json::from_value::<AgentKind>(json!("nope")).is_err());
+        let ids: Vec<&str> = all_agents().map(AgentKind::id).collect();
+        for (i, id) in ids.iter().enumerate() {
+            assert!(!ids[..i].contains(id), "duplicate id {id}");
+        }
+        for kind in all_agents() {
+            assert_eq!(serde_json::from_value::<AgentKind>(serde_json::to_value(kind).unwrap()).unwrap(), kind);
+        }
+        let aider = AgentKind::from_id("aider").unwrap();
+        assert_eq!((aider.binary(), aider.yolo_args()), (Some("aider"), &["--yes-always"][..]));
+        // Map keys (settings `agents`) too.
+        let map: std::collections::BTreeMap<AgentKind, u8> = [(aider, 1), (AgentKind::Codex, 2)].into();
+        let back: std::collections::BTreeMap<AgentKind, u8> =
+            serde_json::from_value(serde_json::to_value(&map).unwrap()).unwrap();
+        assert_eq!(back, map);
+        assert!(AgentKind::OpenCode.yolo_args().is_empty() && AgentKind::Shell.yolo_args().is_empty());
+    }
+
+    #[test]
+    fn windows_exts_add_ps1_last() {
+        assert_eq!(windows_exts(".EXE;.CMD;"), [".EXE", ".CMD", ".PS1"]);
+        assert_eq!(windows_exts(".EXE;.ps1"), [".EXE", ".ps1"]);
     }
 
     #[test]

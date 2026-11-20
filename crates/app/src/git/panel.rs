@@ -1,10 +1,13 @@
 //! Right slide-over with the Git state of one pane's working directory (its worktree when it has one).
 //! Original: src/components/Git/GitPanel.tsx. Emits `DismissEvent` when closed.
 
+use std::collections::BTreeSet;
+
 use agentdeck_core::git::{
-    Checkpoint, Comparison, GitStatus, PrStatus, Upstream, git_checkpoint, git_commit, git_compare, git_create_pr, git_diff,
-    git_diff_trees, git_list_checkpoints, git_merge_worktree, git_pane_dir, git_pull, git_push, git_remove_worktree,
-    git_pr_status, git_restore_checkpoint, git_status, git_upstream, merge_conflict_prompt,
+    Checkpoint, Comparison, FileChange, GitStatus, IndexStatus, PrStatus, Upstream, git_apply_patch, git_checkpoint,
+    git_commit_staged, git_compare, git_create_pr, git_diff_index, git_diff_trees, git_index_status, git_list_checkpoints,
+    git_merge_worktree, git_pane_dir, git_pull, git_push, git_remove_worktree, git_pr_status, git_restore_checkpoint,
+    git_stage, git_status, git_unstage, git_upstream, hunk_changes, merge_conflict_prompt, select_patch,
 };
 use agentdeck_core::logic::deck::Pane;
 use agentdeck_core::logic::text::agent_name;
@@ -13,6 +16,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -22,6 +26,7 @@ use super::chip::checks_label;
 use super::diff::{Comment, DiffLineKind, classify_diff, diff_lines, line_numbers, review_prompt};
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_MD};
 
 const DIFF_PAGE: usize = 500;
 
@@ -45,6 +50,7 @@ fn when(ts_ms: u64) -> String {
 
 struct Snapshot {
     status: GitStatus,
+    index: IndexStatus,
     checkpoints: Vec<Checkpoint>,
     upstream: Upstream,
 }
@@ -52,6 +58,7 @@ struct Snapshot {
 fn load(dir: &str, pane_id: &str) -> Result<Snapshot, String> {
     Ok(Snapshot {
         status: git_status(dir.to_owned())?,
+        index: git_index_status(dir.to_owned())?,
         checkpoints: git_list_checkpoints(dir.to_owned(), pane_id.to_owned())?,
         upstream: git_upstream(dir.to_owned())?,
     })
@@ -76,11 +83,19 @@ pub struct GitPanel {
     pane_id: String,
     dir: Option<String>,
     status: Option<GitStatus>,
+    /// Changes split into staged and unstaged (the "Staged" and "Changes" groups).
+    index: Option<IndexStatus>,
     upstream: Option<Upstream>,
     checkpoints: Vec<Checkpoint>,
     /// Active comparison and the other pane's id.
     comparison: Option<(Comparison, String)>,
     selected: Option<String>,
+    /// The selected file is shown from the Staged group (HEAD vs index), else from Changes.
+    staged_view: bool,
+    /// Change lines (indices in `diff`) picked for line staging.
+    picked: BTreeSet<usize>,
+    /// Last picked line: a shift-click picks the range from it.
+    anchor: Option<usize>,
     /// Changed files list collapsed (long lists push the commit section out of view).
     files_collapsed: bool,
     /// Kind, text and file line number of each diff line.
@@ -95,6 +110,8 @@ pub struct GitPanel {
     pr: Option<PrStatus>,
     notice: Option<(bool, String)>,
     busy: bool,
+    /// A diff line's file is open in the editor: the panel hides until that page closes.
+    editing: bool,
     syncing: Option<SyncKind>,
     pending: Option<Confirm>,
     message: Entity<TextareaState>,
@@ -167,10 +184,14 @@ impl GitPanel {
             pane_id,
             dir,
             status: None,
+            index: None,
             upstream: None,
             checkpoints: Vec::new(),
             comparison: None,
             selected: None,
+            staged_view: false,
+            picked: BTreeSet::new(),
+            anchor: None,
             files_collapsed: false,
             diff: None,
             shown: DIFF_PAGE,
@@ -180,6 +201,7 @@ impl GitPanel {
             pr: None,
             notice: None,
             busy: false,
+            editing: false,
             syncing: None,
             pending: None,
             message,
@@ -205,7 +227,18 @@ impl GitPanel {
     }
 
     fn apply(&mut self, snapshot: Snapshot) {
+        // The selected file left its group (fully staged or unstaged): follow it to the other one.
+        if let Some(path) = &self.selected {
+            let has = |files: &[FileChange]| files.iter().any(|f| &f.path == path);
+            let index = &snapshot.index;
+            let (here, there) =
+                if self.staged_view { (&index.staged, &index.unstaged) } else { (&index.unstaged, &index.staged) };
+            if !has(here) && has(there) {
+                self.staged_view = !self.staged_view;
+            }
+        }
         self.status = Some(snapshot.status);
+        self.index = Some(snapshot.index);
         self.upstream = Some(snapshot.upstream);
         self.checkpoints = snapshot.checkpoints;
     }
@@ -228,22 +261,26 @@ impl GitPanel {
         .detach();
     }
 
-    /// Shows a file's diff (against HEAD, or between the compared panes).
+    /// Shows a file's diff: staged (HEAD vs index) or unstaged (index vs working tree) per
+    /// `staged_view`, or between the compared panes.
     fn open_file(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         self.selected = path.clone();
         self.commenting = None;
         self.diff = None;
+        self.picked.clear();
+        self.anchor = None;
         self.shown = DIFF_PAGE;
         cx.notify();
         let (Some(path), Some(dir)) = (path, self.dir.clone()) else { return };
         let trees = self.comparison.as_ref().map(|(c, _)| (c.from.clone(), c.to.clone()));
+        let staged = self.staged_view;
         let file = path.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let text = match trees {
                         Some((from, to)) => git_diff_trees(dir, from, to, file),
-                        None => git_diff(dir, file),
+                        None => git_diff_index(dir, file, staged),
                     }?;
                     // Split and classify here: a 100k-line lockfile diff would freeze the window.
                     let lines = diff_lines(&text);
@@ -359,10 +396,17 @@ impl GitPanel {
         );
     }
 
+    /// Commits the index; with nothing staged the button reads "Stage all and commit".
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let message = self.message.read(cx).value().to_string();
+        let stage_all = self.index.as_ref().is_some_and(|i| i.staged.is_empty());
         self.act(
-            move |dir| git_commit(dir, message),
+            move |dir| {
+                if stage_all {
+                    git_stage(dir.clone(), Vec::new())?;
+                }
+                git_commit_staged(dir, message)
+            },
             |this, sha, window, cx| {
                 this.message.update(cx, |m, cx| m.set_value("", window, cx));
                 Some(format!("Created commit {sha}."))
@@ -370,6 +414,57 @@ impl GitPanel {
             window,
             cx,
         );
+    }
+
+    /// Stages or unstages whole files; every change when `paths` is empty.
+    fn stage_files(&mut self, paths: Vec<String>, stage: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.act(
+            move |dir| if stage { git_stage(dir, paths) } else { git_unstage(dir, paths) },
+            |_, (), _, _| None,
+            window,
+            cx,
+        );
+    }
+
+    /// Stages (Changes view) or unstages (Staged view) these change lines of the shown diff.
+    fn stage_lines(&mut self, lines: &BTreeSet<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let reverse = self.staged_view;
+        let patch = self.diff.as_ref().and_then(|diff| {
+            let text: Vec<&str> = diff.iter().map(|(_, t, _)| t.as_ref()).collect();
+            select_patch(&text, lines, reverse)
+        });
+        let Some(patch) = patch.filter(|_| !self.busy) else { return };
+        self.act(move |dir| git_apply_patch(dir, patch, reverse), |_, (), _, _| None, window, cx);
+    }
+
+    /// Stages or unstages the hunk whose header is diff line `header`.
+    fn stage_hunk(&mut self, header: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(diff) = &self.diff else { return };
+        let text: Vec<&str> = diff.iter().map(|(_, t, _)| t.as_ref()).collect();
+        let lines: BTreeSet<usize> = hunk_changes(&text, header).into_iter().collect();
+        self.stage_lines(&lines, window, cx);
+    }
+
+    /// Picks or unpicks a change line; with shift, picks every change line from the last pick.
+    fn pick_line(&mut self, index: usize, range: bool, cx: &mut Context<Self>) {
+        let Some(diff) = &self.diff else { return };
+        match self.anchor.filter(|_| range) {
+            Some(anchor) => {
+                let changes = (anchor.min(index)..=anchor.max(index))
+                    .filter(|&i| matches!(diff.get(i), Some((DiffLineKind::Add | DiffLineKind::Del, _, _))));
+                self.picked.extend(changes);
+            }
+            None => {
+                if !self.picked.remove(&index) {
+                    self.picked.insert(index);
+                }
+            }
+        }
+        self.anchor = Some(index);
+        cx.notify();
     }
 
     fn sync(&mut self, kind: SyncKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -492,6 +587,21 @@ impl GitPanel {
         .detach();
     }
 
+    /// Opens the file of a diff line in the code editor, cursor on that line; the review comes
+    /// back when the editor closes (see `render`).
+    fn edit_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(dir), Some(path)) = (self.dir.clone(), self.selected.clone()) else { return };
+        let Some(number) = self.diff.as_ref().and_then(|diff| diff.get(index)).and_then(|(_, _, n)| *n) else {
+            return;
+        };
+        let root = std::path::PathBuf::from(dir);
+        let file = root.join(&path);
+        self.editing = true;
+        self.commenting = None;
+        crate::skills::open_file_at(self.deck.clone(), root, file, number.saturating_sub(1), window, cx);
+        cx.notify();
+    }
+
     /// Opens the remark field under a diff line.
     fn start_comment(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.commenting = Some(index);
@@ -582,6 +692,18 @@ fn select(
 
 impl Render for GitPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.editing {
+            if crate::skills::review_file_open(cx) {
+                return div().into_any_element();
+            }
+            // The editor closed: back to the review, with the diff of what may have been saved.
+            self.editing = false;
+            self.focus.focus(window, cx);
+            cx.defer_in(window, |this, _, cx| {
+                this.refresh(cx);
+                this.open_file(this.selected.clone(), cx);
+            });
+        }
         let p = palette(cx);
         let (fg, muted, subtle, line) = (hsla(p.fg), hsla(p.muted), hsla(p.subtle), hsla(p.line));
         let deck = self.deck.read(cx);
@@ -649,12 +771,12 @@ impl Render for GitPanel {
                     .on_click(cx.listener(|this, _, window, cx| this.refresh_all(window, cx))),
             )
             .child(
-                Button::new("git-close")
-                    .ghost()
-                    .small()
-                    .icon(IconName::X)
-                    .tooltip("Close (Esc)")
-                    .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
+                crate::panes::close_button("git-close", "Close (Esc)").on_click({
+                    let this = cx.entity().downgrade();
+                    move |_, cx| {
+                        let _ = this.update(cx, |this, cx| this.close(cx));
+                    }
+                }),
             );
 
         // Branch row.
@@ -833,58 +955,127 @@ impl Render for GitPanel {
             })
             .child(div().ml_auto().child(files.len().to_string()));
 
-        let file_list = if files.is_empty() {
+        // One changed file; `group`: Some(staged) in the Staged / Changes groups, None in a comparison.
+        let file_row = |key: &'static str, i: usize, f: &FileChange, group: Option<bool>| {
+            let selected = self.selected.as_deref() == Some(f.path.as_str())
+                && group.is_none_or(|staged| staged == self.staged_view);
+            let path = f.path.clone();
             div()
+                .id((key, i))
+                .flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .h(ui(28.0))
                 .px_3()
-                .pb_3()
+                .cursor_pointer()
+                .when(selected, |d| d.bg(hsla(p.raised)).text_color(fg))
+                .when(!selected, |d| d.text_color(muted).hover(|s| s.bg(hsla(p.hover))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(staged) = group {
+                        this.staged_view = staged;
+                    }
+                    this.open_file(Some(path.clone()), cx)
+                }))
+                .child(div().w(ui(14.0)).flex_shrink_0().font_family(FONT_MONO).text_color(subtle).child(f.status.clone()))
+                .child(div().min_w_0().flex_1().truncate().child(f.path.clone()))
+                .child(match (f.additions, f.deletions) {
+                    (Some(a), d) => div()
+                        .flex()
+                        .flex_shrink_0()
+                        .gap_1()
+                        .font_family(FONT_MONO)
+                        .child(div().text_color(hsla(p.ok)).child(format!("+{a}")))
+                        .child(div().text_color(hsla(p.bad)).child(format!("−{}", d.unwrap_or(0)))),
+                    (None, _) => div().flex_shrink_0().text_color(subtle).child("bin"),
+                })
+                .when_some(group, |d, staged| {
+                    let path = f.path.clone();
+                    d.child(
+                        Button::new((if staged { "git-unstage" } else { "git-stage" }, i))
+                            .ghost()
+                            .xsmall()
+                            .icon(if staged { IconName::Minus } else { IconName::Plus })
+                            .tooltip(if staged { "Unstage" } else { "Stage" })
+                            .disabled(busy)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.stage_files(vec![path.clone()], !staged, window, cx);
+                            })),
+                    )
+                })
+        };
+        let empty = |text: &'static str| div().px_3().pb_2().text_xs().text_color(subtle).child(text);
+        let group_title = |title: &'static str, count: usize, staged: bool| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .h(ui(28.0))
+                .px_3()
                 .text_xs()
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(subtle)
-                .child(if status.is_some() { "No changes." } else { "Loading…" })
-        } else {
-            div().pb_2().children(files.iter().enumerate().map(|(i, f)| {
-                let selected = self.selected.as_deref() == Some(f.path.as_str());
-                let path = f.path.clone();
-                div()
-                    .id(("git-file", i))
-                    .flex()
-                    .w_full()
-                    .items_center()
-                    .gap_2()
-                    .h(ui(28.0))
-                    .px_3()
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(hsla(p.raised)).text_color(fg))
-                    .when(!selected, |d| d.text_color(muted).hover(|s| s.bg(hsla(p.hover))))
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_file(Some(path.clone()), cx)))
-                    .child(div().w(ui(14.0)).flex_shrink_0().font_family(FONT_MONO).text_color(subtle).child(f.status.clone()))
-                    .child(div().min_w_0().flex_1().truncate().child(f.path.clone()))
-                    .child(match (f.additions, f.deletions) {
-                        (Some(a), d) => div()
-                            .flex()
-                            .flex_shrink_0()
-                            .gap_1()
-                            .font_family(FONT_MONO)
-                            .child(div().text_color(hsla(p.ok)).child(format!("+{a}")))
-                            .child(div().text_color(hsla(p.bad)).child(format!("−{}", d.unwrap_or(0)))),
-                        (None, _) => div().flex_shrink_0().text_color(subtle).child("bin"),
-                    })
-            }))
+                .child(format!("{title} ({count})"))
+                .child(
+                    div().ml_auto().child(
+                        Button::new(if staged { "git-unstage-all" } else { "git-stage-all" })
+                            .ghost()
+                            .xsmall()
+                            .label(if staged { "Unstage all" } else { "Stage all" })
+                            .disabled(busy || count == 0)
+                            .on_click(cx.listener(move |this, _, window, cx| this.stage_files(Vec::new(), !staged, window, cx))),
+                    ),
+                )
+        };
+        let file_list = match (&self.comparison, &self.index) {
+            (Some(_), _) if files.is_empty() => empty("No changes."),
+            (Some(_), _) => div().pb_2().children(files.iter().enumerate().map(|(i, f)| file_row("git-file", i, f, None))),
+            (None, None) => empty("Loading…"),
+            (None, Some(index)) => div()
+                .pb_2()
+                .child(group_title("Staged", index.staged.len(), true))
+                .children(index.staged.iter().enumerate().map(|(i, f)| file_row("git-staged", i, f, Some(true))))
+                .when(index.staged.is_empty(), |d| d.child(empty("Nothing staged.")))
+                .child(group_title("Changes", index.unstaged.len(), false))
+                .children(index.unstaged.iter().enumerate().map(|(i, f)| file_row("git-unstaged", i, f, Some(false))))
+                .when(index.unstaged.is_empty(), |d| d.child(empty("No changes."))),
         };
 
         let has_files = status.is_some_and(|s| !s.files.is_empty());
         let message_empty = self.message.read(cx).value().trim().is_empty();
+        // What the commit will contain.
+        let staged = self.index.as_ref().map(|i| i.staged.as_slice()).unwrap_or_default();
+        let (adds, dels) = staged
+            .iter()
+            .fold((0, 0), |(a, d), f| (a + f.additions.unwrap_or(0), d + f.deletions.unwrap_or(0)));
+        let staged_summary = match staged.len() {
+            0 => "Nothing staged: commit stages every change first.".to_owned(),
+            n => format!("{n} file{}, +{adds} −{dels} staged", if n == 1 { "" } else { "s" }),
+        };
+        let stage_all = staged.is_empty();
         let commit_section = self.comparison.is_none().then(|| {
             section("Commit", line, subtle)
                 .child(Textarea::new(&self.message))
-                .child(div().text_xs().text_color(subtle).child(
-                    "Conventional Commits: feat, fix, refactor, docs, test, chore. Everything is staged (git add -A).",
-                ))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(if stage_all { subtle } else { fg })
+                        .child(staged_summary),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(subtle)
+                        .child("Conventional Commits: feat, fix, refactor, docs, test, chore. Only staged changes are committed."),
+                )
                 .child(
                     Button::new("git-commit")
                         .outline()
                         .icon(IconName::GitCommitHorizontal)
-                        .label("Commit")
-                        .disabled(busy || message_empty || !has_files)
+                        .label(if stage_all { "Stage all and commit" } else { "Commit" })
+                        .disabled(busy || message_empty || self.index.is_none() || (stage_all && !has_files))
                         .on_click(cx.listener(|this, _, window, cx| this.commit(window, cx))),
                 )
         });
@@ -1063,6 +1254,47 @@ impl Render for GitPanel {
         // Diff view.
         let placeholder = |text: &'static str| div().p_4().text_xs().text_color(subtle).child(text);
         let remarks = self.comments.len();
+        // Against HEAD only: a comparison's lines belong to the other pane's tree.
+        let can_edit = self.comparison.is_none() && !no_dir;
+        let can_stage = can_edit && self.index.is_some();
+        let staged_view = self.staged_view;
+        let accent = hsla(p.accent);
+        let picked = self.picked.len();
+        let picked_bar = (can_stage && picked > 0).then(|| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_2()
+                .border_b_1()
+                .border_color(line)
+                .bg(hsla(p.raised))
+                .px_3()
+                .py_2()
+                .text_xs()
+                .child(div().flex_1().child(format!(
+                    "{picked} line{} selected (shift-click a box to select a range)",
+                    if picked == 1 { "" } else { "s" }
+                )))
+                .child(Button::new("git-picked-clear").ghost().small().label("Clear").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.picked.clear();
+                        this.anchor = None;
+                        cx.notify();
+                    },
+                )))
+                .child(
+                    Button::new("git-picked-stage")
+                        .primary()
+                        .small()
+                        .label(if staged_view { "Unstage lines" } else { "Stage lines" })
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let lines = this.picked.clone();
+                            this.stage_lines(&lines, window, cx);
+                        })),
+                )
+        });
         let remarks_bar = (remarks > 0).then(|| {
             div()
                 .flex()
@@ -1118,8 +1350,48 @@ impl Render for GitPanel {
                             };
                             // A click on a line of code opens a remark for the agent under it.
                             let code = matches!(kind, DiffLineKind::Add | DiffLineKind::Del | DiffLineKind::Context);
+                            let change = matches!(kind, DiffLineKind::Add | DiffLineKind::Del);
+                            let is_picked = self.picked.contains(&i);
+                            // Box to pick a change line for line staging (shift: a range).
+                            let pick = can_stage.then(|| {
+                                div()
+                                    .id(("diff-pick", i))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(ui(20.0))
+                                    .flex_shrink_0()
+                                    .when(change, |d| {
+                                        d.cursor_pointer()
+                                            .tooltip(|window, cx| {
+                                                Tooltip::new("Select this line (shift-click: range)").build(window, cx)
+                                            })
+                                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                                cx.stop_propagation();
+                                                this.pick_line(i, event.modifiers().shift, cx);
+                                            }))
+                                            .child(if is_picked {
+                                                icon(IconName::SquareCheck, accent).size(ui(12.0))
+                                            } else {
+                                                icon(IconName::Square, subtle).size(ui(12.0))
+                                            })
+                                    })
+                            });
+                            let hunk_button = (can_stage && *kind == DiffLineKind::Hunk).then(|| {
+                                Button::new(("git-hunk", i))
+                                    .ghost()
+                                    .xsmall()
+                                    .ml_3()
+                                    .label(if staged_view { "Unstage hunk" } else { "Stage hunk" })
+                                    .disabled(busy)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.stage_hunk(i, window, cx);
+                                    }))
+                            });
                             let row = div()
                                 .id(("diff-line", i))
+                                .group("diff-row")
                                 .flex()
                                 .pr_3()
                                 .whitespace_nowrap()
@@ -1130,17 +1402,42 @@ impl Render for GitPanel {
                                         .hover(|s| s.bg(hsla(p.hover)))
                                         .on_click(cx.listener(move |this, _, window, cx| this.start_comment(i, window, cx)))
                                 })
-                                // File line number (the old file's for a deleted line).
+                                .when(is_picked, |d| d.bg(hsla_a(p.accent, 0.15)))
+                                .children(pick)
+                                // File line number (the old file's for a deleted line); a click on
+                                // it opens the file in the editor at that line.
                                 .child(
                                     div()
+                                        .id(("diff-goto", i))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
                                         .w(ui(48.0))
                                         .flex_shrink_0()
+                                        .pl_1()
                                         .pr_2()
-                                        .text_right()
                                         .text_color(subtle)
-                                        .child(number.map_or_else(String::new, |n| n.to_string())),
+                                        .when(can_edit && number.is_some(), |d| {
+                                            d.cursor_pointer()
+                                                .hover(|s| s.text_color(accent))
+                                                .tooltip(|window, cx| {
+                                                    Tooltip::new("Open in the editor at this line").build(window, cx)
+                                                })
+                                                .on_click(cx.listener(move |this, _, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.edit_at(i, window, cx);
+                                                }))
+                                                .child(
+                                                    div()
+                                                        .opacity(0.0)
+                                                        .group_hover("diff-row", |s| s.opacity(1.0))
+                                                        .child(icon(IconName::Pencil, accent).size(ui(11.0))),
+                                                )
+                                        })
+                                        .child(div().ml_auto().child(number.map_or_else(String::new, |n| n.to_string()))),
                                 )
                                 .child(if text.is_empty() { SharedString::from(" ") } else { text.clone() })
+                                .children(hunk_button)
                                 .into_any_element();
                             let here = |c: &&Comment| c.index == i && Some(&c.path) == self.selected.as_ref();
                             let remarks = self.comments.iter().enumerate().filter(|(_, c)| here(c)).map(|(n, c)| {
@@ -1150,7 +1447,7 @@ impl Render for GitPanel {
                                     .gap_2()
                                     .mx_3()
                                     .my_1()
-                                    .rounded(ui(6.0))
+                                    .rounded(ui(RADIUS_MD))
                                     .border_l_2()
                                     .border_color(hsla(p.accent))
                                     .bg(hsla(p.raised))
@@ -1220,7 +1517,16 @@ impl Render for GitPanel {
                     .min_h_0()
                     .flex_1()
                     .child(left)
-                    .child(div().flex().flex_col().min_w_0().flex_1().children(remarks_bar).child(right)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .flex_1()
+                            .children(remarks_bar)
+                            .children(picked_bar)
+                            .child(right),
+                    ),
             );
 
         crate::browser::popup_shown();
@@ -1255,5 +1561,6 @@ impl Render for GitPanel {
             ),
         )
         .with_priority(1)
+        .into_any_element()
     }
 }

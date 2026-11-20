@@ -7,6 +7,7 @@
 //! [`view`] in place of the terminal. Claude's status comes from its hooks, as in a terminal;
 //! Codex's comes from here (`agent-status` + `mcp::STATUS`, so the orchestrator's `wait_for` works).
 
+mod flow;
 mod view;
 
 use std::collections::HashMap;
@@ -15,13 +16,16 @@ use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use agentdeck_core::agents::AgentKind;
-use agentdeck_core::chat::{ChatEvent, Transcript, claude_interrupt_line, claude_user_line, parse_claude, parse_codex};
+use agentdeck_core::chat::{
+    ChatEvent, Transcript, claude_interrupt_line, claude_user_line, parse_claude, parse_codex, with_resume,
+};
 use agentdeck_core::hooks_server::{AgentStatusEvent, PaneStatus};
 use agentdeck_core::logic::deck::Pane;
+use agentdeck_core::logic::text::file_refs;
 use agentdeck_core::{AppHandle, mcp, pty};
 use gpui_kit::*;
 
-pub use view::view;
+pub use view::{dictate, model_arg, view};
 
 /// Kept from the end of stderr, shown when a process dies mid-turn.
 const STDERR_TAIL: usize = 2048;
@@ -64,7 +68,32 @@ struct Chat {
     launch: Option<Launch>,
     proc: Option<Proc>,
     /// Prompts waiting for the process (still spawning, asleep) or, for Codex, for the running turn.
-    pending: Vec<String>,
+    pending: Vec<Prompt>,
+    /// Follow-ups typed during a turn, sent one per turn end (`flow`).
+    queue: Vec<flow::Queued>,
+    /// The queue waits for "Resume" (a turn failed or was stopped).
+    paused: bool,
+    /// Claude restarts with new arguments when the running turn ends.
+    relaunch: bool,
+}
+
+/// A message to send: its text and attached image files.
+#[derive(Clone)]
+struct Prompt {
+    text: String,
+    images: Vec<String>,
+}
+
+impl Prompt {
+    /// What the agent receives: the text, then the image paths (it reads them with its file tools).
+    fn line(&self, agent: AgentKind) -> String {
+        if self.images.is_empty() {
+            return self.text.clone();
+        }
+        format!("{}
+
+{}", self.text, file_refs(agent, &self.images).trim_end())
+    }
 }
 
 #[derive(Default)]
@@ -107,13 +136,20 @@ pub fn spawn(backend: &AppHandle, pane: &Pane, mut args: Vec<String>, env: HashM
     } else {
         pane.cwd.clone()
     };
+    let fork = flow::take_fork(&pane.id);
     if pane.agent == AgentKind::Claude {
+        if let Some(fork) = &fork {
+            args = with_resume(&args, Some(&fork.session), true);
+        }
         args.extend(CLAUDE_ARGS.map(String::from));
         // -p cannot show a permission prompt: allow edits unless the user chose a mode.
         if !has_flag(&args, &["--permission-mode", "--dangerously-skip-permissions"]) {
             args.extend(["--permission-mode".into(), "acceptEdits".into()]);
         }
     }
+    // After an app restart: the conversation resumed shows again.
+    let resumes = pane.agent == AgentKind::Codex || has_flag(&args, &["--resume"]);
+    let saved = pane.resume_id.as_deref().filter(|_| resumes && fork.is_none()).and_then(|s| flow::load(backend, &pane.id, s));
     let launch = Launch { backend: backend.clone(), agent: pane.agent, cwd, args, env, trust };
     let mut chats = chats();
     let chat = chats.map.entry(pane.id.clone()).or_default();
@@ -121,11 +157,20 @@ pub fn spawn(backend: &AppHandle, pane: &Pane, mut args: Vec<String>, env: HashM
     if pane.resume_id.is_none() {
         chat.transcript = Transcript::default();
     }
+    if let Some(fork) = fork {
+        chat.transcript = fork.transcript;
+    } else if chat.transcript.items.is_empty()
+        && let Some(saved) = saved
+    {
+        chat.transcript = saved;
+    }
     if chat.transcript.session.is_none() {
         chat.transcript.session = pane.resume_id.clone();
     }
     chat.transcript.busy = false;
     chat.launch = Some(launch);
+    // The hook and MCP servers accept this pane from now on (status, permissions, tools).
+    agentdeck_core::chat::set_live(&pane.id, true);
     drop(chats);
     changed(&pane.id);
     match pane.agent {
@@ -144,9 +189,9 @@ fn start_claude(pane_id: &str) -> Result<(), String> {
     let chat = chats.map.get_mut(pane_id).ok_or("chat pane closed")?;
     let launch = chat.launch.clone().ok_or("chat not launched")?;
     let mut proc = start_process(&launch, pane_id, &launch.args, run)?;
-    for text in std::mem::take(&mut chat.pending) {
-        write_line(&mut proc, &claude_user_line(&text));
-        chat.transcript.push_user(&text);
+    for prompt in std::mem::take(&mut chat.pending) {
+        write_line(&mut proc, &claude_user_line(&prompt.line(launch.agent)));
+        chat.transcript.push_user(&prompt.text, &prompt.images);
     }
     chat.proc = Some(proc);
     Ok(())
@@ -162,7 +207,8 @@ fn next_codex_turn(pane_id: &str) {
     if chat.proc.is_some() || chat.pending.is_empty() {
         return;
     }
-    let text = chat.pending.remove(0);
+    let prompt = chat.pending.remove(0);
+    let text = prompt.line(launch.agent);
     let mut args = vec!["exec".into(), "--json".into(), "--skip-git-repo-check".into()];
     args.extend(launch.args.iter().cloned());
     // exec cannot ask for approval: work in the folder unless the user chose a sandbox.
@@ -173,7 +219,7 @@ fn next_codex_turn(pane_id: &str) {
         args.extend(["resume".into(), session.clone()]);
     }
     args.push("-".into()); // the prompt comes on stdin: no quoting through cmd.exe
-    chat.transcript.push_user(&text);
+    chat.transcript.push_user(&prompt.text, &prompt.images);
     let session = chat.transcript.session.clone();
     match start_process(&launch, pane_id, &args, run) {
         Ok(mut proc) => {
@@ -194,6 +240,7 @@ fn next_codex_turn(pane_id: &str) {
         }
     }
     changed(pane_id);
+    flow::save(pane_id);
 }
 
 fn start_process(launch: &Launch, pane_id: &str, args: &[String], run: u64) -> Result<Proc, String> {
@@ -263,6 +310,7 @@ fn read_events(backend: &AppHandle, pane_id: &str, agent: AgentKind, run: u64, s
         }
         let (answer, session) = (chat.transcript.last_answer().map(str::to_owned), chat.transcript.session.clone());
         drop(chats);
+        let ended_ok = ended.as_ref().map(Option::is_none);
         // Claude's own hooks report its turns; Codex's turns are reported here.
         if agent == AgentKind::Codex
             && let Some(error) = ended
@@ -271,6 +319,9 @@ fn read_events(backend: &AppHandle, pane_id: &str, agent: AgentKind, run: u64, s
             report(backend, pane_id, status, error, None, answer, session);
         }
         changed(pane_id);
+        if let Some(ok) = ended_ok {
+            flow::after_turn(pane_id, ok);
+        }
     }
     // EOF: the process is gone (or about to be).
     let mut chats = chats();
@@ -290,6 +341,7 @@ fn read_events(backend: &AppHandle, pane_id: &str, agent: AgentKind, run: u64, s
         if agent == AgentKind::Codex {
             report(backend, pane_id, PaneStatus::Error, Some(error), None, None, session);
         }
+        flow::after_turn(pane_id, false);
     } else {
         drop(chats);
     }
@@ -337,22 +389,41 @@ fn report(
 /// Sends a prompt (chat input, orchestrator, queue). An exited pane is woken (asleep) or restarted
 /// first; the prompt waits for its process.
 pub fn send(pane: &Pane, text: &str, cx: &mut App) {
+    send_with_images(pane, text, &[], cx);
+}
+
+/// [`send`] with image files attached (chat input).
+pub fn send_with_images(pane: &Pane, text: &str, images: &[String], cx: &mut App) {
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() && images.is_empty() {
         return;
     }
+    // A question or permission card is waiting for this pane: the agent is blocked on it, so the
+    // message answers it (and closes the card) instead of queueing behind it.
+    if answer_pending(&pane.id, text, cx) {
+        let mut chats = chats();
+        if let Some(chat) = chats.map.get_mut(&pane.id) {
+            chat.transcript.push_user(text, images);
+        }
+        drop(chats);
+        changed(&pane.id);
+        return;
+    }
+    let prompt = Prompt { text: text.to_owned(), images: images.to_vec() };
     {
         let mut chats = chats();
         let chat = chats.map.entry(pane.id.clone()).or_default();
         match chat.proc.as_mut() {
             Some(proc) if pane.agent == AgentKind::Claude && !pane.exited => {
-                write_line(proc, &claude_user_line(text));
-                chat.transcript.push_user(text);
+                write_line(proc, &claude_user_line(&prompt.line(pane.agent)));
+                chat.transcript.push_user(&prompt.text, &prompt.images);
             }
-            _ => chat.pending.push(text.to_owned()),
+            _ => chat.pending.push(prompt),
         }
     }
     changed(&pane.id);
+    let id = pane.id.clone();
+    cx.background_spawn(async move { flow::save(&id) }).detach();
     if pane.exited {
         if crate::panes::runtime::is_asleep(&pane.id, cx) {
             crate::panes::runtime::wake_pane(&pane.id, cx);
@@ -365,11 +436,32 @@ pub fn send(pane: &Pane, text: &str, cx: &mut App) {
     }
 }
 
+/// Answers the pane's pending permission/question requests with the chat message. True if any.
+fn answer_pending(pane_id: &str, text: &str, cx: &mut App) -> bool {
+    let Some(deck) = crate::panes::runtime::deck(cx) else { return false };
+    let ids: Vec<String> =
+        deck.read(cx).permissions.iter().filter(|r| r.pane_id == pane_id).map(|r| r.request_id.clone()).collect();
+    if ids.is_empty() {
+        return false;
+    }
+    let message = format!("The user answered in the chat instead: {text}");
+    let mut answered = false;
+    for id in ids {
+        // "deny" with a message: Claude reads the message as the user's reply and goes on.
+        match agentdeck_core::hooks_server::permissions::answer_permission(id, "deny".into(), Some(message.clone())) {
+            Ok(()) => answered = true,
+            Err(e) => eprintln!("chat: pending request not answered: {e}"),
+        }
+    }
+    answered
+}
+
 /// Stop button: Claude interrupts its turn (the process stays); Codex's turn process is killed.
 pub fn interrupt(pane_id: &str) {
     let mut chats = chats();
     let Some(chat) = chats.map.get_mut(pane_id) else { return };
     chat.pending.clear();
+    chat.paused = !chat.queue.is_empty();
     let Some(mut proc) = chat.proc.take() else { return };
     if proc.stdin.is_some() {
         let request_id = format!("agentdeck-{}", proc.run);
@@ -390,10 +482,12 @@ pub fn interrupt(pane_id: &str) {
 /// Kills the pane's process (stop, restart, close, sleep); a no-op for other panes. The transcript
 /// stays for a wake. Emits `pane-exit`, as the PTY does, so `stop_pane` returns at once.
 pub fn kill(pane_id: &str) {
+    agentdeck_core::chat::set_live(pane_id, false);
     let mut chats = chats();
     let Some(chat) = chats.map.get_mut(pane_id) else { return };
     let proc = chat.proc.take();
     chat.pending.clear();
+    chat.paused = !chat.queue.is_empty();
     chat.transcript.busy = false;
     let backend = chat.launch.as_ref().map(|l| l.backend.clone());
     drop(chats);

@@ -106,6 +106,9 @@ impl WindowsWindowInner {
             WM_DISPLAYCHANGE => self.handle_display_change_msg(handle),
             WM_NCHITTEST => self.handle_hit_test_msg(handle, lparam),
             WM_PAINT => self.handle_paint_msg(handle),
+            // AgentDeck patch: the renderer covers the whole client area. Letting Windows erase it
+            // with the class brush (black) on every invalidation flashed black while moving the window.
+            WM_ERASEBKGND => Some(1),
             WM_CLOSE => self.handle_close_msg(),
             WM_DESTROY => self.handle_destroy_msg(handle),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),

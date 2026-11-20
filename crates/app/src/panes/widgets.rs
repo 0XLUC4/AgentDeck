@@ -23,6 +23,8 @@ pub struct IconButton {
     icon: IconName,
     hint: SharedString,
     danger: bool,
+    /// Close button of a dialog, page or panel: red background on hover.
+    closing: bool,
     large: bool,
     pressed: bool,
     disabled: bool,
@@ -37,12 +39,18 @@ pub fn icon_button(id: impl Into<ElementId>, icon: IconName, hint: impl Into<Sha
         icon,
         hint: hint.into(),
         danger: false,
+        closing: false,
         large: false,
         pressed: false,
         disabled: false,
         on_click: None,
         on_right_click: None,
     }
+}
+
+/// The one close button of dialogs, pages and panels: 28 px X, pointer cursor, red on hover.
+pub fn close_button(id: impl Into<ElementId>, hint: impl Into<SharedString>) -> IconButton {
+    IconButton { closing: true, large: true, ..icon_button(id, IconName::X, hint) }
 }
 
 impl IconButton {
@@ -90,7 +98,9 @@ impl RenderOnce for IconButton {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let p = palette(cx);
         let (box_size, icon_size) = if self.large { (28.0, 16.0) } else { (24.0, 14.0) };
-        let (hover_bg, hover_fg) = if self.danger {
+        let (hover_bg, hover_fg) = if self.closing {
+            (hsla(p.close), hsla(0xffffff))
+        } else if self.danger {
             (hsla_a(p.bad, 0.15), hsla(p.bad))
         } else {
             (hsla(p.hover), hsla(p.fg))
@@ -103,7 +113,7 @@ impl RenderOnce for IconButton {
             .items_center()
             .justify_center()
             .size(ui(box_size))
-            .rounded(ui(agentdeck_core::logic::theme::RADIUS_MD - 4.0))
+            .rounded(ui(agentdeck_core::logic::theme::RADIUS_MD))
             .text_color(hsla(if self.pressed { p.fg } else { p.subtle }))
             .when(self.pressed, |b| b.bg(hsla(p.raised)))
             .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))

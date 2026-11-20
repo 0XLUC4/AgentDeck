@@ -12,6 +12,7 @@ use gpui_kit::*;
 use super::tools::set_paused;
 use crate::state::Deck;
 use crate::theme::{hsla, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_MD};
 
 /// `new Date(at).toLocaleTimeString("en-US")`: "3:04:05 PM".
 fn time(at: i64) -> String {
@@ -41,7 +42,7 @@ pub fn pause_toggle(deck: &Entity<Deck>, cx: &App) -> Stateful<Div> {
         .gap(ui(6.0))
         .h_8()
         .px_3()
-        .rounded(ui(6.0))
+        .rounded(ui(RADIUS_MD))
         .border_1()
         .border_color(hsla(if paused { p.line_strong } else { p.line }))
         .text_color(hsla(if paused { p.fg } else { p.muted }))
@@ -179,7 +180,7 @@ impl Render for OrchestratorLog {
                     .flex_col()
                     .max_h(ui(384.0))
                     .overflow_y_scroll()
-                    .rounded(ui(6.0))
+                    .rounded(ui(RADIUS_MD))
                     .border_1()
                     .border_color(hsla(p.line))
                     .children(entries),
@@ -207,12 +208,8 @@ impl Render for OrchestratorLog {
                             .child(div().text_size(ui(15.0)).font_weight(FontWeight::MEDIUM).child("Orchestrator actions")),
                     )
                     .child(
-                        Button::new("orchestrator-log-close")
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(IconName::X))
-                            .tooltip("Close (Esc)")
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                        crate::panes::close_button("orchestrator-log-close", "Close (Esc)")
+                            .on_click(|window, cx| window.close_dialog(cx)),
                     ),
             )
             .child(div().p_5().child(body))

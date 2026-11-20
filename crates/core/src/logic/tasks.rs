@@ -119,9 +119,146 @@ impl TaskLog {
     }
 }
 
+/// The two instructions a handoff starts from (the user edits them in the draft).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffKind {
+    Review,
+    Continue,
+}
+
+impl HandoffKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Review => "Review the changes",
+            Self::Continue => "Continue the work",
+        }
+    }
+
+    pub fn instruction(self) -> &'static str {
+        match self {
+            Self::Review => {
+                "Review the changes made in the source worktree above: run `git status` and `git diff` there and \
+                 read the files they touch. Report real defects only (logic, edge cases, missing tests), ranked by \
+                 severity, with file and line. Do not edit files."
+            }
+            Self::Continue => {
+                "Continue this work in the source worktree above: pick up where it stopped, keep its approach, then \
+                 tell me what you changed and what is left."
+            }
+        }
+    }
+}
+
+/// Where the finished task ran.
+#[derive(Debug, Clone, Default)]
+pub struct HandoffSource<'a> {
+    /// Name of the agent pane that did the task.
+    pub agent: &'a str,
+    /// Project (workspace) name.
+    pub project: &'a str,
+    /// Folder the agent worked in (its worktree when it has one).
+    pub dir: &'a str,
+    pub branch: Option<&'a str>,
+}
+
+/// Editable handoff text for another agent: project, source worktree and branch (so an agent opened
+/// in another worktree finds the work), initial request, result, then the instruction. None when the
+/// task has neither a prompt nor a summary: there is nothing to hand off.
+pub fn handoff_draft(task: &Task, source: &HandoffSource, kind: HandoffKind) -> Option<String> {
+    let non_empty = |t: &Option<String>| t.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned);
+    let (prompt, summary) = (non_empty(&task.prompt), non_empty(&task.summary));
+    if prompt.is_none() && summary.is_none() {
+        return None;
+    }
+    let mut text = format!("Handoff from {} (project {})\nSource worktree: {}\n", source.agent, source.project, source.dir);
+    if let Some(branch) = source.branch.filter(|b| !b.is_empty()) {
+        text.push_str(&format!("Branch: {branch}\n"));
+    }
+    text.push_str(&format!(
+        "\nInitial request:\n{}\n\nResult from {}:\n{}\n\nInstruction:\n{}",
+        prompt.as_deref().unwrap_or("(none received)"),
+        source.agent,
+        summary.as_deref().unwrap_or("(no summary received)"),
+        kind.instruction()
+    ));
+    Some(text)
+}
+
+/// Switches the draft's instruction from `from` to `to`, keeping the user's other edits; when the
+/// user rewrote the old instruction, the new one is appended instead.
+pub fn swap_instruction(text: &str, from: HandoffKind, to: HandoffKind) -> String {
+    if from == to || text.contains(to.instruction()) {
+        return text.to_owned();
+    }
+    if text.contains(from.instruction()) {
+        return text.replacen(from.instruction(), to.instruction(), 1);
+    }
+    format!("{}\n\n{}", text.trim_end(), to.instruction())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finished(prompt: Option<&str>, summary: Option<&str>) -> Task {
+        Task {
+            summary: summary.map(str::to_owned),
+            ended_at: Some(1),
+            status: PaneStatus::Done,
+            ..new_task(0, prompt)
+        }
+    }
+
+    const SOURCE: HandoffSource<'static> = HandoffSource {
+        agent: "Claude",
+        project: "shop",
+        dir: r"D:\code\shop-agentdeck-1a2b3c4d",
+        branch: Some("agentdeck/1a2b3c4d"),
+    };
+
+    #[test]
+    fn handoff_draft_names_the_source_worktree() {
+        let draft = handoff_draft(&finished(Some("fix cart"), Some("Fixed the total.")), &SOURCE, HandoffKind::Review).unwrap();
+        for part in [
+            "Handoff from Claude (project shop)",
+            r"Source worktree: D:\code\shop-agentdeck-1a2b3c4d",
+            "Branch: agentdeck/1a2b3c4d",
+            "Initial request:\nfix cart",
+            "Result from Claude:\nFixed the total.",
+            HandoffKind::Review.instruction(),
+        ] {
+            assert!(draft.contains(part), "{part} missing in {draft}");
+        }
+        // No branch (detached HEAD, not a repo): no Branch line.
+        let plain = HandoffSource { branch: None, ..SOURCE };
+        assert!(!handoff_draft(&finished(Some("a"), None), &plain, HandoffKind::Continue).unwrap().contains("Branch:"));
+    }
+
+    #[test]
+    fn handoff_needs_a_prompt_or_a_summary() {
+        // No summary but an initial request: still transferable.
+        let draft = handoff_draft(&finished(Some("add tests"), None), &SOURCE, HandoffKind::Continue).unwrap();
+        assert!(draft.contains("add tests") && draft.contains("(no summary received)"));
+        assert!(handoff_draft(&finished(None, Some("Done.")), &SOURCE, HandoffKind::Review).is_some());
+        assert!(handoff_draft(&finished(None, None), &SOURCE, HandoffKind::Review).is_none());
+        assert!(handoff_draft(&finished(Some("  "), Some("")), &SOURCE, HandoffKind::Review).is_none());
+    }
+
+    #[test]
+    fn swapping_the_instruction_keeps_edits() {
+        let draft = handoff_draft(&finished(Some("a"), Some("b")), &SOURCE, HandoffKind::Review).unwrap();
+        let edited = draft.replace("Initial request:", "Initial request (edited):");
+        let swapped = swap_instruction(&edited, HandoffKind::Review, HandoffKind::Continue);
+        assert!(swapped.contains("(edited)") && swapped.contains(HandoffKind::Continue.instruction()));
+        assert!(!swapped.contains(HandoffKind::Review.instruction()));
+        assert_eq!(swap_instruction(&swapped, HandoffKind::Continue, HandoffKind::Continue), swapped);
+        // Old instruction rewritten by the user: the new one is added after it.
+        let rewritten = "my own words";
+        assert_eq!(
+            swap_instruction(rewritten, HandoffKind::Review, HandoffKind::Continue),
+            format!("my own words\n\n{}", HandoffKind::Continue.instruction())
+        );
+    }
 
     fn ev<'a>(status: PaneStatus, event: &'a str) -> TaskEvent<'a> {
         TaskEvent {

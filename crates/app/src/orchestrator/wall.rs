@@ -20,6 +20,7 @@ use gpui_kit::*;
 use crate::panes::{agent_logo, status_color, status_label};
 use crate::state::Deck;
 use crate::theme::{hsla, hsla_a, palette, ui};
+use agentdeck_core::logic::theme::{RADIUS_LG, RADIUS_XL};
 
 /// How often the tiles' token and cost figures are read again from the transcripts.
 const REFRESH: Duration = Duration::from_secs(10);
@@ -246,7 +247,7 @@ impl Wall {
                 .h(ui(TILE_HEIGHT))
                 .overflow_hidden()
                 .p(ui(14.0))
-                .rounded(ui(12.0))
+                .rounded(ui(RADIUS_XL))
                 .border_1()
                 .border_color(hsla(if status == Some(PaneStatus::Waiting) { p.wait } else { p.line }))
                 .bg(hsla(p.panel))
@@ -267,7 +268,7 @@ impl Wall {
                                 .items_center()
                                 .justify_center()
                                 .size(ui(32.0))
-                                .rounded(ui(8.0))
+                                .rounded(ui(RADIUS_LG))
                                 .bg(hsla(p.raised))
                                 .child(agent_logo(pane.agent, 18.0, None, &p)),
                         )
@@ -475,12 +476,7 @@ impl Render for Wall {
                             }),
                     )
                     .child(
-                        Button::new("wall-exit")
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(IconName::X))
-                            .tooltip("Exit wall (Esc, Ctrl+Shift+W)")
-                            .on_click(|_, _, cx| set_open(false, cx)),
+                        crate::panes::close_button("wall-exit", "Exit wall (Esc, Ctrl+Shift+W)").on_click(|_, cx| set_open(false, cx)),
                     ),
             )
             .child(
