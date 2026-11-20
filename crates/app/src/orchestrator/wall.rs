@@ -415,7 +415,6 @@ impl Render for Wall {
         .map(|(index, (label, status))| {
             Button::new(("wall-filter", index))
                 .ghost()
-                .small()
                 .label(label)
                 .selected(filter == status)
                 .on_click(cx.listener(move |wall, _, _, cx| {

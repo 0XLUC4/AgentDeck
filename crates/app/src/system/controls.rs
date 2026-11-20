@@ -71,6 +71,7 @@ impl Render for AppControls {
             .bg(hsla(if on { p.accent } else { p.line_strong }))
             .when(on, |d| d.justify_end())
             .child(div().size(ui(14.0)).rounded_full().bg(hsla(if on { p.on_accent } else { p.fg })))
+            .cursor_pointer()
             .on_click(cx.listener(|this, _, _, cx| this.toggle_autostart(cx)));
         let error_text = |text: String| div().pb_2().text_xs().text_color(hsla(p.bad)).child(text);
 
@@ -129,6 +130,7 @@ impl Render for AppControls {
             .when(!busy, |d| d.hover(|s| s.bg(hsla(p.hover))))
             .child(icon)
             .child(label)
+            .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
                 if busy {
                     return;

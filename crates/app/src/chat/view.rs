@@ -1283,7 +1283,7 @@ impl ChatView {
         let weak = cx.entity().downgrade();
         Button::new("chat-mode")
             .ghost()
-            .xsmall()
+            .small()
             .icon(IconName::Shield)
             .label(current.label(agent))
             .text_color(hsla(if current == Mode::Full { p.wait } else { p.muted }))
@@ -1317,7 +1317,7 @@ impl ChatView {
         let weak = cx.entity().downgrade();
         Button::new("chat-model")
             .ghost()
-            .xsmall()
+            .small()
             .icon(IconName::Cpu)
             .label(label)
             .tooltip(format!("{} model (applies to the next turn)", agent_name(agent)))

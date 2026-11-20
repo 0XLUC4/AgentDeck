@@ -114,15 +114,16 @@ fn watch_idle(host: Arc<Host>, data_dir: PathBuf) {
 /// One client connection: handshake, then requests until it disconnects.
 fn serve(host: &Arc<Host>, stream: TcpStream, token: &str, data_dir: &Path) -> Result<(), String> {
     let _ = stream.set_nodelay(true);
-    stream.set_read_timeout(Some(HELLO_TIMEOUT)).map_err(|e| e.to_string())?;
+    // On the reading clone (see `client::probe`): a timeout left on it would drop idle clients.
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+    reader.get_ref().set_read_timeout(Some(HELLO_TIMEOUT)).map_err(|e| e.to_string())?;
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| format!("no hello: {e}"))?;
     match serde_json::from_str::<Request>(&line) {
         Ok(Request::Hello { token: given, version }) if given == token && version == PROTOCOL => {}
         _ => return Err("bad hello".into()),
     }
-    stream.set_read_timeout(None).map_err(|e| e.to_string())?;
+    reader.get_ref().set_read_timeout(None).map_err(|e| e.to_string())?;
 
     // Every line to this client goes through one writer thread, in order.
     let (tx, rx) = mpsc::channel::<String>();

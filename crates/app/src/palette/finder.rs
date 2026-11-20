@@ -506,16 +506,6 @@ impl Finder {
                     scored.push((score, super::focused_at(&format!("tab:{}", tab.id), cx), tab_row(tab, deck)));
                 }
             }
-            if !self.has_host_filter() {
-                for session in s.archived.iter().filter(|a| a.workspace_id == ws.id) {
-                    if let Some(score) = fuzzy_score(q, &session.name) {
-                        let row = Row::new(Target::Jump(Run::Archived(session.id.clone())), Lead::Icon(IconName::Archive), session.name.clone())
-                            .detail("archived")
-                            .chip(ws.name.clone());
-                        scored.push((score, session.saved_at, row));
-                    }
-                }
-            }
             scored.sort_by(|a, b| by_score_then_recency((a.0, a.1), (b.0, b.1)));
             if let Some(best) = scored.first().map(|r| r.0) {
                 groups.push((best, format!("Sessions · {}", ws.name), scored.into_iter().map(|r| r.2).collect()));
@@ -828,6 +818,7 @@ impl Finder {
                     cx.notify();
                 }
             }))
+            .cursor_pointer()
             .on_click(cx.listener(move |this, _, window, cx| this.run(index, window, cx)))
     }
 

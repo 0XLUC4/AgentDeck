@@ -655,7 +655,7 @@ impl PluginsView {
             .child(Icon::new(IconName::CircleCheck).size(ui(16.0)).text_color(hsla(p.ok)))
             .child(format!("{} installed", plugin.name))
             .when(plugin.is_theme(), |d| {
-                d.child(Button::new("plugins-toast-try").small().primary().label("Try it").on_click(cx.listener(
+                d.child(Button::new("plugins-toast-try").primary().label("Try it").on_click(cx.listener(
                     move |this, _, window, cx| {
                         let active = this.deck.read(cx).settings.appearance.color_theme.clone();
                         if let Some(variant) = this.shown_variant(plugin, &active) {

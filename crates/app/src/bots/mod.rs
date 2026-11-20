@@ -194,7 +194,6 @@ impl BotsView {
         let existing = self.bots.iter().any(|saved| saved.id == bot.id);
         let agent_choices = AGENT_KINDS.into_iter().filter(|k| *k != AgentKind::Shell).map(|kind| {
             Button::new(SharedString::from(format!("bot-agent-{}", agent_name(kind))))
-                .small()
                 .label(agent_name(kind))
                 .selected(bot.agent == kind)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -207,7 +206,6 @@ impl BotsView {
         let schedules = [None, Some(Schedule::EveryHours(1)), Some(Schedule::DailyAt { hour: 9, minute: 0 })];
         let schedule_choices = schedules.into_iter().enumerate().map(|(i, schedule)| {
             Button::new(("bot-schedule", i))
-                .small()
                 .label(schedule.map(schedule_label).unwrap_or_else(|| "Off".into()))
                 .selected(bot.schedule == schedule)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -230,7 +228,6 @@ impl BotsView {
                     .child(avatar::avatar(&bot.avatar_seed, 60.0))
                     .child(
                         Button::new("bot-avatar")
-                            .small()
                             .label("Change avatar")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(bot) = &mut this.draft {
@@ -257,14 +254,12 @@ impl BotsView {
                     .child(
                         Button::new("bot-save")
                             .primary()
-                            .small()
                             .label(if existing { "Save changes" } else { "Create bot" })
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     )
                     .when(self.selected.is_some(), |row| {
                         row.child(
                             Button::new("bot-cancel")
-                                .small()
                                 .label("Cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.draft = None;
@@ -302,7 +297,6 @@ impl BotsView {
                 .when(summary.is_some(), |row| {
                     row.child(
                         Button::new(SharedString::from(format!("bot-result-{expand_id}")))
-                            .small()
                             .label(if expanded { "Hide result" } else { "Result" })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.expanded_run = (!expanded).then(|| expand_id.clone());
@@ -313,7 +307,6 @@ impl BotsView {
                 .when(pane.is_some(), |row| {
                     row.child(
                         Button::new(SharedString::from(format!("bot-open-{pane_id}")))
-                            .small()
                             .label("Open")
                             .on_click(move |_, window, cx| {
                                 crate::skills::close_page(cx);
@@ -335,7 +328,6 @@ impl BotsView {
                         div().pb_3().flex().flex_col().gap_2().child(summary.to_owned()).child(
                             div().flex().child(
                                 Button::new(SharedString::from(format!("bot-remember-{}", run.pane_id)))
-                                    .small()
                                     .label("Add to memory…")
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         if let Some(mut bot) = this.bots.iter().find(|b| b.id == id).cloned() {
@@ -375,7 +367,6 @@ impl BotsView {
                     )
                     .child(
                         Button::new("bot-edit")
-                            .small()
                             .label("Edit bot")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if let Some(bot) = this.bots.iter().find(|bot| bot.id == edit_id).cloned() {
@@ -406,7 +397,6 @@ impl BotsView {
             .child(
                 div().flex().child(
                     Button::new("bot-run")
-                        .small()
                         .primary()
                         .label("Start task")
                         .on_click(cx.listener(|this, _, window, cx| this.send_task(window, cx))),
@@ -459,7 +449,6 @@ impl Render for BotsView {
             .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child("Bots"))
             .child(
                 Button::new("bot-new")
-                    .small()
                     .label("New bot")
                     .icon(IconName::Plus)
                     .on_click(cx.listener(|this, _, window, cx| this.new_profile(window, cx))),

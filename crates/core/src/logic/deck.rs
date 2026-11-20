@@ -1,4 +1,4 @@
-//! UI state model (`src/store/deck.ts`): workspaces, panes, session tabs, archived sessions, toasts.
+//! UI state model (`src/store/deck.ts`): workspaces, panes, session tabs, toasts.
 //! Plain data + methods; the app wraps [`DeckState`] in a GPUI entity and does the side effects.
 //!
 //! Layouts are opaque JSON (`serde_json::Value`): the layout module owns their shape. Old dockview
@@ -16,8 +16,6 @@ pub const FONT_SIZE_MIN: f32 = 8.0;
 pub const FONT_SIZE_MAX: f32 = 32.0;
 pub const FONT_SIZE_DEFAULT: f32 = 13.0;
 pub const DEFAULT_WORKSPACE_NAME: &str = "Default";
-/// Archived sessions kept; the oldest beyond this are dropped when a new one is archived.
-pub const MAX_ARCHIVED: usize = 100;
 const MAX_TOASTS: usize = 5;
 
 pub type Layout = Option<Value>;
@@ -337,7 +335,6 @@ pub struct DeckState {
     pub tabs: Vec<Tab>,
     pub active_tab_id: String,
     pub active_pane_id: Option<String>,
-    pub archived: Vec<SavedSession>,
     pub last_cwd: String,
     pub toasts: Vec<Toast>,
     next_toast: u64,
@@ -353,7 +350,6 @@ impl Default for DeckState {
             panes: HashMap::new(),
             tabs: vec![tab],
             active_pane_id: None,
-            archived: Vec::new(),
             last_cwd: String::new(),
             toasts: Vec::new(),
             next_toast: 0,
@@ -361,12 +357,9 @@ impl Default for DeckState {
     }
 }
 
-/// A session can be archived while its workspace has another open one.
-pub fn can_archive(tabs: &[Tab], tab_id: &str) -> bool {
-    let Some(ws) = tabs.iter().find(|t| t.id == tab_id).map(|t| &t.workspace_id) else {
-        return false;
-    };
-    tabs.iter().filter(|t| &t.workspace_id == ws).count() > 1
+/// A session can be deleted once it has no agent left.
+pub fn can_delete(tabs: &[Tab], tab_id: &str) -> bool {
+    tabs.iter().any(|t| t.id == tab_id && t.pane_ids.is_empty())
 }
 
 impl DeckState {
@@ -479,15 +472,11 @@ impl DeckState {
         });
     }
 
-    fn sessions_of(&self, ws: &str) -> usize {
-        self.archived.iter().filter(|s| s.workspace_id == ws).count()
-    }
-
     /// Opens a new session tab (in the active workspace by default) and shows it.
     pub fn add_tab(&mut self, tab: Option<Tab>) -> String {
         let tab = tab.unwrap_or_else(|| {
             let ws = self.active_workspace().id.clone();
-            let count = self.tabs.iter().filter(|t| t.workspace_id == ws).count() + self.sessions_of(&ws);
+            let count = self.tabs.iter().filter(|t| t.workspace_id == ws).count();
             new_tab(&format!("Session {}", count + 1), &ws, None)
         });
         let id = tab.id.clone();
@@ -520,46 +509,13 @@ impl DeckState {
         self.active_tab_id = self.pick_active(Some(&removed.workspace_id));
     }
 
-    /// Archives a session (never the last open one of its workspace). Returns its pane ids to kill.
-    pub fn archive_tab(&mut self, id: &str, now: i64) -> Vec<String> {
-        if !can_archive(&self.tabs, id) {
-            return Vec::new();
-        }
-        let Some(tab) = self.tabs.iter().find(|t| t.id == id).cloned() else {
-            return Vec::new();
-        };
-        self.archived.retain(|s| s.id != id);
-        self.archived.insert(0, tab_to_session(&tab, &self.panes, now));
-        self.archived.truncate(MAX_ARCHIVED);
-        for pane_id in &tab.pane_ids {
-            self.remove_pane(pane_id);
+    /// Deletes a session that has no agent left. False when it still has some (or is unknown).
+    pub fn delete_tab(&mut self, id: &str) -> bool {
+        if !can_delete(&self.tabs, id) {
+            return false;
         }
         self.remove_tab(id);
-        tab.pane_ids
-    }
-
-    /// Removes a session from the archive and opens an empty tab with its layout. Returns
-    /// (tab id, pane specs to respawn).
-    pub fn unarchive(&mut self, id: &str) -> Option<(String, Vec<PaneSpec>)> {
-        let pos = self.archived.iter().position(|s| s.id == id)?;
-        let session = self.archived.remove(pos);
-        let workspace_id = if self.workspaces.iter().any(|w| w.id == session.workspace_id) {
-            session.workspace_id.clone()
-        } else {
-            self.active_workspace().id.clone()
-        };
-        let tab_id = self.add_tab(Some(Tab {
-            id: session.id,
-            name: session.name,
-            workspace_id,
-            pane_ids: Vec::new(),
-            layout: session.layout,
-        }));
-        Some((tab_id, session.panes))
-    }
-
-    pub fn delete_archived(&mut self, id: &str) {
-        self.archived.retain(|s| s.id != id);
+        true
     }
 
     pub fn rename_tab(&mut self, id: &str, name: &str) {
@@ -598,7 +554,7 @@ impl DeckState {
         }
     }
 
-    /// Forgets a workspace with its open and archived sessions. Always keeps one workspace.
+    /// Forgets a workspace with its sessions. Always keeps one workspace.
     /// Returns the pane ids to kill.
     pub fn unlink_workspace(&mut self, id: &str) -> Vec<String> {
         if !self.workspaces.iter().any(|w| w.id == id) {
@@ -620,7 +576,6 @@ impl DeckState {
             self.tabs.push(new_tab("Session 1", &ws, None));
         }
         self.panes.retain(|pid, _| !pane_ids.contains(pid));
-        self.archived.retain(|s| s.workspace_id != id);
         self.active_tab_id = self.pick_active(None);
         if self.active_pane_id.as_ref().is_some_and(|p| pane_ids.contains(p)) {
             self.active_pane_id = None;
@@ -714,20 +669,14 @@ mod tests {
     }
 
     #[test]
-    fn archive_and_reopen() {
+    fn delete_only_without_agents() {
         let mut s = state();
-        let mut p = pane();
-        p.spec.font_size = 18.0;
-        s.add_pane(p, "t1");
-        assert_eq!(s.archive_tab("t1", 42), ["p1"]);
-        assert!(s.panes.is_empty());
-        assert_eq!(s.archived[0].saved_at, 42);
-        assert_eq!(s.archived[0].panes[0].font_size, 18.0);
-        assert!(s.archive_tab("t2", 1).is_empty(), "last session of a workspace stays");
-        let (tab_id, panes) = s.unarchive("t1").unwrap();
-        assert_eq!(panes.len(), 1);
-        assert_eq!(s.active_tab_id, tab_id);
-        assert!(s.unarchive("t1").is_none());
+        s.add_pane(pane(), "t1");
+        assert!(!s.delete_tab("t1"), "a session with an agent stays");
+        s.remove_pane("p1");
+        assert!(s.delete_tab("t1"));
+        assert!(s.tabs.iter().all(|t| t.id != "t1"));
+        assert!(!s.delete_tab("t1"));
     }
 
     #[test]

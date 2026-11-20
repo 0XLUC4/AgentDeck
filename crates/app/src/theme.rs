@@ -113,6 +113,9 @@ pub fn apply(appearance: &Appearance, window: Option<&mut Window>, cx: &mut App)
         c.warning = hsla(p.wait);
         c.info = hsla(p.busy);
         c.scrollbar_thumb = hsla(p.line_strong);
+        // Switch knob: the text color on the accent, so a checked switch is never white on white.
+        c.switch = hsla(p.line_strong);
+        c.switch_thumb = hsla(p.on_accent);
         c.window_border = hsla(p.line);
         t.highlight_theme = Arc::new(highlight_theme(&p, &t.highlight_theme));
     });

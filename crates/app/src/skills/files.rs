@@ -14,7 +14,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState, Position};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Disableable as _, Sizable as _};
+use gpui_kit::component::Disableable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -908,7 +908,6 @@ impl FilesPage {
             .when(from_review, |d| {
                 d.child(
                     Button::new("files-back-to-review")
-                        .small()
                         .ghost()
                         .icon(IconName::ArrowLeft)
                         .label("Back to review")
@@ -958,7 +957,6 @@ impl FilesPage {
             .when(is_text, |d| {
                 d.child(
                     Button::new("files-save")
-                        .small()
                         .primary()
                         .icon(IconName::Save)
                         .label("Save")
@@ -969,7 +967,6 @@ impl FilesPage {
             })
             .child(
                 Button::new("files-send")
-                    .small()
                     .ghost()
                     .icon(IconName::Send)
                     .label("Send path")

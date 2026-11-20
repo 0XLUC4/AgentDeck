@@ -94,15 +94,17 @@ pub(super) fn probe(data_dir: &Path) -> Result<(TcpStream, BufReader<TcpStream>)
     let _ = stream.set_nodelay(true);
     let hello = Request::Hello { token: info.token, version: PROTOCOL };
     stream.write_all(encode(&hello).as_bytes()).map_err(|e| e.to_string())?;
-    stream.set_read_timeout(Some(HELLO_TIMEOUT)).map_err(|e| e.to_string())?;
+    // The timeout goes on the clone that reads: on Windows a cloned socket keeps its own, so clearing
+    // it on `stream` alone left the event reader timing out (connection "lost", every agent ended).
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+    reader.get_ref().set_read_timeout(Some(HELLO_TIMEOUT)).map_err(|e| e.to_string())?;
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| format!("no answer: {e}"))?;
     match serde_json::from_str::<Event>(&line) {
         Ok(Event::Hello { .. }) => {}
         _ => return Err("not a session host of this version".into()),
     }
-    stream.set_read_timeout(None).map_err(|e| e.to_string())?;
+    reader.get_ref().set_read_timeout(None).map_err(|e| e.to_string())?;
     Ok((stream, reader))
 }
 

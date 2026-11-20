@@ -91,8 +91,6 @@ pub struct Saved {
     pub tabs: Vec<SavedSession>,
     pub active_tab_id: String,
     pub last_cwd: String,
-    #[serde(default)]
-    pub archived: Vec<SavedSession>,
 }
 
 /// The readable entries of a JSON array: one bad entry (from another build) costs only itself.
@@ -118,7 +116,6 @@ pub fn migrate(saved: &Value) -> Option<Saved> {
                 tabs: entries(&saved["tabs"]),
                 active_tab_id: saved["activeTabId"].as_str().unwrap_or("").into(),
                 last_cwd: saved["lastCwd"].as_str().unwrap_or("").into(),
-                archived: entries(&saved["archived"]),
             };
             // No readable session is no reason to drop the projects: `hydrate` gives each a tab.
             (!s.workspaces.is_empty()).then_some(s)
@@ -139,11 +136,9 @@ pub fn migrate(saved: &Value) -> Option<Saved> {
             if tabs.is_empty() {
                 return None;
             }
-            let archived = entries(&saved["archived"]).into_iter().map(with_ws).collect();
             Some(Saved {
                 version: 2,
                 tabs,
-                archived,
                 active_tab_id: saved["activeTabId"].as_str().unwrap_or("").into(),
                 last_cwd: saved["lastCwd"].as_str().unwrap_or("").into(),
                 workspaces: vec![ws],
@@ -165,7 +160,6 @@ pub fn snapshot(deck: &DeckState, now: i64) -> Saved {
             .collect(),
         active_tab_id: deck.active_tab_id.clone(),
         last_cwd: deck.last_cwd.clone(),
-        archived: deck.archived.clone(),
     }
 }
 
@@ -204,7 +198,6 @@ pub fn hydrate(deck: &mut DeckState, saved: Saved) -> Vec<SavedSession> {
     deck.workspaces = saved.workspaces;
     deck.tabs = tabs;
     deck.last_cwd = saved.last_cwd;
-    deck.archived = saved.archived.into_iter().map(fix).collect();
     restored
 }
 
@@ -242,7 +235,6 @@ fn drop_missing_folders(saved: &mut Saved, exists: impl Fn(&str) -> bool) {
     saved.workspaces = kept;
     let gone: HashSet<String> = gone.into_iter().map(|w| w.id).collect();
     saved.tabs.retain(|s| !gone.contains(&s.workspace_id));
-    saved.archived.retain(|s| !gone.contains(&s.workspace_id));
 }
 
 /// Loads the saved deck into `deck`. Returns the sessions to respawn (empty when nothing was saved).
@@ -364,11 +356,7 @@ mod tests {
         assert_eq!(saved.workspaces[0].name, "Default");
         let ws = &saved.workspaces[0].id;
         assert_eq!(&saved.tabs[0].workspace_id, ws);
-        assert_eq!(&saved.archived[0].workspace_id, ws);
         assert_eq!(saved.last_cwd, "D:/proj");
-        let no_archive =
-            migrate(&json!({ "version": 1, "tabs": [session()], "activeTabId": "s1", "lastCwd": "" }));
-        assert!(no_archive.unwrap().archived.is_empty());
         assert!(migrate(&Value::Null).is_none());
         assert!(migrate(&json!({ "version": 1, "tabs": [], "activeTabId": "", "lastCwd": "" })).is_none());
         assert!(migrate(&json!({ "version": 99 })).is_none());
@@ -427,7 +415,6 @@ mod tests {
         let ids: Vec<_> = saved.workspaces.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, ["d", "a"]);
         assert_eq!(saved.tabs.len(), 1);
-        assert!(saved.archived.is_empty());
     }
 
     #[test]

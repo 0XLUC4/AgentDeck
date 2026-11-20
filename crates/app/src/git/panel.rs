@@ -828,7 +828,6 @@ impl Render for GitPanel {
                     d.child(
                         Button::new("git-fix-conflicts")
                             .mt_2()
-                            .small()
                             .primary()
                             .label("Ask the agent to resolve")
                             .tooltip("Sends the agent a prompt: merge the target into its worktree, fix the conflicts, commit")
@@ -1021,7 +1020,7 @@ impl Render for GitPanel {
                     div().ml_auto().child(
                         Button::new(if staged { "git-unstage-all" } else { "git-stage-all" })
                             .ghost()
-                            .xsmall()
+                            .small()
                             .label(if staged { "Unstage all" } else { "Stage all" })
                             .disabled(busy || count == 0)
                             .on_click(cx.listener(move |this, _, window, cx| this.stage_files(Vec::new(), !staged, window, cx))),
@@ -1099,7 +1098,6 @@ impl Render for GitPanel {
                 .child(
                     Button::new("git-pr-open")
                         .ghost()
-                        .small()
                         .icon(IconName::GitPullRequest)
                         .label(format!("PR #{}", pr.number))
                         .tooltip("Open the pull request in the browser")
@@ -1222,7 +1220,6 @@ impl Render for GitPanel {
                             div().ml_auto().child(
                                 Button::new(("git-restore", i))
                                     .ghost()
-                                    .small()
                                     .label("Restore")
                                     .disabled(busy)
                                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1276,7 +1273,7 @@ impl Render for GitPanel {
                     "{picked} line{} selected (shift-click a box to select a range)",
                     if picked == 1 { "" } else { "s" }
                 )))
-                .child(Button::new("git-picked-clear").ghost().small().label("Clear").on_click(cx.listener(
+                .child(Button::new("git-picked-clear").ghost().label("Clear").on_click(cx.listener(
                     |this, _, _, cx| {
                         this.picked.clear();
                         this.anchor = None;
@@ -1286,7 +1283,6 @@ impl Render for GitPanel {
                 .child(
                     Button::new("git-picked-stage")
                         .primary()
-                        .small()
                         .label(if staged_view { "Unstage lines" } else { "Stage lines" })
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -1308,7 +1304,7 @@ impl Render for GitPanel {
                 .py_2()
                 .text_xs()
                 .child(div().flex_1().child(format!("{remarks} remark{} on the diff", if remarks == 1 { "" } else { "s" })))
-                .child(Button::new("git-remarks-clear").ghost().small().label("Clear").on_click(cx.listener(
+                .child(Button::new("git-remarks-clear").ghost().label("Clear").on_click(cx.listener(
                     |this, _, _, cx| {
                         this.comments.clear();
                         cx.notify();
@@ -1317,7 +1313,6 @@ impl Render for GitPanel {
                 .child(
                     Button::new("git-remarks-send")
                         .primary()
-                        .small()
                         .label("Send to the agent")
                         .disabled(exited)
                         .on_click(cx.listener(|this, _, _, cx| this.send_comments(cx))),
@@ -1380,7 +1375,7 @@ impl Render for GitPanel {
                             let hunk_button = (can_stage && *kind == DiffLineKind::Hunk).then(|| {
                                 Button::new(("git-hunk", i))
                                     .ghost()
-                                    .xsmall()
+                                    .small()
                                     .ml_3()
                                     .label(if staged_view { "Unstage hunk" } else { "Stage hunk" })
                                     .disabled(busy)

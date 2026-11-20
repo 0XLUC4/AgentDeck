@@ -1656,16 +1656,17 @@ pub fn interrupt_all(cx: &mut App) {
     }
 }
 
-/// Closes a session tab but keeps it (layout + panes) in the archive.
-pub fn archive_session(tab_id: &str, cx: &mut App) {
-    let Some(deck) = deck(cx) else { return };
-    let ids = deck.update(cx, |d, cx| {
-        cx.notify();
-        d.state.archive_tab(tab_id, now_ms())
-    });
-    for id in ids {
-        close_pane(&id, cx);
-    }
+/// Deletes a session tab that has no agent left. False when agents are still open in it.
+pub fn delete_session(tab_id: &str, cx: &mut App) -> bool {
+    let Some(deck) = deck(cx) else { return false };
+    deck.update(cx, |d, cx| {
+        let deleted = d.state.delete_tab(tab_id);
+        if deleted {
+            d.save(cx);
+            cx.notify();
+        }
+        deleted
+    })
 }
 
 /// Forgets a workspace and kills its agents. Files on disk are never touched.
@@ -1680,18 +1681,6 @@ pub fn unlink_workspace(workspace_id: &str, cx: &mut App) {
     }
 }
 
-pub fn reopen_session(session_id: &str, cx: &mut App) {
-    let Some(deck) = deck(cx) else { return };
-    let reopened = deck.update(cx, |d, cx| {
-        cx.notify();
-        d.state.unarchive(session_id)
-    });
-    if let Some((tab_id, specs)) = reopened {
-        for spec in specs {
-            create_pane(spec, &tab_id, false, cx);
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

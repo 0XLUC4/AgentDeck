@@ -13,7 +13,7 @@ use agentdeck_core::logic::theme::Palette;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Textarea, TextareaState};
-use gpui_kit::component::{Icon, Sizable as _};
+use gpui_kit::component::Icon;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -572,7 +572,6 @@ impl DeckView {
         let menu_targets = targets.to_vec();
         let picker = Button::new("handoff-target")
             .outline()
-            .small()
             .label(target.map_or_else(|| "Choose an agent…".to_owned(), |(_, label)| label.clone()))
             .dropdown_caret(true)
             .dropdown_menu(move |mut menu, _, _| {
@@ -814,7 +813,6 @@ impl DeckView {
                 buttons = buttons.child(
                     Button::new("task-handoff")
                         .outline()
-                        .small()
                         .label("Send result to…")
                         .dropdown_caret(true)
                         .dropdown_menu(move |mut menu, _, _| {

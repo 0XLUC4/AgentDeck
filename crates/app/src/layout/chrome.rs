@@ -4,7 +4,7 @@
 
 use agentdeck_core::agents::AgentKind;
 use agentdeck_core::hooks_server::PaneStatus;
-use agentdeck_core::logic::deck::{ActivityKey, activity_key, can_archive, session_status};
+use agentdeck_core::logic::deck::{ActivityKey, activity_key, session_status};
 use agentdeck_core::logic::text::{
     AGENT_KINDS, agent_name, format_cost, format_since, format_tokens, now_ms, split_args,
 };
@@ -304,12 +304,12 @@ impl DeckView {
         let deck = self.deck.read(cx);
         let workspace = deck.state.active_workspace().id.clone();
         let active_tab = deck.state.active_tab_id.clone();
-        let tabs: Vec<(String, String, bool)> = deck
+        let tabs: Vec<(String, String)> = deck
             .state
             .tabs
             .iter()
             .filter(|t| t.workspace_id == workspace)
-            .map(|t| (t.id.clone(), t.name.clone(), can_archive(&deck.state.tabs, &t.id)))
+            .map(|t| (t.id.clone(), t.name.clone()))
             .collect();
 
         let mut list = div()
@@ -320,7 +320,7 @@ impl DeckView {
             .min_w_0()
             .h_full()
             .overflow_x_scroll();
-        for (id, name, archivable) in tabs {
+        for (id, name) in tabs {
             let active = id == active_tab;
             if let Some((_, input, _)) = self.renaming.as_ref().filter(|r| r.0 == id) {
                 let cancel = id.clone();
@@ -359,22 +359,21 @@ impl DeckView {
                     .hover(|s| s.text_color(hsla(p.fg)))
                     .tooltip(|window, cx| Tooltip::new("Double-click or F2 to rename").build(window, cx))
                     .child(div().max_w(ui(192.0)).overflow_hidden().whitespace_nowrap().child(name.clone()))
-                    .when(archivable, |el| {
-                        el.child(
-                            icon_button(
-                                ElementId::Name(format!("session-close-{id}").into()),
-                                IconName::X,
-                                "Close (the session stays in the sidebar and can be reopened)",
-                                &p,
-                            )
-                            .size(ui(22.0))
-                            .when(!active, |b| b.opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.close_session(&close, window, cx);
-                            })),
+                    .child(
+                        icon_button(
+                            ElementId::Name(format!("session-close-{id}").into()),
+                            IconName::X,
+                            "Delete this session (close its agents first)",
+                            &p,
                         )
-                    })
+                        .size(ui(22.0))
+                        .when(!active, |b| b.opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.close_session(&close, window, cx);
+                        })),
+                    )
+                    .cursor_pointer()
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         window.focus(&tabs_focus, cx);
                         if e.click_count() == 2 {
@@ -466,23 +465,23 @@ impl DeckView {
         cx.notify();
     }
 
-    /// Closes a session tab into the archive, asking first if agents are still working.
+    /// Deletes a session tab after confirmation. Refused (with a popup) while agents are open in it.
     pub(super) fn close_session(&mut self, tab_id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let now = now_ms();
-        let found = self.deck.read(cx).state.tabs.iter().find(|t| t.id == tab_id).map(|t| {
-            (t.name.clone(), t.pane_ids.iter().any(|id| runtime::is_busy(id, now, cx)))
-        });
-        let Some((name, busy)) = found else { return };
-        let id = tab_id.to_owned();
-        if !busy {
-            runtime::archive_session(&id, cx);
+        let found = self.deck.read(cx).state.tabs.iter().find(|t| t.id == tab_id).map(|t| (t.name.clone(), t.pane_ids.len()));
+        let Some((name, agents)) = found else { return };
+        if agents > 0 {
+            let detail = format!("{agents} agent(s) are still open in it. Close them first, then delete the session.");
+            let answer = window.prompt(PromptLevel::Info, &format!("Can't delete \"{name}\""), Some(&detail), &["OK"], cx);
+            cx.spawn(async move |_, _| {
+                let _ = answer.await;
+            }).detach();
             return;
         }
-        let question = format!("Agents in \"{name}\" are still working. Archive anyway?");
-        let answer = window.prompt(PromptLevel::Warning, &question, None, &["Archive", "Cancel"], cx);
+        let answer = window.prompt(PromptLevel::Warning, &format!("Delete \"{name}\"?"), None, &["Delete", "Cancel"], cx);
+        let id = tab_id.to_owned();
         cx.spawn(async move |_, cx| {
             if answer.await.ok() == Some(0) {
-                cx.update(|cx| runtime::archive_session(&id, cx));
+                cx.update(|cx| runtime::delete_session(&id, cx));
             }
         })
         .detach();
@@ -555,6 +554,7 @@ impl DeckView {
                     .hover(|s| s.bg(hsla(p.hover)))
                     .child(agent_logo(kind, 15.0, None, &p))
                     .child(agent_name(kind))
+                    .cursor_pointer()
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.add_agent(kind, cx))),
             );
         }
@@ -571,6 +571,7 @@ impl DeckView {
                 .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
                 .child(div().text_size(ui(15.0)).child(IconName::GitBranch))
                 .child("Create worktree...")
+                .cursor_pointer()
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.add_menu_open = None;
                     crate::worktree::open_create_worktree(None, window, cx);
@@ -589,6 +590,7 @@ impl DeckView {
                 .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
                 .child(div().text_size(ui(15.0)).child(IconName::SlidersHorizontal))
                 .child("More options...")
+                .cursor_pointer()
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.add_menu_open = None;
                     this.open_picker(window, cx);
@@ -661,37 +663,12 @@ impl DeckView {
     }
 
     /// Unlinks a workspace after confirmation: its sessions are closed, no files are deleted.
-    fn confirm_delete_archived(&mut self, session_id: &str, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &format!("Permanently delete \"{name}\"?"),
-            None,
-            &["Delete", "Cancel"],
-            cx,
-        );
-        let id = session_id.to_owned();
-        cx.spawn(async move |this, cx| {
-            if answer.await.ok() == Some(0) {
-                this.update(cx, |this, cx| {
-                    this.deck.update(cx, |deck, cx| {
-                        deck.state.delete_archived(&id);
-                        deck.save(cx);
-                        cx.notify();
-                    });
-                })
-                .ok();
-            }
-        })
-        .detach();
-    }
-
     fn confirm_unlink(&mut self, workspace_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let state = &self.deck.read(cx).state;
         let Some(name) = state.workspaces.iter().find(|w| w.id == workspace_id).map(|w| w.name.clone()) else {
             return;
         };
-        let count = state.tabs.iter().filter(|t| t.workspace_id == workspace_id).count()
-            + state.archived.iter().filter(|s| s.workspace_id == workspace_id).count();
+        let count = state.tabs.iter().filter(|t| t.workspace_id == workspace_id).count();
         let detail =
             format!("Its {count} session(s) will be closed and forgotten by AgentDeck. No files are deleted from disk.");
         let answer = window.prompt(
@@ -793,7 +770,7 @@ impl DeckView {
             .into_any_element()
     }
 
-    /// Left column: linked workspaces, each with its open and archived sessions.
+    /// Left column: linked workspaces, each with its sessions.
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let deck = self.deck.read(cx);
@@ -957,6 +934,7 @@ impl DeckView {
                         .text_size(ui(14.0))
                         .text_color(hsla(p.subtle))
                         .child(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                        .cursor_pointer()
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             if !this.collapsed_workspaces.remove(&toggle_id) {
                                 this.collapsed_workspaces.insert(toggle_id.clone());
@@ -1028,6 +1006,7 @@ impl DeckView {
                         .when(waiting > 0, |el| {
                             el.child(waiting_badge(waiting, &p))
                         })
+                        .cursor_pointer()
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                             let id = select_id.clone();
                             if e.click_count() == 2 {
@@ -1130,7 +1109,6 @@ impl DeckView {
             if expanded {
                 for tab in tabs {
                     let current = tab.id == active_tab;
-                    let archivable = can_archive(&deck.state.tabs, &tab.id);
                     let (open_id, close_id) = (tab.id.clone(), tab.id.clone());
                     let group: SharedString = format!("side-tab-{}", tab.id).into();
                     let session = session_status(&tab.pane_ids, &deck.state.panes);
@@ -1189,23 +1167,22 @@ impl DeckView {
                                         .child(tab.pane_ids.len().to_string()),
                                 )
                             })
-                            .when(archivable, |el| {
-                                el.child(
-                                    icon_button(
-                                        ElementId::Name(format!("side-archive-{}", tab.id).into()),
-                                        IconName::Archive,
-                                        format!("Close and archive {}", tab.name),
-                                        &p,
-                                    )
-                                    .size(ui(22.0)).text_size(ui(13.0)).text_color(hsla(p.subtle))
-                                    .opacity(0.0)
-                                    .group_hover(group.clone(), |s| s.opacity(1.0))
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        this.close_session(&close_id, window, cx);
-                                    })),
+                            .child(
+                                icon_button(
+                                    ElementId::Name(format!("side-delete-{}", tab.id).into()),
+                                    IconName::Trash,
+                                    format!("Delete {}", tab.name),
+                                    &p,
                                 )
-                            })
+                                .size(ui(22.0)).text_size(ui(13.0)).text_color(hsla(p.subtle))
+                                .opacity(0.0)
+                                .group_hover(group.clone(), |s| s.opacity(1.0))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.close_session(&close_id, window, cx);
+                                })),
+                            )
+                            .cursor_pointer()
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 let id = open_id.clone();
                                 this.deck.update(cx, |deck, cx| {
@@ -1287,6 +1264,7 @@ impl DeckView {
                                         .text_color(hsla(p.subtle))
                                         .child(format_since(now - pane.status_since)),
                                 )
+                                .cursor_pointer()
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     cx.stop_propagation();
                                     // Same as `layout::jump_to_pane`, which cannot re-enter the shell from its own listener.
@@ -1295,68 +1273,6 @@ impl DeckView {
                         );
                     }
                     item = item.child(block);
-                }
-                for session in deck.state.archived.iter().filter(|s| s.workspace_id == ws.id) {
-                    let (reopen_id, restore_id, delete_id) = (session.id.clone(), session.id.clone(), session.id.clone());
-                    let delete_name = session.name.clone();
-                    let group: SharedString = format!("archived-{}", session.id).into();
-                    item = item.child(
-                        div()
-                            .id(ElementId::Name(group.clone()))
-                            .group(group.clone())
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .h(ui(32.0))
-                            .pl(ui(28.0))
-                            .pr_1()
-                            .rounded(ui(RADIUS_MD))
-                            .text_color(hsla(p.subtle))
-                            .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.muted)))
-                            .child(div().text_size(ui(13.0)).child(IconName::Archive))
-                            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(session.name.clone()))
-                            .child(
-                                div()
-                                    .flex()
-                                    .opacity(0.0)
-                                    .group_hover(group.clone(), |s| s.opacity(1.0))
-                                    .child(
-                                        icon_button(
-                                            ElementId::Name(format!("archived-reopen-{}", session.id).into()),
-                                            IconName::ArchiveRestore,
-                                            format!("Reopen {}", session.name),
-                                            &p,
-                                        )
-                                        .size(ui(22.0)).text_size(ui(13.0)).text_color(hsla(p.subtle))
-                                        .on_click(move |_, _, cx| {
-                                            cx.stop_propagation();
-                                            runtime::reopen_session(&restore_id, cx);
-                                        }),
-                                    )
-                                    .child(
-                                        icon_button(
-                                            ElementId::Name(format!("archived-delete-{}", session.id).into()),
-                                            IconName::Trash,
-                                            format!("Delete {}", session.name),
-                                            &p,
-                                        )
-                                        .size(ui(22.0)).text_size(ui(13.0)).text_color(hsla(p.subtle))
-                                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                            cx.stop_propagation();
-                                            this.confirm_delete_archived(&delete_id, &delete_name, window, cx);
-                                        })),
-                                    ),
-                            )
-                            .tooltip({
-                                let hint = format!(
-                                    "Archived {} · {} agent(s). Click to reopen.",
-                                    format_date(session.saved_at),
-                                    session.panes.len()
-                                );
-                                move |window, cx| Tooltip::new(hint.clone()).build(window, cx)
-                            })
-                            .on_click(move |_, _, cx| runtime::reopen_session(&reopen_id, cx)),
-                    );
                 }
             }
             list = list.child(item);

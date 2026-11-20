@@ -399,6 +399,7 @@ impl Render for UpdateButton {
             .hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg)))
             .child(IconName::CircleArrowUp)
             .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx))
+            .cursor_pointer()
             .on_click(cx.listener(|this, _, _, cx| this.toggle(cx)));
 
         let mut root = div().id("update-button").relative().flex().child(button);
@@ -490,6 +491,7 @@ impl Render for UpdateButton {
                             .font_weight(FontWeight::MEDIUM)
                             .hover(|s| s.opacity(0.9))
                             .child("Update and restart")
+                            .cursor_pointer()
                             .on_click(move |_, _, cx| install.update(cx, |u, cx| u.install(cx))),
                     )
                 };
@@ -525,6 +527,7 @@ impl Render for UpdateButton {
                                 .when(checking, |d| d.opacity(0.5))
                                 .when(!checking, |d| d.hover(|s| s.bg(hsla(p.hover)).text_color(hsla(p.fg))))
                                 .child(IconName::RefreshCw)
+                                .cursor_pointer()
                                 .on_click(move |_, _, cx| again.update(cx, |u, cx| u.check(false, cx))),
                         ),
                 );

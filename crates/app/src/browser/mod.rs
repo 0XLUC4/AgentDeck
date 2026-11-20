@@ -19,7 +19,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::base::Selectable as _;
-use gpui_kit::component::{Sizable as _, WindowExt as _};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_webview::WebView;
@@ -903,7 +903,6 @@ impl BrowserPanel {
             .child(
                 Button::new("browser-annotate-cancel")
                     .ghost()
-                    .small()
                     .label("Cancel")
                     .on_click(cx.listener(|this, _, _, cx| this.set_annotating(false, cx))),
             )

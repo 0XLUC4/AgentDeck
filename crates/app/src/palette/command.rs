@@ -63,7 +63,6 @@ impl Section {
 pub(super) enum Run {
     Pane(String),
     Tab(String),
-    Archived(String),
     Workspace(String),
     Action(&'static str),
 }
@@ -161,17 +160,6 @@ pub(super) fn build_items(deck: &Deck) -> Vec<Item> {
             lead: Lead::Icon(IconName::Layers),
             trailing: Trailing::None,
             run: Run::Tab(tab.id.clone()),
-        });
-    }
-    for session in &s.archived {
-        items.push(Item {
-            id: format!("archived:{}", session.id),
-            section: Section::Sessions,
-            label: session.name.clone(),
-            detail: Some(format!("{} · archived", ws_name(&session.workspace_id))),
-            lead: Lead::Icon(IconName::Archive),
-            trailing: Trailing::None,
-            run: Run::Archived(session.id.clone()),
         });
     }
     for ws in &s.workspaces {
@@ -438,6 +426,7 @@ impl CommandPalette {
                     cx.notify();
                 }
             }))
+            .cursor_pointer()
             .on_click(cx.listener(move |this, _, window, cx| this.run(index, window, cx)))
     }
 }
@@ -461,11 +450,6 @@ pub(super) fn run_target(deck: &Entity<Deck>, run: &Run, label: &str, window: &m
                 d.save(cx);
                 cx.notify();
             });
-        }
-        Run::Archived(id) => {
-            close_wall(cx);
-            crate::panes::runtime::reopen_session(id, cx);
-            deck.update(cx, |d, cx| d.save(cx));
         }
         Run::Workspace(id) => deck.update(cx, |d, cx| {
             d.state.select_workspace(id);
